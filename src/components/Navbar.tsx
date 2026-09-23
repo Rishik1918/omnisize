@@ -18,7 +18,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   fileCounts,
 }) => {
   return (
-    <header className="sticky top-0 z-30 w-full bg-white/85 dark:bg-zinc-950/90 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800/80 transition-colors">
+    <header
+      className="sticky top-0 z-30 w-full bg-white/95 dark:bg-zinc-950/95 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800/80 transition-colors"
+      style={{
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+      }}
+    >
       <div className="max-w-5xl mx-auto px-3 sm:px-6">
         {/* Main Header Bar */}
         <div className="flex items-center justify-between h-14 sm:h-16 gap-2">

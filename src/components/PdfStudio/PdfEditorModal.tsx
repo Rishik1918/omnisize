@@ -709,7 +709,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }}
     >
       {/* TIER 1: Primary Header Bar (ALWAYS fully visible on Android & Desktop) */}
-      <header className="px-3 sm:px-5 py-2 sm:py-2.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0">
+      <header
+        className="px-3 sm:px-5 py-2 sm:py-2.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0"
+        style={{
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+        }}
+      >
         <div className="flex items-center justify-between gap-2 sm:gap-4">
           {/* Left: Prominent Always-Visible Exit/Close Button */}
           <div className="flex items-center gap-2 flex-shrink-0">
