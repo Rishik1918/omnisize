@@ -30,8 +30,12 @@ import {
   PanelLeftClose,
   PanelLeft,
   ExternalLink,
-  HelpCircle,
-  AlertTriangle
+  ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
+  FolderOpen,
+  FilePlus,
+  Sparkles
 } from 'lucide-react';
 import {
   PdfStudioEngine,
@@ -41,9 +45,45 @@ import {
   HyperlinkOverlay,
   InsertBlankPageSpec
 } from '../../services/pdfStudioEngine';
+import {
+  PdfSignatureEngine,
+  PdfSignatureInfo
+} from '../../services/pdfSignatureEngine';
 import { saveFile } from '../../utils/fileSaver';
 import { getDocumentProxy } from 'unpdf';
+import { PDFDocument } from 'pdf-lib';
 import { PdfOcrModal } from './PdfOcrModal';
+import { SignatureCertificateModal } from './SignatureCertificateModal';
+
+export const MS_WORD_FONTS = [
+  'Calibri',
+  'Calibri Light',
+  'Arial',
+  'Arial Black',
+  'Times New Roman',
+  'Aptos',
+  'Aptos Display',
+  'Georgia',
+  'Cambria',
+  'Garamond',
+  'Segoe UI',
+  'Verdana',
+  'Tahoma',
+  'Trebuchet MS',
+  'Century Gothic',
+  'Book Antiqua',
+  'Palatino Linotype',
+  'Constantia',
+  'Corbel',
+  'Candara',
+  'Franklin Gothic Medium',
+  'Comic Sans MS',
+  'Courier New',
+  'Consolas',
+  'Lucida Console',
+  'Impact',
+  'Symbol'
+];
 
 interface PdfEditorModalProps {
   isOpen: boolean;
@@ -61,40 +101,11 @@ interface EditorSnapshot {
   insertedBlankPages: InsertBlankPageSpec[];
 }
 
-export const MS_WORD_FONTS = [
-  'Calibri',
-  'Calibri Light',
-  'Arial',
-  'Arial Black',
-  'Times New Roman',
-  'Georgia',
-  'Cambria',
-  'Garamond',
-  'Verdana',
-  'Tahoma',
-  'Trebuchet MS',
-  'Segoe UI',
-  'Century Gothic',
-  'Book Antiqua',
-  'Palatino Linotype',
-  'Comic Sans MS',
-  'Courier New',
-  'Consolas',
-  'Impact',
-  'Franklin Gothic Medium',
-  'Lucida Sans',
-  'Lucida Console',
-  'Baskerville',
-  'Rockwell',
-  'Constantia',
-  'Corbel',
-  'Candara',
-];
-
 export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile }) => {
   if (!isOpen) return null;
 
   const [file, setFile] = useState<File | null>(initialFile || null);
+  const [showInitialPrompt, setShowInitialPrompt] = useState<boolean>(!initialFile);
   const [arrayBuffer, setArrayBuffer] = useState<ArrayBuffer | null>(null);
   const [totalPages, setTotalPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1); // 1-indexed
@@ -102,6 +113,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [activeTool, setActiveTool] = useState<
     'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image'
   >('edit-text');
+
+  // Digital Signature & Certificate State
+  const [signatures, setSignatures] = useState<PdfSignatureInfo[]>([]);
+  const [selectedSigForModal, setSelectedSigForModal] = useState<PdfSignatureInfo | null>(null);
+  const [isVerifyingSignatures, setIsVerifyingSignatures] = useState<boolean>(false);
 
   // Auto-Save feature
   const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
@@ -169,6 +185,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pdfProxyRef = useRef<any>(null);
+  const filePickerRef = useRef<HTMLInputElement | null>(null);
 
   // Check if document has unsaved edits
   const hasUnsavedEdits =
@@ -221,6 +238,25 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     ]
   );
 
+  // Create Blank Document
+  const handleCreateBlankDocument = async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([595.28, 841.89]); // A4
+    const pdfBytes = await doc.save();
+    const blankBlob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
+    const blankFile = new File([blankBlob], 'Blank_Document.pdf', { type: 'application/pdf' });
+    setFile(blankFile);
+    setShowInitialPrompt(false);
+  };
+
+  // Select File from Device
+  const handleSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFile(e.target.files[0]);
+      setShowInitialPrompt(false);
+    }
+  };
+
   // Undo action
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
@@ -253,7 +289,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   }, [historyIndex, history]);
 
-  // Load PDF buffer on file selection
+  // Load PDF buffer on file selection and detect digital signatures
   useEffect(() => {
     if (!file) return;
     let isMounted = true;
@@ -279,6 +315,25 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           const optimalScale = Math.min(2.0, Math.max(0.4, (containerW - padding) / firstViewport.width));
           setZoomScale(Number(optimalScale.toFixed(2)));
         }
+
+        // Cryptographic Digital Signature & Certificate Detection
+        setIsVerifyingSignatures(true);
+        PdfSignatureEngine.extractSignatures(safeBuf)
+          .then(async (extractedSigs) => {
+            if (!isMounted) return;
+            const verifiedSigs: PdfSignatureInfo[] = [];
+            for (const sig of extractedSigs) {
+              const verified = await PdfSignatureEngine.verifySignature(safeBuf, sig);
+              verifiedSigs.push(verified);
+            }
+            if (isMounted) {
+              setSignatures(verifiedSigs);
+            }
+          })
+          .catch((err) => console.warn('Signature verification error:', err))
+          .finally(() => {
+            if (isMounted) setIsVerifyingSignatures(false);
+          });
 
         setModifiedTexts({});
         setTextOverlays([]);
@@ -474,7 +529,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
 
-    // Convert CSS click coordinates to PDF points (origin at bottom-left)
     const scaleFactor = zoomScale;
     const pdfX = clickX / scaleFactor;
     const pdfY = (rect.height - clickY) / scaleFactor;
@@ -600,7 +654,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-100 dark:bg-zinc-950 flex flex-col w-screen h-screen select-none animate-fade-in overflow-hidden">
+    <div className="fixed inset-0 z-[9999] bg-slate-100 dark:bg-zinc-950 flex flex-col w-screen h-[100dvh] select-none animate-fade-in overflow-hidden m-0 p-0 top-0 left-0 right-0 bottom-0">
       {/* TIER 1: Primary Header Bar (ALWAYS fully visible on Android & Desktop) */}
       <header className="px-3 sm:px-5 py-2 sm:py-2.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0">
         <div className="flex items-center justify-between gap-2 sm:gap-4">
@@ -618,7 +672,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <button
               onClick={() => setShowSidebar(!showSidebar)}
               className="hidden sm:flex p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-              title="Toggle Thumbnails Panel"
+              title="Toggle Page Thumbnails"
             >
               {showSidebar ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
             </button>
@@ -639,7 +693,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
               <span className="px-1 font-mono text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
-                {currentPage}/{totalPages}
+                {currentPage}/{totalPages || 1}
               </span>
               <button
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
@@ -694,6 +748,61 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </div>
         </div>
       </header>
+
+      {/* DIGITAL SIGNATURE BANNER (Acrobat-style genuine verification banner) */}
+      {signatures.length > 0 && (
+        <div
+          className={`flex items-center justify-between px-3 sm:px-5 py-1.5 border-b text-xs flex-shrink-0 transition-colors ${
+            signatures[0].status === 'valid'
+              ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-800 dark:text-emerald-300'
+              : signatures[0].status === 'untrusted_cert'
+              ? 'bg-amber-500/10 border-amber-500/25 text-amber-800 dark:text-amber-300'
+              : 'bg-red-500/10 border-red-500/25 text-red-800 dark:text-red-300'
+          }`}
+        >
+          <div className="flex items-center gap-2 overflow-hidden">
+            {signatures[0].status === 'valid' ? (
+              <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            ) : signatures[0].status === 'untrusted_cert' ? (
+              <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+            ) : (
+              <ShieldAlert className="w-4 h-4 text-red-600 flex-shrink-0" />
+            )}
+            <span className="font-semibold truncate">
+              {signatures[0].status === 'valid'
+                ? `Signed & Valid: ${signatures[0].signerName}`
+                : signatures[0].status === 'untrusted_cert'
+                ? `Signed by ${signatures[0].signerName} (Validity Unknown)`
+                : `Invalid Digital Signature (Modified)`}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {signatures[0].status === 'untrusted_cert' && (
+              <button
+                onClick={async () => {
+                  if (signatures[0].certificate) {
+                    PdfSignatureEngine.trustCertificate(signatures[0].certificate.serialNumber);
+                    if (arrayBuffer) {
+                      const reVer = await PdfSignatureEngine.verifySignature(arrayBuffer, signatures[0]);
+                      setSignatures([reVer]);
+                    }
+                  }
+                }}
+                className="px-2.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] shadow-xs active:scale-95"
+              >
+                Trust & Verify
+              </button>
+            )}
+            <button
+              onClick={() => setSelectedSigForModal(signatures[0])}
+              className="px-2.5 py-0.5 rounded border border-current font-medium text-[11px] hover:bg-black/5 dark:hover:bg-white/5"
+            >
+              Certificate Details
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* TIER 2: Scrollable Mobile & Desktop Tools Strip */}
       <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar px-3 py-1.5 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 text-xs flex-shrink-0">
@@ -1218,19 +1327,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </span>
         </div>
 
-        {/* Clean, Fully-Functional Zoom Controls for Mobile & Desktop */}
+        {/* Clean, Non-Clipping Touch Zoom Bar */}
         <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-center">
           <button
             onClick={handleFitWidth}
-            className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors"
-            title="Fit Width"
+            className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0"
+            title="Fit Page Width"
           >
-            Fit Width
+            Width
           </button>
 
           <button
             onClick={() => setZoomScale((prev) => Math.max(0.25, Number((prev - 0.15).toFixed(2))))}
-            className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors"
+            className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
             title="Zoom Out"
           >
             <ZoomOut className="w-4 h-4" />
@@ -1243,16 +1352,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             step="0.05"
             value={zoomScale}
             onChange={(e) => setZoomScale(parseFloat(e.target.value))}
-            className="w-24 sm:w-32 accent-emerald-600 h-1.5 cursor-pointer"
+            className="w-20 sm:w-32 accent-emerald-600 h-1.5 cursor-pointer flex-shrink-0"
           />
 
-          <span className="font-mono text-xs font-bold w-11 text-center">
+          <span className="font-mono text-xs font-bold w-12 text-center flex-shrink-0">
             {Math.round(zoomScale * 100)}%
           </span>
 
           <button
             onClick={() => setZoomScale((prev) => Math.min(4.0, Number((prev + 0.15).toFixed(2))))}
-            className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors"
+            className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
             title="Zoom In"
           >
             <ZoomIn className="w-4 h-4" />
@@ -1260,13 +1369,82 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
           <button
             onClick={handleFitPage}
-            className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors"
-            title="Fit Page"
+            className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0"
+            title="Fit Entire Page"
           >
-            Fit Page
+            Page
           </button>
         </div>
       </footer>
+
+      {/* INITIAL PROMPT POPUP (When Studio is opened without document) */}
+      {showInitialPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-3xl w-full max-w-lg border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 sm:p-8 space-y-6 text-center">
+            <div className="flex flex-col items-center gap-2">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                <FileText className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg sm:text-xl font-bold">Welcome to Omnisize PDF Studio</h3>
+              <p className="text-xs text-zinc-500 max-w-sm">
+                How would you like to start your PDF editing and reading session?
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2">
+              {/* Option 1: Open Document */}
+              <button
+                onClick={() => filePickerRef.current?.click()}
+                className="group p-5 rounded-2xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-emerald-500 bg-zinc-50 dark:bg-zinc-800/40 hover:bg-emerald-500/5 transition-all text-left flex flex-col justify-between gap-3 shadow-xs"
+              >
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <FolderOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Open Document</div>
+                  <div className="text-[11px] text-zinc-500 mt-0.5">
+                    Browse and edit an existing PDF from your device storage
+                  </div>
+                </div>
+              </button>
+
+              {/* Option 2: Blank Document */}
+              <button
+                onClick={handleCreateBlankDocument}
+                className="group p-5 rounded-2xl border-2 border-zinc-200 dark:border-zinc-800 hover:border-emerald-500 bg-zinc-50 dark:bg-zinc-800/40 hover:bg-emerald-500/5 transition-all text-left flex flex-col justify-between gap-3 shadow-xs"
+              >
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                  <FilePlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Blank Page</div>
+                  <div className="text-[11px] text-zinc-500 mt-0.5">
+                    Start with a fresh, clean A4 page for notes, text, or signing
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 text-xs">
+              <button
+                onClick={onClose}
+                className="px-4 py-2 rounded-xl text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+              >
+                Cancel & Exit
+              </button>
+              <span className="text-[11px] text-zinc-400">100% Offline • Private</span>
+            </div>
+
+            <input
+              ref={filePickerRef}
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={handleSelectFile}
+              className="hidden"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Close Confirmation Dialog (Clean, Fully Readable Layout on Android & iOS) */}
       {showCloseConfirmModal && (
@@ -1319,6 +1497,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </div>
           </div>
         </div>
+      )}
+
+      {/* Digital Signature & Certificate Inspection Modal */}
+      {selectedSigForModal && (
+        <SignatureCertificateModal
+          isOpen={true}
+          onClose={() => setSelectedSigForModal(null)}
+          signature={selectedSigForModal}
+          pdfBuffer={arrayBuffer}
+          onSignatureUpdated={(updated) => {
+            setSignatures([updated]);
+            setSelectedSigForModal(updated);
+          }}
+        />
       )}
 
       {/* OCR Engine Modal */}
