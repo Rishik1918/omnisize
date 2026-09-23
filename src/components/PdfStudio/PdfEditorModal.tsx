@@ -51,9 +51,12 @@ import {
 } from '../../services/pdfSignatureEngine';
 import { saveFile } from '../../utils/fileSaver';
 import { getDocumentProxy } from 'unpdf';
+import { createPortal } from 'react-dom';
 import { PDFDocument } from 'pdf-lib';
 import { PdfOcrModal } from './PdfOcrModal';
 import { SignatureCertificateModal } from './SignatureCertificateModal';
+import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
+import { PdfUnlocker } from '../../services/pdfUnlocker';
 
 export const MS_WORD_FONTS = [
   'Calibri',
@@ -127,6 +130,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       return false;
     }
   });
+
+  // Password Protected PDF Prompt
+  const [passwordModalFile, setPasswordModalFile] = useState<File | null>(null);
+  const [originalSignedBuffer, setOriginalSignedBuffer] = useState<ArrayBuffer | null>(null);
+
+  // Lock body overflow when editor is open so background never scrolls
+  useEffect(() => {
+    if (isOpen) {
+      const orig = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = orig;
+      };
+    }
+  }, [isOpen]);
 
   // Close Confirmation Modal
   const [showCloseConfirmModal, setShowCloseConfirmModal] = useState<boolean>(false);
@@ -318,12 +336,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
         // Cryptographic Digital Signature & Certificate Detection
         setIsVerifyingSignatures(true);
-        PdfSignatureEngine.extractSignatures(safeBuf)
+        const sigSourceBuf = originalSignedBuffer || safeBuf;
+        PdfSignatureEngine.extractSignatures(sigSourceBuf)
           .then(async (extractedSigs) => {
             if (!isMounted) return;
             const verifiedSigs: PdfSignatureInfo[] = [];
             for (const sig of extractedSigs) {
-              const verified = await PdfSignatureEngine.verifySignature(safeBuf, sig);
+              const verified = await PdfSignatureEngine.verifySignature(sigSourceBuf, sig);
               verifiedSigs.push(verified);
             }
             if (isMounted) {
@@ -355,7 +374,23 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         ]);
         setHistoryIndex(0);
       } catch (err: any) {
-        if (isMounted) setError('Failed to parse PDF: ' + (err?.message || 'Invalid format'));
+        if (!isMounted) return;
+        const msg = String(err?.message || err || '');
+        const isPasswordErr =
+          err?.name === 'PasswordException' ||
+          err?.code === 1 ||
+          err?.code === 2 ||
+          msg.toLowerCase().includes('password') ||
+          msg.toLowerCase().includes('no password');
+
+        if (isPasswordErr) {
+          // If password required, store the original buffer for signature verification and open password prompt
+          setOriginalSignedBuffer(safeBuf);
+          setPasswordModalFile(file);
+          setError(null);
+        } else {
+          setError('Failed to parse PDF: ' + (err?.message || 'Invalid format'));
+        }
       }
     });
 
@@ -363,6 +398,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       isMounted = false;
     };
   }, [file]);
+
+  const handlePasswordUnlockSuccess = (unlockedFile: File) => {
+    setPasswordModalFile(null);
+    setError(null);
+    setFile(unlockedFile);
+  };
 
   // Render current page to canvas with high-DPI supersampling
   useEffect(() => {
@@ -653,8 +694,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-[9999] bg-slate-100 dark:bg-zinc-950 flex flex-col w-screen h-[100dvh] select-none animate-fade-in overflow-hidden m-0 p-0 top-0 left-0 right-0 bottom-0">
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-[999999] bg-slate-100 dark:bg-zinc-950 flex flex-col w-screen h-screen select-none overflow-hidden m-0 p-0"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+        zIndex: 999999,
+      }}
+    >
       {/* TIER 1: Primary Header Bar (ALWAYS fully visible on Android & Desktop) */}
       <header className="px-3 sm:px-5 py-2 sm:py-2.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0">
         <div className="flex items-center justify-between gap-2 sm:gap-4">
@@ -1022,7 +1075,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       )}
 
       {/* Main Workspace Body: Sidebar + Scrollable Viewport */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 flex min-h-0 overflow-hidden relative">
         {/* Left Thumbnail Sidebar */}
         {showSidebar && totalPages > 0 && (
           <aside className="w-44 sm:w-52 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xs">
@@ -1313,8 +1366,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         </main>
       </div>
 
-      {/* FOOTER: Clean Responsive Zoom Bar (NO Squished Text) */}
-      <footer className="flex items-center justify-center sm:justify-between px-3 sm:px-6 py-2 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 z-30 text-xs text-zinc-600 dark:text-zinc-400 flex-shrink-0 shadow-xs">
+      {/* FOOTER: Clean Responsive Zoom Bar (NO Squished Text, fully visible above Android navigation bar) */}
+      <footer
+        className="flex items-center justify-center sm:justify-between px-3 sm:px-6 py-2 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 z-30 text-xs text-zinc-600 dark:text-zinc-400 flex-shrink-0 shadow-xs"
+        style={{
+          paddingBottom: 'max(0.6rem, env(safe-area-inset-bottom, 8px))',
+        }}
+      >
         <div className="hidden lg:flex items-center gap-2">
           <span className="text-[11px] text-zinc-400">
             {activeTool === 'edit-text'
@@ -1525,6 +1583,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           }}
         />
       )}
+
+      {/* Password Prompt Modal for Encrypted PDFs */}
+      {passwordModalFile && (
+        <PdfPasswordPromptModal
+          isOpen={true}
+          file={passwordModalFile}
+          onSuccess={handlePasswordUnlockSuccess}
+          onCancel={() => {
+            setPasswordModalFile(null);
+            onClose();
+          }}
+        />
+      )}
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 };

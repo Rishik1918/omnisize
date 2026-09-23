@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Upload, RefreshCw, Download, Trash2, FileText, Film, Image as ImageIcon, Table, Music, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { ConversionEngine, ConversionTarget } from '../services/conversionEngine';
 import { saveFile } from '../utils/fileSaver';
+import { PdfPasswordPromptModal } from './PdfPasswordPromptModal';
 
 interface ConvertItem {
   id: string;
@@ -19,6 +20,10 @@ interface ConvertItem {
 export const ConverterView: React.FC = () => {
   const [items, setItems] = useState<ConvertItem[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [passwordModalTarget, setPasswordModalTarget] = useState<{
+    file: File;
+    onSuccess: (unlockedFile: File) => void;
+  } | null>(null);
 
   const getCategoryIcon = (name: string) => {
     const ext = name.split('.').pop()?.toLowerCase() || '';
@@ -81,6 +86,20 @@ export const ConverterView: React.FC = () => {
         )
       );
     } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (err?.name === 'PasswordException' || msg.toLowerCase().includes('password')) {
+        setPasswordModalTarget({
+          file: item.file,
+          onSuccess: (unlockedFile) => {
+            setPasswordModalTarget(null);
+            setItems((prev) =>
+              prev.map((i) => (i.id === item.id ? { ...i, file: unlockedFile, status: 'idle', error: undefined } : i))
+            );
+            convertSingle({ ...item, file: unlockedFile, status: 'idle', error: undefined });
+          },
+        });
+        return;
+      }
       setItems((prev) =>
         prev.map((i) =>
           i.id === item.id ? { ...i, status: 'error', error: err.message || 'Conversion failed' } : i
@@ -256,6 +275,15 @@ export const ConverterView: React.FC = () => {
           );
         })}
       </div>
+
+      {passwordModalTarget && (
+        <PdfPasswordPromptModal
+          isOpen={true}
+          file={passwordModalTarget.file}
+          onSuccess={passwordModalTarget.onSuccess}
+          onCancel={() => setPasswordModalTarget(null)}
+        />
+      )}
     </div>
   );
 };

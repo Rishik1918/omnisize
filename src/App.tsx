@@ -12,6 +12,7 @@ import { PdfStudioView } from './components/PdfStudio/PdfStudioView';
 import { PdfEditorModal } from './components/PdfStudio/PdfEditorModal';
 import { InitialChoiceScreen } from './components/InitialChoiceScreen';
 import { BottomNav } from './components/BottomNav';
+import { PdfPasswordPromptModal } from './components/PdfPasswordPromptModal';
 import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOptions, DocumentProcessingOptions } from './types';
 import { ImageEngine } from './services/imageEngine';
 import { VideoEngine } from './services/videoEngine';
@@ -35,6 +36,10 @@ export default function App() {
   const [videoModalItem, setVideoModalItem] = useState<ProcessedItem | null>(null);
   const [docModalItem, setDocModalItem] = useState<ProcessedItem | null>(null);
   const [unlockModalItem, setUnlockModalItem] = useState<ProcessedItem | null>(null);
+  const [passwordModalTarget, setPasswordModalTarget] = useState<{
+    file: File;
+    onSuccess: (unlockedFile: File) => void;
+  } | null>(null);
 
   const detectType = (file: File): MediaType => {
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
@@ -200,6 +205,20 @@ export default function App() {
         )
       );
     } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (err?.name === 'PasswordException' || msg.toLowerCase().includes('password')) {
+        setPasswordModalTarget({
+          file: item.file,
+          onSuccess: (unlockedFile) => {
+            setPasswordModalTarget(null);
+            setItems((prev) =>
+              prev.map((i) => (i.id === item.id ? { ...i, file: unlockedFile, status: 'idle', error: undefined } : i))
+            );
+            processSingleItem({ ...item, file: unlockedFile }, imageOpts, videoOpts, docOpts);
+          },
+        });
+        return;
+      }
       setItems((prev) =>
         prev.map((i) =>
           i.id === item.id ? { ...i, status: 'error', error: err.message } : i
@@ -434,6 +453,15 @@ export default function App() {
           isOpen={Boolean(externalEditorPdf)}
           onClose={() => setExternalEditorPdf(null)}
           initialFile={externalEditorPdf}
+        />
+      )}
+
+      {passwordModalTarget && (
+        <PdfPasswordPromptModal
+          isOpen={true}
+          file={passwordModalTarget.file}
+          onSuccess={passwordModalTarget.onSuccess}
+          onCancel={() => setPasswordModalTarget(null)}
         />
       )}
     </div>

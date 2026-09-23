@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Scissors, Download, FileText, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { PdfStudioEngine } from '../../services/pdfStudioEngine';
 import { saveFile } from '../../utils/fileSaver';
 import { getDocumentProxy } from 'unpdf';
+import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
 
 interface PdfSplitModalProps {
   isOpen: boolean;
@@ -19,22 +21,31 @@ export const PdfSplitModal: React.FC<PdfSplitModalProps> = ({ isOpen, onClose })
   const [progress, setProgress] = useState(0);
   const [splitResult, setSplitResult] = useState<{ blob: Blob; pageCount: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [passwordModalFile, setPasswordModalFile] = useState<File | null>(null);
+
+  const processLoadedFile = async (selected: File) => {
+    setFile(selected);
+    setSplitResult(null);
+    setError(null);
+
+    try {
+      const buffer = await selected.arrayBuffer();
+      const proxy = await getDocumentProxy(new Uint8Array(buffer));
+      setTotalPages(proxy.numPages);
+      setRangeInput(`1-${Math.min(proxy.numPages, 3)}`);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (err?.name === 'PasswordException' || msg.toLowerCase().includes('password')) {
+        setPasswordModalFile(selected);
+      } else {
+        setError('Could not read PDF metadata: ' + (err?.message || 'Invalid PDF'));
+      }
+    }
+  };
 
   const handleSelectFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const selected = e.target.files[0];
-      setFile(selected);
-      setSplitResult(null);
-      setError(null);
-
-      try {
-        const buffer = await selected.arrayBuffer();
-        const proxy = await getDocumentProxy(new Uint8Array(buffer));
-        setTotalPages(proxy.numPages);
-        setRangeInput(`1-${Math.min(proxy.numPages, 3)}`);
-      } catch (err: any) {
-        setError('Could not read PDF metadata: ' + (err?.message || 'Invalid PDF'));
-      }
+      await processLoadedFile(e.target.files[0]);
     }
   };
 
@@ -67,8 +78,19 @@ export const PdfSplitModal: React.FC<PdfSplitModalProps> = ({ isOpen, onClose })
     await saveFile(splitResult.blob, `${baseName}_pages_${cleanRange}.pdf`);
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+  const modalNode = (
+    <div
+      className="fixed inset-0 z-[1000000] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+      }}
+    >
       <div className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl w-full max-w-lg border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800">
@@ -251,6 +273,22 @@ export const PdfSplitModal: React.FC<PdfSplitModalProps> = ({ isOpen, onClose })
           </button>
         </div>
       </div>
+
+      {passwordModalFile && (
+        <PdfPasswordPromptModal
+          isOpen={true}
+          file={passwordModalFile}
+          onSuccess={(unlockedFile) => {
+            setPasswordModalFile(null);
+            processLoadedFile(unlockedFile);
+          }}
+          onCancel={() => {
+            setPasswordModalFile(null);
+          }}
+        />
+      )}
     </div>
   );
+
+  return createPortal(modalNode, document.body);
 };

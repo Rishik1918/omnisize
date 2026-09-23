@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   ScanText,
@@ -15,6 +16,7 @@ import {
 import { OcrEngine, OcrProgress, OcrPageResult } from '../../services/ocrEngine';
 import { saveFile } from '../../utils/fileSaver';
 import JSZip from 'jszip';
+import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
 
 interface PdfOcrModalProps {
   isOpen: boolean;
@@ -46,6 +48,7 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
   const [activePageTab, setActivePageTab] = useState<number>(1);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [passwordModalFile, setPasswordModalFile] = useState<File | null>(null);
 
   const handleSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -82,7 +85,12 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
         setActivePageTab(1);
       }
     } catch (err: any) {
-      setError(err?.message || 'Optical Character Recognition encountered an error.');
+      const msg = String(err?.message || err || '');
+      if (err?.name === 'PasswordException' || msg.toLowerCase().includes('password')) {
+        setPasswordModalFile(file);
+      } else {
+        setError(err?.message || 'Optical Character Recognition encountered an error.');
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -158,8 +166,19 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
 
   const currentPageText = pageResults.find((p) => p.pageNumber === activePageTab)?.text || extractedText;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+  const modalNode = (
+    <div
+      className="fixed inset-0 z-[1000000] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100dvh',
+      }}
+    >
       <div className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl w-full max-w-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800">
@@ -383,6 +402,23 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
           </div>
         </div>
       </div>
+
+      {passwordModalFile && (
+        <PdfPasswordPromptModal
+          isOpen={true}
+          file={passwordModalFile}
+          onSuccess={(unlockedFile) => {
+            setPasswordModalFile(null);
+            setFile(unlockedFile);
+            setError(null);
+          }}
+          onCancel={() => {
+            setPasswordModalFile(null);
+          }}
+        />
+      )}
     </div>
   );
+
+  return createPortal(modalNode, document.body);
 };
