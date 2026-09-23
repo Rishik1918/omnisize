@@ -48,6 +48,27 @@ export interface PdfSignatureInfo {
   statusMessage: string;
 }
 
+export function formatToIST(date?: Date): string {
+  if (!date || isNaN(date.getTime())) return 'Not available';
+  try {
+    const dtf = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    const parts = dtf.formatToParts(date);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
+    return `${get('year')}.${get('month')}.${get('day')} ${get('hour')}:${get('minute')}:${get('second')} IST`;
+  } catch {
+    return date.toLocaleString('en-US') + ' IST';
+  }
+}
+
 const BUILT_IN_TRUST_LIST = [
   'unique identification authority of india',
   'uidai',
@@ -217,6 +238,18 @@ export class PdfSignatureEngine {
         const mi = parseInt(rawDate.substring(10, 12), 10);
         const se = parseInt(rawDate.substring(12, 14), 10);
         signingTime = new Date(Date.UTC(yr, mo, da, hr, mi, se));
+      } else {
+        const textDateMatch = rawText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
+        if (textDateMatch) {
+          const yr = parseInt(textDateMatch[1], 10);
+          const mo = parseInt(textDateMatch[2], 10) - 1;
+          const da = parseInt(textDateMatch[3], 10);
+          const hr = parseInt(textDateMatch[4], 10);
+          const mi = parseInt(textDateMatch[5], 10);
+          const se = parseInt(textDateMatch[6], 10);
+          const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - 5.5 * 3600 * 1000;
+          signingTime = new Date(utcMs);
+        }
       }
 
       try {
@@ -445,21 +478,34 @@ export class PdfSignatureEngine {
     const { width: pageWidth, height: pageHeight } = page.getSize();
 
     // Determine stamp coordinates: use original signature rect or default to bottom-right
-    let x = sig.rect?.x ?? (pageWidth - 220);
-    let y = sig.rect?.y ?? 60;
-    let width = Math.max(sig.rect?.width ?? 0, 165);
-    let height = Math.max(sig.rect?.height ?? 0, 42);
+    let x = sig.rect?.x ?? 22;
+    let y = sig.rect?.y ?? 334;
+    let width = sig.rect?.width ?? 158;
+    let height = sig.rect?.height ?? 42;
+
+    const isAadhaarLayout =
+      (x >= 40 && x <= 120 && y >= 300 && y <= 380) ||
+      (sig.signerName && sig.signerName.toLowerCase().includes('unique identification authority'));
+
+    if (isAadhaarLayout) {
+      // In Aadhaar documents, the entire signature block (yellow question mark + text) starts at x=22
+      // and ends at x=180, strictly leaving the QR code (at x=188) untouched.
+      x = 22;
+      y = 334;
+      width = 158;
+      height = 42;
+    }
 
     // Constrain within page bounds
     x = Math.max(10, Math.min(x, pageWidth - width - 10));
     y = Math.max(10, Math.min(y, pageHeight - height - 10));
 
-    // 1. Erase old unverified yellow question mark box cleanly with white background
+    // 1. Completely erase old unverified yellow question mark and text cleanly with white background
     page.drawRectangle({
-      x: x - 4,
-      y: y - 4,
-      width: width + 8,
-      height: height + 8,
+      x: x - 1,
+      y: y - 2,
+      width: width + 2,
+      height: height + 4,
       color: rgb(1, 1, 1),
     });
 
@@ -469,66 +515,56 @@ export class PdfSignatureEngine {
       y,
       width,
       height,
-      color: rgb(0.95, 0.99, 0.96),
+      color: rgb(0.97, 0.99, 0.97),
       borderColor: rgb(0.13, 0.65, 0.32), // Emerald 600
-      borderWidth: 1.2,
+      borderWidth: 0.8,
     });
 
-    // 3. Draw Green Checkmark Symbol
-    const checkX = x + 10;
-    const checkY = y + height - 20;
+    // 3. Adobe Acrobat-Style Crisp Vector Checkmark (✓) - Pure vector stroke, NO circles, NO emojis
+    const checkStartX = x + 5;
+    const checkCenterY = y + height - 15;
 
-    // Draw green circle badge
-    page.drawCircle({
-      x: checkX + 6,
-      y: checkY + 3,
-      size: 8,
-      color: rgb(0.13, 0.65, 0.32),
-    });
-
-    // Draw white checkmark lines inside circle
+    // Down-stroke of the checkmark
     page.drawLine({
-      start: { x: checkX + 3, y: checkY + 3 },
-      end: { x: checkX + 5.5, y: checkY },
-      thickness: 1.5,
-      color: rgb(1, 1, 1),
+      start: { x: checkStartX, y: checkCenterY },
+      end: { x: checkStartX + 3.8, y: checkCenterY - 5.5 },
+      thickness: 2.2,
+      color: rgb(0.08, 0.55, 0.24),
     });
+    // Up-stroke of the checkmark (longer sweeping stroke)
     page.drawLine({
-      start: { x: checkX + 5.5, y: checkY },
-      end: { x: checkX + 9.5, y: checkY + 7 },
-      thickness: 1.5,
-      color: rgb(1, 1, 1),
+      start: { x: checkStartX + 3.2, y: checkCenterY - 5.5 },
+      end: { x: checkStartX + 9.5, y: checkCenterY + 4.5 },
+      thickness: 2.2,
+      color: rgb(0.08, 0.55, 0.24),
     });
 
     // 4. Header: "Signature Valid"
     page.drawText('Signature Valid', {
-      x: checkX + 18,
-      y: checkY,
-      size: 10,
+      x: checkStartX + 14,
+      y: checkCenterY - 3,
+      size: 8.5,
       font: fontHelveticaBold,
-      color: rgb(0.1, 0.55, 0.25),
+      color: rgb(0.08, 0.52, 0.24),
     });
 
-    // 5. Signer Details
-    const textStartX = x + 10;
-    let textY = y + height - 34;
-    const fontSize = 7.5;
-    const lineHeight = 10;
+    // 5. Signer Details & Official IST Date
+    const textStartX = x + 5;
+    let textY = y + height - 24;
+    const fontSize = 5.8;
+    const lineHeight = 7.2;
 
     page.drawText(`Digitally signed by ${sig.signerName}`, {
       x: textStartX,
       y: textY,
       size: fontSize,
-      font: fontHelveticaBold,
+      font: fontHelvetica,
       color: rgb(0.15, 0.15, 0.15),
     });
     textY -= lineHeight;
 
-    const dateStr = sig.signingTime
-      ? sig.signingTime.toLocaleString('en-US', { timeZoneName: 'short' })
-      : new Date().toLocaleString('en-US', { timeZoneName: 'short' });
-
-    page.drawText(`Date: ${dateStr}`, {
+    const formattedDate = formatToIST(sig.signingTime || new Date());
+    page.drawText(`Date: ${formattedDate}`, {
       x: textStartX,
       y: textY,
       size: fontSize,
@@ -537,7 +573,7 @@ export class PdfSignatureEngine {
     });
     textY -= lineHeight;
 
-    if (sig.reason && textY > y + 4) {
+    if (sig.reason && textY > y + 2) {
       page.drawText(`Reason: ${sig.reason}`, {
         x: textStartX,
         y: textY,

@@ -459,6 +459,28 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
           if (isMounted) {
             setDetectedTextItems(textItems);
+
+            // Check page text items for signature timestamp (e.g., Aadhaar Date: 2020.09.11 23:26:28 IST)
+            for (const item of textItems) {
+              const dm = item.originalText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
+              if (dm) {
+                const yr = parseInt(dm[1], 10);
+                const mo = parseInt(dm[2], 10) - 1;
+                const da = parseInt(dm[3], 10);
+                const hr = parseInt(dm[4], 10);
+                const mi = parseInt(dm[5], 10);
+                const se = parseInt(dm[6], 10);
+                const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - 5.5 * 3600 * 1000;
+                const parsedDate = new Date(utcMs);
+                setSignatures((prev) =>
+                  prev.map((s) => ({
+                    ...s,
+                    signingTime: s.signingTime || parsedDate,
+                  }))
+                );
+                break;
+              }
+            }
           }
         } catch (e) {
           console.warn('Text item extraction warning:', e);
@@ -709,14 +731,55 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  // Wheel listener on central area
-  const handleWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey) {
-      e.preventDefault();
-      const delta = e.deltaY < 0 ? 0.08 : -0.08;
-      setZoomScale((prev) => Math.min(4.0, Math.max(0.25, Number((prev + delta).toFixed(2)))));
+  // Two-Finger Pinch-to-Zoom Gesture Support (Android & Touch Devices)
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchStartScaleRef = useRef<number>(1);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      touchStartDistRef.current = dist;
+      touchStartScaleRef.current = zoomScale;
     }
   };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && touchStartDistRef.current !== null && touchStartDistRef.current > 0) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const ratio = dist / touchStartDistRef.current;
+      const targetScale = Number((touchStartScaleRef.current * ratio).toFixed(2));
+      setZoomScale(Math.min(4.0, Math.max(0.25, targetScale)));
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStartDistRef.current = null;
+  };
+
+  // Two-Finger Desktop Trackpad / Mousewheel Pinch-to-Zoom (Non-passive listener allows smooth zoom)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.08 : -0.08;
+        setZoomScale((prev) => Math.min(4.0, Math.max(0.25, Number((prev + delta).toFixed(2)))));
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+    };
+  }, []);
 
   const modalContent = (
     <div
@@ -1159,8 +1222,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         {/* Central Viewport Area */}
         <main
           ref={containerRef}
-          onWheel={handleWheel}
-          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 p-3 sm:p-8 flex flex-col items-center relative"
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
+          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 p-3 sm:p-8 flex flex-col items-center relative touch-pan-x touch-pan-y"
         >
           {error && (
             <div className="mb-4 max-w-xl w-full flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs">
@@ -1396,11 +1462,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               .filter((sig) => (sig.rect ? sig.rect.pageIndex === currentPage - 1 : currentPage === 1))
               .map((sig) => {
                 const scale = zoomScale;
-                const rect = sig.rect || { x: 80, y: 339, width: 165, height: 42 };
+                let rect = sig.rect || { x: 22, y: 334, width: 158, height: 42 };
+                const isAadhaarLayout =
+                  (rect.x >= 40 && rect.x <= 120 && rect.y >= 300 && rect.y <= 380) ||
+                  (sig.signerName && sig.signerName.toLowerCase().includes('unique identification authority'));
+
+                if (isAadhaarLayout) {
+                  rect = { x: 22, y: 334, width: 158, height: 42, pageIndex: 0 };
+                }
+
                 const cssX = rect.x * scale;
-                const cssY = viewportDims.height - (rect.y + Math.max(rect.height, 42)) * scale;
-                const cssW = Math.max(rect.width, 165) * scale;
-                const cssH = Math.max(rect.height, 42) * scale;
+                const cssY = viewportDims.height - (rect.y + rect.height) * scale;
+                const cssW = rect.width * scale;
+                const cssH = rect.height * scale;
 
                 const isValid = sig.status === 'valid';
 

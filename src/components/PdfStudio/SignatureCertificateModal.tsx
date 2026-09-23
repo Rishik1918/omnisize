@@ -16,7 +16,7 @@ import {
   Check,
   Loader2
 } from 'lucide-react';
-import { PdfSignatureInfo, PdfSignatureEngine } from '../../services/pdfSignatureEngine';
+import { PdfSignatureInfo, PdfSignatureEngine, formatToIST } from '../../services/pdfSignatureEngine';
 import { saveFile } from '../../utils/fileSaver';
 
 interface SignatureCertificateModalProps {
@@ -70,15 +70,7 @@ export const SignatureCertificateModal: React.FC<SignatureCertificateModalProps>
 
   const formatDate = (date?: Date) => {
     if (!date) return 'Not available';
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      timeZoneName: 'short',
-    });
+    return formatToIST(date);
   };
 
   const modalNode = (
@@ -221,7 +213,7 @@ export const SignatureCertificateModal: React.FC<SignatureCertificateModalProps>
                     Signing Time
                   </span>
                   <div className="font-semibold text-zinc-800 dark:text-zinc-200">
-                    {formatDate(currentSig.signingTime)}
+                    {formatDate(currentSig.signingTime || currentSig.certificate?.validity?.notBefore)}
                   </div>
                 </div>
               </div>
