@@ -173,19 +173,39 @@ export class PdfStudioEngine {
 
     const selectFont = (family?: string, isBold?: boolean, isItalic?: boolean): PDFFont => {
       const fam = (family || 'Helvetica').toLowerCase();
-      if (fam.includes('times') || fam.includes('roman') || fam.includes('serif')) {
+      // Serif MS Word fonts -> Times Roman family
+      if (
+        fam.includes('times') ||
+        fam.includes('roman') ||
+        fam.includes('serif') ||
+        fam.includes('cambria') ||
+        fam.includes('georgia') ||
+        fam.includes('garamond') ||
+        fam.includes('baskerville') ||
+        fam.includes('palatino') ||
+        fam.includes('constantia') ||
+        fam.includes('book antiqua') ||
+        fam.includes('didot') ||
+        fam.includes('rockwell')
+      ) {
         if (isBold && isItalic) return fontTimesBoldItalic;
         if (isBold) return fontTimesBold;
         if (isItalic) return fontTimesItalic;
         return fontTimes;
       }
-      if (fam.includes('courier') || fam.includes('mono')) {
+      // Monospaced MS Word fonts -> Courier family
+      if (
+        fam.includes('courier') ||
+        fam.includes('mono') ||
+        fam.includes('consolas') ||
+        fam.includes('lucida console')
+      ) {
         if (isBold && isItalic) return fontCourierBoldItalic;
         if (isBold) return fontCourierBold;
         if (isItalic) return fontCourierItalic;
         return fontCourier;
       }
-      // Default to Helvetica/Arial
+      // Sans-serif MS Word fonts -> Helvetica family (Calibri, Arial, Segoe UI, Verdana, Tahoma, Trebuchet, Century Gothic, Impact, etc.)
       if (isBold && isItalic) return fontHelveticaBoldItalic;
       if (isBold) return fontHelveticaBold;
       if (isItalic) return fontHelveticaItalic;

@@ -92,10 +92,6 @@ export const PdfStudioView: React.FC = () => {
       {/* Top Banner */}
       <div className="relative overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-gradient-to-br from-emerald-500/10 via-zinc-50 to-white dark:from-emerald-500/10 dark:via-zinc-900 dark:to-zinc-950 p-5 sm:p-7 shadow-sm">
         <div className="relative z-10 max-w-2xl">
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold mb-3">
-            <Sparkles className="w-3 h-3" />
-            <span>Adobe Acrobat Alternative • 100% Offline & Client-Side</span>
-          </div>
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 mb-1.5">
             Omnisize PDF Studio & Reader
           </h2>
