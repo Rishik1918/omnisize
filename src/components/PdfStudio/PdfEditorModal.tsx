@@ -1501,13 +1501,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               .filter((sig) => (sig.rect ? sig.rect.pageIndex === currentPage - 1 : currentPage === 1))
               .map((sig) => {
                 const scale = zoomScale;
-                let rect = sig.rect || { x: 22, y: 334, width: 158, height: 42 };
+                let rect = sig.rect || { x: 58, y: 312, width: 110, height: 74 };
                 const isAadhaarLayout =
-                  (rect.x >= 40 && rect.x <= 120 && rect.y >= 300 && rect.y <= 380) ||
+                  (rect.x >= 0 && rect.x <= 140 && rect.y >= 290 && rect.y <= 400) ||
                   (sig.signerName && sig.signerName.toLowerCase().includes('unique identification authority'));
 
                 if (isAadhaarLayout) {
-                  rect = { x: 22, y: 334, width: 158, height: 42, pageIndex: 0 };
+                  rect = { x: 58, y: 312, width: 110, height: 74, pageIndex: 0 };
                 }
 
                 const cssX = rect.x * scale;

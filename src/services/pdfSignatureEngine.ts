@@ -63,9 +63,9 @@ export function formatSignatureDate(date?: Date): string {
     });
     const parts = dtf.formatToParts(date);
     const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
-    return `${get('year')}.${get('month')}.${get('day')} ${get('hour')}:${get('minute')}:${get('second')} GMT+05:30`;
+    return `${get('year')}.${get('month')}.${get('day')} ${get('hour')}:${get('minute')}:${get('second')} IST`;
   } catch {
-    return date.toLocaleString('en-US') + ' GMT+05:30';
+    return date.toLocaleString('en-US') + ' IST';
   }
 }
 
@@ -515,9 +515,9 @@ export class PdfSignatureEngine {
     }
 
     // Determine stamp coordinates:
-    let x = sig.rect?.x ?? 16;
+    let x = sig.rect?.x ?? 58;
     let y = sig.rect?.y ?? 312;
-    let width = sig.rect?.width ?? 171;
+    let width = sig.rect?.width ?? 110;
     let height = sig.rect?.height ?? 74;
 
     const isAadhaarLayout =
@@ -526,17 +526,18 @@ export class PdfSignatureEngine {
 
     if (isAadhaarLayout) {
       // In Aadhaar documents, the entire signature area (yellow question mark + text lines)
-      // spans from x=16 to x=187, and y=312 to y=386, strictly preserving the QR code at x=188
-      x = 16;
-      y = 312;
-      width = 171;
-      height = 74;
+      // spans strictly from x=56 to x=170, and y=310 to y=386.
+      // This strictly preserves the left border at x=54 and the QR code at x=172!
+      x = 56;
+      y = 310;
+      width = 114;
+      height = 76;
     } else {
       // For general signatures, ensure the erase box has generous padding so no old unverified ? or text leaks
-      x = Math.max(0, x - 10);
-      y = Math.max(0, y - 10);
-      width = width + 20;
-      height = height + 20;
+      x = Math.max(0, x - 5);
+      y = Math.max(0, y - 5);
+      width = width + 10;
+      height = height + 10;
     }
 
     // Constrain within page bounds
@@ -552,67 +553,158 @@ export class PdfSignatureEngine {
       color: rgb(1, 1, 1),
     });
 
-    // 2. Adobe Acrobat-Style Clean Vector Checkmark (✓)
-    const checkStartX = x + 4;
-    const checkCenterY = y + height - 24;
+    if (isAadhaarLayout) {
+      // 2. Adobe Acrobat-Style Centered Vector Checkmark (✓) - Exactly matches Acrobat
+      const checkStartX = 86;
+      const checkCenterY = 344;
 
-    // Down-stroke of the checkmark
-    page.drawLine({
-      start: { x: checkStartX, y: checkCenterY },
-      end: { x: checkStartX + 5, y: checkCenterY - 7.5 },
-      thickness: 2.8,
-      color: rgb(0.12, 0.65, 0.22),
-    });
-    // Up-stroke of the checkmark
-    page.drawLine({
-      start: { x: checkStartX + 4.2, y: checkCenterY - 7.5 },
-      end: { x: checkStartX + 13.5, y: checkCenterY + 8 },
-      thickness: 2.8,
-      color: rgb(0.12, 0.65, 0.22),
-    });
-
-    // 3. Header: "Signature valid"
-    page.drawText('Signature valid', {
-      x: checkStartX + 18,
-      y: checkCenterY - 2,
-      size: 9.0,
-      font: fontHelvetica,
-      color: rgb(0.1, 0.1, 0.1),
-    });
-
-    // 4. Signer Details & Official Timestamp (matching Acrobat)
-    const textStartX = checkStartX + 18;
-    let textY = checkCenterY - 14;
-    const fontSize = 6.0;
-    const lineHeight = 8.0;
-
-    page.drawText(`Digitally signed by ${sig.signerName}`, {
-      x: textStartX,
-      y: textY,
-      size: fontSize,
-      font: fontHelvetica,
-      color: rgb(0.1, 0.1, 0.1),
-    });
-    textY -= lineHeight;
-
-    const formattedDate = formatSignatureDate(sig.signingTime || new Date());
-    page.drawText(`Date: ${formattedDate}`, {
-      x: textStartX,
-      y: textY,
-      size: fontSize,
-      font: fontHelvetica,
-      color: rgb(0.1, 0.1, 0.1),
-    });
-    textY -= lineHeight;
-
-    if (sig.reason && textY > y + 2) {
-      page.drawText(`Reason: ${sig.reason}`, {
-        x: textStartX,
-        y: textY,
-        size: fontSize - 0.5,
-        font: fontHelvetica,
-        color: rgb(0.3, 0.3, 0.3),
+      // Down-stroke of the checkmark
+      page.drawLine({
+        start: { x: checkStartX, y: checkCenterY },
+        end: { x: checkStartX + 9, y: checkCenterY - 14 },
+        thickness: 3.2,
+        color: rgb(0.08, 0.62, 0.22),
       });
+      // Up-stroke of the checkmark
+      page.drawLine({
+        start: { x: checkStartX + 8.5, y: checkCenterY - 14 },
+        end: { x: checkStartX + 26, y: checkCenterY + 14 },
+        thickness: 3.2,
+        color: rgb(0.08, 0.62, 0.22),
+      });
+
+      // 3. Header: "Signature valid"
+      page.drawText('Signature valid', {
+        x: 64,
+        y: 370,
+        size: 11.5,
+        font: fontHelvetica,
+        color: rgb(0.1, 0.1, 0.1),
+      });
+
+      // 4. Signer Details & Official Timestamp (Word-wrapped within max width so it never touches QR code)
+      const maxTextWidth = 98;
+      const wrapText = (text: string, maxW: number, font: any, sz: number): string[] => {
+        const words = text.split(/\s+/);
+        const lines: string[] = [];
+        let cur = '';
+        for (const w of words) {
+          const test = cur ? `${cur} ${w}` : w;
+          if (font.widthOfTextAtSize(test, sz) > maxW && cur) {
+            lines.push(cur);
+            cur = w;
+          } else {
+            cur = test;
+          }
+        }
+        if (cur) lines.push(cur);
+        return lines;
+      };
+
+      let textY = 352;
+      const fontSize = 5.2;
+      const lineHeight = 7.2;
+
+      const signerLines = wrapText(`Digitally signed by ${sig.signerName}`, maxTextWidth, fontHelvetica, fontSize);
+      for (const line of signerLines) {
+        if (textY < 312) break;
+        page.drawText(line, {
+          x: 66,
+          y: textY,
+          size: fontSize,
+          font: fontHelvetica,
+          color: rgb(0.1, 0.1, 0.1),
+        });
+        textY -= lineHeight;
+      }
+
+      const formattedDate = formatSignatureDate(sig.signingTime || new Date());
+      const dateLines = wrapText(`Date: ${formattedDate}`, maxTextWidth, fontHelvetica, fontSize);
+      for (const line of dateLines) {
+        if (textY < 312) break;
+        page.drawText(line, {
+          x: 66,
+          y: textY,
+          size: fontSize,
+          font: fontHelvetica,
+          color: rgb(0.1, 0.1, 0.1),
+        });
+        textY -= lineHeight;
+      }
+    } else {
+      // General PDF Document Stamp
+      const checkStartX = x + 4;
+      const checkCenterY = y + height - 20;
+
+      page.drawLine({
+        start: { x: checkStartX, y: checkCenterY },
+        end: { x: checkStartX + 5, y: checkCenterY - 7.5 },
+        thickness: 2.8,
+        color: rgb(0.12, 0.65, 0.22),
+      });
+      page.drawLine({
+        start: { x: checkStartX + 4.2, y: checkCenterY - 7.5 },
+        end: { x: checkStartX + 13.5, y: checkCenterY + 8 },
+        thickness: 2.8,
+        color: rgb(0.12, 0.65, 0.22),
+      });
+
+      page.drawText('Signature valid', {
+        x: checkStartX + 18,
+        y: checkCenterY - 2,
+        size: 9.0,
+        font: fontHelvetica,
+        color: rgb(0.1, 0.1, 0.1),
+      });
+
+      const maxTextWidth = Math.max(80, width - 25);
+      const wrapText = (text: string, maxW: number, font: any, sz: number): string[] => {
+        const words = text.split(/\s+/);
+        const lines: string[] = [];
+        let cur = '';
+        for (const w of words) {
+          const test = cur ? `${cur} ${w}` : w;
+          if (font.widthOfTextAtSize(test, sz) > maxW && cur) {
+            lines.push(cur);
+            cur = w;
+          } else {
+            cur = test;
+          }
+        }
+        if (cur) lines.push(cur);
+        return lines;
+      };
+
+      let textY = checkCenterY - 14;
+      const fontSize = 5.5;
+      const lineHeight = 7.5;
+
+      const signerLines = wrapText(`Digitally signed by ${sig.signerName}`, maxTextWidth, fontHelvetica, fontSize);
+      for (const line of signerLines) {
+        if (textY < y + 2) break;
+        page.drawText(line, {
+          x: checkStartX + 18,
+          y: textY,
+          size: fontSize,
+          font: fontHelvetica,
+          color: rgb(0.1, 0.1, 0.1),
+        });
+        textY -= lineHeight;
+      }
+
+      const formattedDate = formatSignatureDate(sig.signingTime || new Date());
+      const dateLines = wrapText(`Date: ${formattedDate}`, maxTextWidth, fontHelvetica, fontSize);
+      for (const line of dateLines) {
+        if (textY < y + 2) break;
+        page.drawText(line, {
+          x: checkStartX + 18,
+          y: textY,
+          size: fontSize,
+          font: fontHelvetica,
+          color: rgb(0.1, 0.1, 0.1),
+        });
+        textY -= lineHeight;
+      }
     }
 
     const pdfBytes = await doc.save();
