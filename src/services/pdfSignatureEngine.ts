@@ -48,7 +48,7 @@ export interface PdfSignatureInfo {
   statusMessage: string;
 }
 
-export function formatToIST(date?: Date): string {
+export function formatSignatureDate(date?: Date): string {
   if (!date || isNaN(date.getTime())) return 'Not available';
   try {
     const dtf = new Intl.DateTimeFormat('en-GB', {
@@ -63,11 +63,14 @@ export function formatToIST(date?: Date): string {
     });
     const parts = dtf.formatToParts(date);
     const get = (t: string) => parts.find((p) => p.type === t)?.value || '';
-    return `${get('year')}.${get('month')}.${get('day')} ${get('hour')}:${get('minute')}:${get('second')} IST`;
+    return `${get('year')}.${get('month')}.${get('day')} ${get('hour')}:${get('minute')}:${get('second')} GMT+05:30`;
   } catch {
-    return date.toLocaleString('en-US') + ' IST';
+    return date.toLocaleString('en-US') + ' GMT+05:30';
   }
 }
+
+// Keep formatToIST for backwards compatibility
+export const formatToIST = formatSignatureDate;
 
 const BUILT_IN_TRUST_LIST = [
   'unique identification authority of india',
@@ -502,74 +505,63 @@ export class PdfSignatureEngine {
 
     // 1. Completely erase old unverified yellow question mark and text cleanly with white background
     page.drawRectangle({
-      x: x - 1,
+      x: x - 2,
       y: y - 2,
-      width: width + 2,
+      width: width + 4,
       height: height + 4,
       color: rgb(1, 1, 1),
     });
 
-    // 2. Draw modern verified green badge container
-    page.drawRectangle({
-      x,
-      y,
-      width,
-      height,
-      color: rgb(0.97, 0.99, 0.97),
-      borderColor: rgb(0.13, 0.65, 0.32), // Emerald 600
-      borderWidth: 0.8,
-    });
-
-    // 3. Adobe Acrobat-Style Crisp Vector Checkmark (✓) - Pure vector stroke, NO circles, NO emojis
-    const checkStartX = x + 5;
-    const checkCenterY = y + height - 15;
+    // 2. Adobe Acrobat-Style Clean Vector Checkmark (✓) - Exactly matches Acrobat (NO green box, NO circle)
+    const checkStartX = x + 3;
+    const checkCenterY = y + height - 16;
 
     // Down-stroke of the checkmark
     page.drawLine({
       start: { x: checkStartX, y: checkCenterY },
-      end: { x: checkStartX + 3.8, y: checkCenterY - 5.5 },
-      thickness: 2.2,
-      color: rgb(0.08, 0.55, 0.24),
+      end: { x: checkStartX + 4.5, y: checkCenterY - 7 },
+      thickness: 2.8,
+      color: rgb(0.12, 0.65, 0.22),
     });
     // Up-stroke of the checkmark (longer sweeping stroke)
     page.drawLine({
-      start: { x: checkStartX + 3.2, y: checkCenterY - 5.5 },
-      end: { x: checkStartX + 9.5, y: checkCenterY + 4.5 },
-      thickness: 2.2,
-      color: rgb(0.08, 0.55, 0.24),
+      start: { x: checkStartX + 3.8, y: checkCenterY - 7 },
+      end: { x: checkStartX + 12, y: checkCenterY + 7 },
+      thickness: 2.8,
+      color: rgb(0.12, 0.65, 0.22),
     });
 
-    // 4. Header: "Signature Valid"
-    page.drawText('Signature Valid', {
-      x: checkStartX + 14,
-      y: checkCenterY - 3,
+    // 3. Header: "Signature valid"
+    page.drawText('Signature valid', {
+      x: checkStartX + 17,
+      y: checkCenterY - 2,
       size: 8.5,
-      font: fontHelveticaBold,
-      color: rgb(0.08, 0.52, 0.24),
+      font: fontHelvetica,
+      color: rgb(0.1, 0.1, 0.1),
     });
 
-    // 5. Signer Details & Official IST Date
-    const textStartX = x + 5;
+    // 4. Signer Details & Official GMT Timestamp (matching Acrobat)
+    const textStartX = checkStartX + 17;
     let textY = y + height - 24;
-    const fontSize = 5.8;
-    const lineHeight = 7.2;
+    const fontSize = 6.0;
+    const lineHeight = 7.5;
 
     page.drawText(`Digitally signed by ${sig.signerName}`, {
       x: textStartX,
       y: textY,
       size: fontSize,
       font: fontHelvetica,
-      color: rgb(0.15, 0.15, 0.15),
+      color: rgb(0.1, 0.1, 0.1),
     });
     textY -= lineHeight;
 
-    const formattedDate = formatToIST(sig.signingTime || new Date());
+    const formattedDate = formatSignatureDate(sig.signingTime || new Date());
     page.drawText(`Date: ${formattedDate}`, {
       x: textStartX,
       y: textY,
       size: fontSize,
       font: fontHelvetica,
-      color: rgb(0.25, 0.25, 0.25),
+      color: rgb(0.1, 0.1, 0.1),
     });
     textY -= lineHeight;
 
@@ -579,7 +571,7 @@ export class PdfSignatureEngine {
         y: textY,
         size: fontSize - 0.5,
         font: fontHelvetica,
-        color: rgb(0.35, 0.35, 0.35),
+        color: rgb(0.3, 0.3, 0.3),
       });
     }
 

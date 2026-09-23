@@ -126,6 +126,19 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  let forceQuit = false;
+
+  mainWindow.on('close', (e) => {
+    if (forceQuit) return;
+    e.preventDefault();
+    mainWindow.webContents.send('request-app-close');
+  });
+
+  ipcMain.on('confirm-app-close', () => {
+    forceQuit = true;
+    if (mainWindow) mainWindow.close();
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

@@ -429,74 +429,100 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setFile(unlockedFile);
   };
 
+  // Ref to track last rendered page to avoid flashing loading spinner on zoom
+  const lastRenderedPageRef = useRef<number>(-1);
+  const zoomDebounceRef = useRef<any>(null);
+
   // Render current page to canvas with high-DPI supersampling
   useEffect(() => {
     if ((!pdfProxyRef.current && !arrayBuffer) || totalPages === 0) return;
 
     let isMounted = true;
-    setIsRendering(true);
-    setError(null);
+    const isPageChange = lastRenderedPageRef.current !== currentPage;
+    if (isPageChange) {
+      setIsRendering(true);
+      setError(null);
+    }
 
     const proxyOrBuf = pdfProxyRef.current || arrayBuffer;
 
-    PdfStudioEngine.renderPageToCanvas(proxyOrBuf, currentPage, zoomScale)
-      .then(async ({ canvas, cssWidth, cssHeight }) => {
-        if (!isMounted || !canvasRef.current) return;
-        const targetCanvas = canvasRef.current;
-        targetCanvas.width = canvas.width;
-        targetCanvas.height = canvas.height;
-        targetCanvas.style.width = `${Math.round(cssWidth)}px`;
-        targetCanvas.style.height = `${Math.round(cssHeight)}px`;
+    if (zoomDebounceRef.current) {
+      clearTimeout(zoomDebounceRef.current);
+    }
 
-        const ctx = targetCanvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(canvas, 0, 0);
-        }
-        setViewportDims({ width: cssWidth, height: cssHeight });
+    const executeRender = () => {
+      PdfStudioEngine.renderPageToCanvas(proxyOrBuf, currentPage, zoomScale)
+        .then(async ({ canvas, cssWidth, cssHeight }) => {
+          if (!isMounted || !canvasRef.current) return;
+          const targetCanvas = canvasRef.current;
+          targetCanvas.width = canvas.width;
+          targetCanvas.height = canvas.height;
+          targetCanvas.style.width = `${Math.round(cssWidth)}px`;
+          targetCanvas.style.height = `${Math.round(cssHeight)}px`;
 
-        // Extract selectable text elements for the current page
-        try {
-          const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
-          if (isMounted) {
-            setDetectedTextItems(textItems);
+          const ctx = targetCanvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(canvas, 0, 0);
+          }
+          setViewportDims({ width: cssWidth, height: cssHeight });
+          lastRenderedPageRef.current = currentPage;
 
-            // Check page text items for signature timestamp (e.g., Aadhaar Date: 2020.09.11 23:26:28 IST)
-            for (const item of textItems) {
-              const dm = item.originalText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
-              if (dm) {
-                const yr = parseInt(dm[1], 10);
-                const mo = parseInt(dm[2], 10) - 1;
-                const da = parseInt(dm[3], 10);
-                const hr = parseInt(dm[4], 10);
-                const mi = parseInt(dm[5], 10);
-                const se = parseInt(dm[6], 10);
-                const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - 5.5 * 3600 * 1000;
-                const parsedDate = new Date(utcMs);
-                setSignatures((prev) =>
-                  prev.map((s) => ({
-                    ...s,
-                    signingTime: s.signingTime || parsedDate,
-                  }))
-                );
-                break;
+          // Extract selectable text elements for the current page
+          try {
+            const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
+            if (isMounted) {
+              setDetectedTextItems(textItems);
+
+              // Check page text items for signature timestamp (e.g., Aadhaar Date: 2020.09.11 23:26:28 IST)
+              for (const item of textItems) {
+                const dm = item.originalText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
+                if (dm) {
+                  const yr = parseInt(dm[1], 10);
+                  const mo = parseInt(dm[2], 10) - 1;
+                  const da = parseInt(dm[3], 10);
+                  const hr = parseInt(dm[4], 10);
+                  const mi = parseInt(dm[5], 10);
+                  const se = parseInt(dm[6], 10);
+                  const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - 5.5 * 3600 * 1000;
+                  const parsedDate = new Date(utcMs);
+                  setSignatures((prev) =>
+                    prev.map((s) => ({
+                      ...s,
+                      signingTime: s.signingTime || parsedDate,
+                    }))
+                  );
+                  break;
+                }
               }
             }
+          } catch (e) {
+            console.warn('Text item extraction warning:', e);
           }
-        } catch (e) {
-          console.warn('Text item extraction warning:', e);
-        }
-      })
-      .catch((err) => {
-        if (isMounted) {
-          setError('Failed to render page: ' + (err?.message || 'Render error'));
-        }
-      })
-      .finally(() => {
-        if (isMounted) setIsRendering(false);
-      });
+        })
+        .catch((err) => {
+          if (isMounted) {
+            setError('Failed to render page: ' + (err?.message || 'Render error'));
+          }
+        })
+        .finally(() => {
+          if (isMounted && isPageChange) {
+            setIsRendering(false);
+          }
+        });
+    };
+
+    if (isPageChange) {
+      executeRender();
+    } else {
+      // Smooth debounce on zoom changes so rapid pinch/wheel gestures don't choke the canvas
+      zoomDebounceRef.current = setTimeout(executeRender, 80);
+    }
 
     return () => {
       isMounted = false;
+      if (zoomDebounceRef.current) {
+        clearTimeout(zoomDebounceRef.current);
+      }
     };
   }, [currentPage, zoomScale, arrayBuffer, totalPages]);
 
@@ -1457,7 +1483,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })}
 
-            {/* Interactive Digital Signature Overlays on Canvas */}
+            {/* Interactive Digital Signature Hotspots on Canvas */}
             {signatures
               .filter((sig) => (sig.rect ? sig.rect.pageIndex === currentPage - 1 : currentPage === 1))
               .map((sig) => {
@@ -1476,8 +1502,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssW = rect.width * scale;
                 const cssH = rect.height * scale;
 
-                const isValid = sig.status === 'valid';
-
                 return (
                   <div
                     key={sig.id}
@@ -1491,37 +1515,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       width: `${cssW}px`,
                       height: `${cssH}px`,
                     }}
-                    className={`absolute rounded-lg cursor-pointer z-30 transition-all flex flex-col justify-between p-1.5 select-none ${
-                      isValid
-                        ? 'border-2 border-emerald-500/80 bg-emerald-500/10 hover:bg-emerald-500/25 hover:border-emerald-600 shadow-sm'
-                        : 'border-2 border-dashed border-amber-500/80 bg-amber-500/15 hover:bg-amber-500/25 hover:border-amber-600 animate-pulse'
-                    }`}
-                    title={`Digital Signature: ${sig.signerName} • Click to view certificate & stamp green tick`}
-                  >
-                    <div className="flex items-center justify-between pointer-events-none">
-                      <div className="flex items-center gap-1 overflow-hidden">
-                        {isValid ? (
-                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
-                        ) : (
-                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
-                        )}
-                        <span
-                          className={`text-[10px] font-bold truncate ${
-                            isValid ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'
-                          }`}
-                        >
-                          {isValid ? 'Signature Valid' : 'Signature Unverified'}
-                        </span>
-                      </div>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/90 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-semibold shadow-xs flex-shrink-0">
-                        Details
-                      </span>
-                    </div>
-
-                    <div className="text-[8.5px] text-zinc-600 dark:text-zinc-400 font-mono truncate pointer-events-none">
-                      {sig.signerName}
-                    </div>
-                  </div>
+                    className="absolute rounded cursor-pointer z-30 transition-all select-none hover:bg-blue-500/10 hover:ring-1 hover:ring-blue-400/50 group"
+                    title={`Digital Signature: ${sig.signerName} • Click to view certificate details & properties`}
+                  />
                 );
               })}
 

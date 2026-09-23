@@ -19,12 +19,13 @@ import { VideoEngine } from './services/videoEngine';
 import { DocumentEngine } from './services/documentEngine';
 import { saveFile } from './utils/fileSaver';
 import { ThemeManager } from './services/themeManager';
-import { Play } from 'lucide-react';
+import { Play, AlertCircle } from 'lucide-react';
 
 export default function App() {
   const [hasSelectedInitialMode, setHasSelectedInitialMode] = useState<boolean>(false);
   const [appMode, setAppMode] = useState<'compress' | 'convert' | 'pdfstudio'>('compress');
   const [externalEditorPdf, setExternalEditorPdf] = useState<File | null>(null);
+  const [showDesktopCloseModal, setShowDesktopCloseModal] = useState<boolean>(false);
 
   useEffect(() => {
     ThemeManager.init();
@@ -83,6 +84,9 @@ export default function App() {
   useEffect(() => {
     // 1. Electron Desktop listener (via preload bridge)
     const electronAPI = (window as any).electronAPI;
+    let unsubOpen: (() => void) | undefined;
+    let unsubClose: (() => void) | undefined;
+
     if (electronAPI) {
       if (typeof electronAPI.getInitialFile === 'function') {
         electronAPI.getInitialFile().then((fileData: any) => {
@@ -96,7 +100,7 @@ export default function App() {
       }
 
       if (typeof electronAPI.onOpenFile === 'function') {
-        const unsubscribe = electronAPI.onOpenFile((fileData: any) => {
+        unsubOpen = electronAPI.onOpenFile((fileData: any) => {
           if (fileData && fileData.data) {
             const ext = fileData.extension || fileData.name.split('.').pop() || '';
             const mimeType = ext === 'pdf' ? 'application/pdf' : fileData.mimeType || 'application/octet-stream';
@@ -104,10 +108,18 @@ export default function App() {
             handleIncomingFile(file);
           }
         });
-        return () => {
-          if (unsubscribe) unsubscribe();
-        };
       }
+
+      if (typeof electronAPI.onRequestAppClose === 'function') {
+        unsubClose = electronAPI.onRequestAppClose(() => {
+          setShowDesktopCloseModal(true);
+        });
+      }
+
+      return () => {
+        if (unsubOpen) unsubOpen();
+        if (unsubClose) unsubClose();
+      };
     }
 
     // 2. Android "Open With" intent listener
@@ -463,6 +475,45 @@ export default function App() {
           onSuccess={passwordModalTarget.onSuccess}
           onCancel={() => setPasswordModalTarget(null)}
         />
+      )}
+
+      {/* Desktop App Close Confirmation Modal */}
+      {showDesktopCloseModal && (
+        <div className="fixed inset-0 z-[9999999] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 select-none">
+          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-5">
+            <div className="flex items-start gap-3.5">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex-shrink-0">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                  Save Changes Before Closing?
+                </h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  Do you want to save any changes before exiting Omnisize? Any unsaved edits or in-progress operations will be lost if you exit without saving.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2.5 pt-2 sm:justify-end">
+              <button
+                onClick={() => setShowDesktopCloseModal(false)}
+                className="px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors"
+              >
+                Cancel / Keep Working
+              </button>
+              <button
+                onClick={() => {
+                  setShowDesktopCloseModal(false);
+                  (window as any).electronAPI?.confirmAppClose?.();
+                }}
+                className="px-4 py-2.5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-500 text-white transition-colors shadow-sm"
+              >
+                Exit Without Saving
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
