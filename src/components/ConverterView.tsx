@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Upload, RefreshCw, Download, Trash2, FileText, Film, Image as ImageIcon, Table, Music, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 import { ConversionEngine, ConversionTarget } from '../services/conversionEngine';
+import { saveFile } from '../utils/fileSaver';
 
 interface ConvertItem {
   id: string;
@@ -96,15 +97,9 @@ export const ConverterView: React.FC = () => {
     }
   };
 
-  const handleDownload = (item: ConvertItem) => {
+  const handleDownload = async (item: ConvertItem) => {
     if (!item.resultBlob || !item.resultFilename) return;
-    const url = URL.createObjectURL(item.resultBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = item.resultFilename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    await saveFile(item.resultBlob, item.resultFilename);
   };
 
   return (

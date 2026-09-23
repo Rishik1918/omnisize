@@ -1,9 +1,10 @@
 import React from 'react';
-import { Layers, Image as ImageIcon, Film, FileText, KeyRound, RefreshCw } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, FileText, KeyRound, RefreshCw, Edit3 } from 'lucide-react';
+import { ThemeToggle } from './ThemeToggle';
 
 interface NavbarProps {
-  appMode: 'compress' | 'convert';
-  setAppMode: (mode: 'compress' | 'convert') => void;
+  appMode: 'compress' | 'convert' | 'pdfstudio';
+  setAppMode: (mode: 'compress' | 'convert' | 'pdfstudio') => void;
   activeTab: 'all' | 'image' | 'video' | 'pdf' | 'unlock';
   setActiveTab: (tab: 'all' | 'image' | 'video' | 'pdf' | 'unlock') => void;
   fileCounts: { all: number; image: number; video: number; pdf: number; unlock: number };
@@ -17,65 +18,92 @@ export const Navbar: React.FC<NavbarProps> = ({
   fileCounts,
 }) => {
   return (
-    <header className="sticky top-0 z-30 w-full bg-zinc-950/90 backdrop-blur-xl border-b border-zinc-800/80">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6">
+    <header className="sticky top-0 z-30 w-full bg-white/85 dark:bg-zinc-950/90 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800/80 transition-colors">
+      <div className="max-w-5xl mx-auto px-3 sm:px-6">
         {/* Main Header Bar */}
-        <div className="flex items-center justify-between h-14 sm:h-16">
+        <div className="flex items-center justify-between h-14 sm:h-16 gap-2">
           {/* Logo & Brand Name */}
-          <div className="flex items-center gap-2.5">
-            <div className="h-8 w-8 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-white shadow-sm">
-              <Layers className="h-4 w-4 text-emerald-400" strokeWidth={1.75} />
+          <div
+            onClick={() => {
+              setAppMode('compress');
+              setActiveTab('all');
+            }}
+            className="flex items-center gap-2.5 cursor-pointer select-none"
+          >
+            <div className="h-8 w-8 rounded-xl bg-emerald-500/10 dark:bg-zinc-900 border border-emerald-500/20 dark:border-zinc-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-xs">
+              <Layers className="h-4 w-4" strokeWidth={2} />
             </div>
-            <span className="font-semibold text-base text-zinc-100 tracking-tight">Omnisize</span>
+            <span className="font-bold text-base text-zinc-900 dark:text-zinc-100 tracking-tight">
+              Omnisize
+            </span>
           </div>
 
           {/* Desktop Mode Segmented Switcher */}
-          <div className="hidden sm:flex items-center p-1 bg-zinc-900 rounded-full border border-zinc-800 text-xs">
+          <div className="hidden sm:flex items-center p-1 bg-zinc-100 dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-800 text-xs">
             <button
               onClick={() => {
                 setAppMode('compress');
                 if (activeTab === 'unlock') setActiveTab('all');
               }}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
                 appMode === 'compress' && activeTab !== 'unlock'
-                  ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700 font-semibold'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                  ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
               <Layers className="w-3.5 h-3.5" strokeWidth={1.5} />
               <span>Compress</span>
             </button>
+
             <button
               onClick={() => setAppMode('convert')}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
                 appMode === 'convert'
-                  ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700 font-semibold'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                  ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
               <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.5} />
-              <span>Convert</span>
+              <span>Convert & ZIP</span>
             </button>
+
+            <button
+              onClick={() => setAppMode('pdfstudio')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
+                appMode === 'pdfstudio'
+                  ? 'bg-white dark:bg-zinc-800 text-purple-600 dark:text-purple-400 shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+              }`}
+            >
+              <Edit3 className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>PDF Studio</span>
+            </button>
+
             <button
               onClick={() => {
                 setAppMode('compress');
                 setActiveTab('unlock');
               }}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-medium transition-all ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
                 appMode === 'compress' && activeTab === 'unlock'
-                  ? 'bg-zinc-800 text-white shadow-sm border border-zinc-700 font-semibold'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                  ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
               <KeyRound className="w-3.5 h-3.5" strokeWidth={1.5} />
               <span>Unlock PDF</span>
             </button>
           </div>
+
+          {/* Right Header Actions: Theme Switcher */}
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+          </div>
         </div>
 
         {/* Sub-tabs when in compress mode */}
         {appMode === 'compress' && activeTab !== 'unlock' && (
-          <div className="flex items-center space-x-1.5 pb-2.5 overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div className="flex items-center space-x-1.5 pb-2.5 overflow-x-auto no-scrollbar -mx-3 px-3 sm:mx-0 sm:px-0">
             {[
               { id: 'all', label: 'All Files', icon: Layers, count: fileCounts.all },
               { id: 'image', label: 'Images', icon: ImageIcon, count: fileCounts.image },
@@ -90,8 +118,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                   onClick={() => setActiveTab(tab.id as any)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap flex-shrink-0 transition-all ${
                     isActive
-                      ? 'bg-zinc-800 text-white border border-zinc-700 shadow-sm'
-                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 border border-transparent'
+                      ? 'bg-zinc-900 text-white dark:bg-zinc-800 dark:text-white shadow-xs border border-zinc-700'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-900 border border-transparent'
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5 flex-shrink-0" strokeWidth={1.5} />
@@ -99,7 +127,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {tab.count > 0 && (
                     <span
                       className={`text-[10px] px-1.5 py-0.2 rounded-full font-medium ${
-                        isActive ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 text-zinc-400'
+                        isActive
+                          ? 'bg-zinc-700 text-zinc-100'
+                          : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-400'
                       }`}
                     >
                       {tab.count}

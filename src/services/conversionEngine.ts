@@ -24,10 +24,11 @@ function sanitizeXml(str: string): string {
 export class ConversionEngine {
   static getSupportedTargets(fileName: string): ConversionTarget[] {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    let targets: ConversionTarget[] = [];
 
     // 1. PDF
     if (ext === 'pdf') {
-      return [
+      targets = [
         { format: 'docx', label: 'Word Document (.docx)', extension: 'docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', category: 'document' },
         { format: 'txt', label: 'Plain Text (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' },
         { format: 'html', label: 'HTML Webpage (.html)', extension: 'html', mimeType: 'text/html', category: 'document' },
@@ -35,31 +36,24 @@ export class ConversionEngine {
         { format: 'jpg', label: 'JPG Image (.jpg)', extension: 'jpg', mimeType: 'image/jpeg', category: 'image' },
         { format: 'webp', label: 'WebP Image (.webp)', extension: 'webp', mimeType: 'image/webp', category: 'image' },
       ];
-    }
-
-    // 2. Word (DOCX / DOC)
-    if (['docx', 'doc'].includes(ext)) {
-      return [
+    } else if (['docx', 'doc'].includes(ext)) {
+      // 2. Word (DOCX / DOC)
+      targets = [
         { format: 'pdf', label: 'PDF Document (.pdf)', extension: 'pdf', mimeType: 'application/pdf', category: 'document' },
         { format: 'txt', label: 'Plain Text (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' },
         { format: 'html', label: 'HTML Webpage (.html)', extension: 'html', mimeType: 'text/html', category: 'document' },
         { format: 'md', label: 'Markdown Document (.md)', extension: 'md', mimeType: 'text/markdown', category: 'document' },
       ];
-    }
-
-    // 3. PowerPoint (PPTX / PPT)
-    if (['pptx', 'ppt'].includes(ext)) {
-      return [
+    } else if (['pptx', 'ppt'].includes(ext)) {
+      // 3. PowerPoint (PPTX / PPT)
+      targets = [
         { format: 'pdf', label: 'PDF Presentation (.pdf)', extension: 'pdf', mimeType: 'application/pdf', category: 'document' },
         { format: 'docx', label: 'Word Slide Summary (.docx)', extension: 'docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', category: 'document' },
         { format: 'txt', label: 'Plain Text Outline (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' },
         { format: 'html', label: 'HTML Presentation (.html)', extension: 'html', mimeType: 'text/html', category: 'document' },
       ];
-    }
-
-    // 4. Spreadsheets (XLSX, XLS, CSV)
-    if (['xlsx', 'xls', 'csv', 'tsv', 'ods'].includes(ext)) {
-      const targets: ConversionTarget[] = [];
+    } else if (['xlsx', 'xls', 'csv', 'tsv', 'ods'].includes(ext)) {
+      // 4. Spreadsheets (XLSX, XLS, CSV)
       if (ext !== 'csv') {
         targets.push({ format: 'csv', label: 'CSV Comma Separated (.csv)', extension: 'csv', mimeType: 'text/csv', category: 'sheet' });
       }
@@ -72,22 +66,16 @@ export class ConversionEngine {
         { format: 'json', label: 'JSON Dataset (.json)', extension: 'json', mimeType: 'application/json', category: 'document' },
         { format: 'txt', label: 'Tabular Text (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' }
       );
-      return targets;
-    }
-
-    // 5. Plain Text, Markdown, HTML, JSON
-    if (['txt', 'md', 'markdown', 'json', 'html', 'htm', 'rtf'].includes(ext)) {
-      return [
+    } else if (['txt', 'md', 'markdown', 'json', 'html', 'htm', 'rtf'].includes(ext)) {
+      // 5. Plain Text, Markdown, HTML, JSON
+      targets = [
         { format: 'pdf', label: 'PDF Document (.pdf)', extension: 'pdf', mimeType: 'application/pdf', category: 'document' },
         { format: 'docx', label: 'Word Document (.docx)', extension: 'docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', category: 'document' },
         { format: 'html', label: 'HTML Webpage (.html)', extension: 'html', mimeType: 'text/html', category: 'document' },
         { format: 'txt', label: 'Plain Text (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' },
       ];
-    }
-
-    // 6. Images
-    if (['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'gif', 'svg', 'ico', 'tiff', 'tif'].includes(ext)) {
-      const targets: ConversionTarget[] = [];
+    } else if (['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'gif', 'svg', 'ico', 'tiff', 'tif'].includes(ext)) {
+      // 6. Images
       if (ext !== 'png') targets.push({ format: 'png', label: 'PNG Image (.png)', extension: 'png', mimeType: 'image/png', category: 'image' });
       if (ext !== 'jpg' && ext !== 'jpeg') targets.push({ format: 'jpg', label: 'JPG / JPEG (.jpg)', extension: 'jpg', mimeType: 'image/jpeg', category: 'image' });
       if (ext !== 'webp') targets.push({ format: 'webp', label: 'WebP Modern Image (.webp)', extension: 'webp', mimeType: 'image/webp', category: 'image' });
@@ -98,12 +86,9 @@ export class ConversionEngine {
         { format: 'svg', label: 'Vector SVG Container (.svg)', extension: 'svg', mimeType: 'image/svg+xml', category: 'image' },
         { format: 'gif', label: 'GIF Image (.gif)', extension: 'gif', mimeType: 'image/gif', category: 'image' }
       );
-      return targets;
-    }
-
-    // 7. Video
-    if (['mp4', 'webm', 'mov', 'mkv', 'avi', 'flv', 'wmv', '3gp'].includes(ext)) {
-      return [
+    } else if (['mp4', 'webm', 'mov', 'mkv', 'avi', 'flv', 'wmv', '3gp'].includes(ext)) {
+      // 7. Video
+      targets = [
         { format: 'mp4', label: 'Standard MP4 Video (.mp4)', extension: 'mp4', mimeType: 'video/mp4', category: 'video' },
         { format: 'webm', label: 'WebM Video (.webm)', extension: 'webm', mimeType: 'video/webm', category: 'video' },
         { format: 'hevc', label: 'HEVC / H.265 High Efficiency (.mp4)', extension: 'mp4', mimeType: 'video/mp4', category: 'video' },
@@ -116,11 +101,9 @@ export class ConversionEngine {
         { format: 'flac', label: 'Extract FLAC Lossless (.flac)', extension: 'flac', mimeType: 'audio/flac', category: 'audio' },
         { format: 'aiff', label: 'Extract Apple AIFF (.aiff)', extension: 'aiff', mimeType: 'audio/aiff', category: 'audio' },
       ];
-    }
-
-    // 8. Audio (All major formats)
-    if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'aiff', 'aif', 'wma', 'opus'].includes(ext)) {
-      return [
+    } else if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'aiff', 'aif', 'wma', 'opus'].includes(ext)) {
+      // 8. Audio (All major formats)
+      targets = [
         { format: 'mp3', label: 'MP3 Audio (.mp3)', extension: 'mp3', mimeType: 'audio/mp3', category: 'audio' },
         { format: 'wav', label: 'WAV Studio Master (.wav)', extension: 'wav', mimeType: 'audio/wav', category: 'audio' },
         { format: 'm4a', label: 'Apple M4A Audio (.m4a)', extension: 'm4a', mimeType: 'audio/mp4', category: 'audio' },
@@ -129,12 +112,25 @@ export class ConversionEngine {
         { format: 'flac', label: 'FLAC Lossless Audio (.flac)', extension: 'flac', mimeType: 'audio/flac', category: 'audio' },
         { format: 'aiff', label: 'Apple AIFF Studio (.aiff)', extension: 'aiff', mimeType: 'audio/aiff', category: 'audio' },
       ];
+    } else {
+      targets = [
+        { format: 'txt', label: 'Text File (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' },
+        { format: 'pdf', label: 'PDF Document (.pdf)', extension: 'pdf', mimeType: 'application/pdf', category: 'document' },
+      ];
     }
 
-    return [
-      { format: 'txt', label: 'Text File (.txt)', extension: 'txt', mimeType: 'text/plain', category: 'document' },
-      { format: 'pdf', label: 'PDF Document (.pdf)', extension: 'pdf', mimeType: 'application/pdf', category: 'document' },
-    ];
+    // Universal ZIP support: Every file format can be compressed into a high-efficiency ZIP archive
+    if (!targets.some((t) => t.format === 'zip')) {
+      targets.push({
+        format: 'zip',
+        label: 'Compressed ZIP Archive (.zip)',
+        extension: 'zip',
+        mimeType: 'application/zip',
+        category: 'document',
+      });
+    }
+
+    return targets;
   }
 
   static async convertFile(
@@ -146,6 +142,12 @@ export class ConversionEngine {
     const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
 
     onProgress?.(10);
+
+    // Universal ZIP conversion
+    if (targetFormat === 'zip') {
+      const blob = await this.fileToZip(file, onProgress);
+      return { blob, filename: `${baseName}.zip` };
+    }
 
     // 1. PDF conversions
     if (srcExt === 'pdf') {
@@ -1321,4 +1323,33 @@ export class ConversionEngine {
 
     return new Blob([outBuffer], { type: 'audio/wav' });
   }
+
+  /**
+   * High-Efficiency In-Memory ZIP Archiving
+   * Supports every file type handled by Omnisize (video, audio, PDF, office docs, images, etc.)
+   */
+  private static async fileToZip(file: File, onProgress?: (p: number) => void): Promise<Blob> {
+    onProgress?.(20);
+    const zip = new JSZip();
+    const data = await file.arrayBuffer();
+    zip.file(file.name, data);
+    onProgress?.(50);
+
+    const zipBlob = await zip.generateAsync(
+      {
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 9 },
+      },
+      (metadata) => {
+        if (metadata.percent) {
+          onProgress?.(50 + Math.round(metadata.percent * 0.48));
+        }
+      }
+    );
+
+    onProgress?.(100);
+    return zipBlob;
+  }
 }
+

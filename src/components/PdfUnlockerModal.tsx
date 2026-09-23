@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Unlock, CheckCircle2, Download, AlertCircle, Shield, CreditCard, FileKey, Sparkles } from 'lucide-react';
 import { ProcessedItem } from '../types';
 import { PdfUnlocker } from '../services/pdfUnlocker';
+import { saveFile } from '../utils/fileSaver';
 
 interface PdfUnlockerModalProps {
   item: ProcessedItem;
@@ -150,15 +151,9 @@ export const PdfUnlockerModal: React.FC<PdfUnlockerModalProps> = ({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!unlockedBlob) return;
-    const url = URL.createObjectURL(unlockedBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'unlocked_' + item.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    await saveFile(unlockedBlob, 'unlocked_' + item.name);
   };
 
   return (

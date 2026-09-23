@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { DropZone } from './components/DropZone';
 import { FileList } from './components/FileList';
@@ -8,17 +8,24 @@ import { VideoOptionsModal } from './components/VideoOptionsModal';
 import { DocumentOptionsModal } from './components/DocumentOptionsModal';
 import { PdfUnlockerModal } from './components/PdfUnlockerModal';
 import { ConverterView } from './components/ConverterView';
+import { PdfStudioView } from './components/PdfStudio/PdfStudioView';
 import { InitialChoiceScreen } from './components/InitialChoiceScreen';
 import { BottomNav } from './components/BottomNav';
 import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOptions, DocumentProcessingOptions } from './types';
 import { ImageEngine } from './services/imageEngine';
 import { VideoEngine } from './services/videoEngine';
 import { DocumentEngine } from './services/documentEngine';
+import { saveFile } from './utils/fileSaver';
+import { ThemeManager } from './services/themeManager';
 import { Play } from 'lucide-react';
 
 export default function App() {
   const [hasSelectedInitialMode, setHasSelectedInitialMode] = useState<boolean>(false);
-  const [appMode, setAppMode] = useState<'compress' | 'convert'>('compress');
+  const [appMode, setAppMode] = useState<'compress' | 'convert' | 'pdfstudio'>('compress');
+
+  useEffect(() => {
+    ThemeManager.init();
+  }, []);
   const [activeTab, setActiveTab] = useState<'all' | 'image' | 'video' | 'pdf' | 'unlock'>('all');
   const [items, setItems] = useState<ProcessedItem[]>([]);
   const [selectedItemForOptions, setSelectedItemForOptions] = useState<ProcessedItem | null>(null);
@@ -138,14 +145,9 @@ export default function App() {
     }
   };
 
-  const handleDownload = (item: ProcessedItem) => {
-    if (!item.resultUrl) return;
-    const a = document.createElement('a');
-    a.href = item.resultUrl;
-    a.download = 'compressed_' + item.name;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  const handleDownload = async (item: ProcessedItem) => {
+    if (!item.resultBlob) return;
+    await saveFile(item.resultBlob, 'compressed_' + item.name);
   };
 
   const filteredItems = items.filter((item) => {
@@ -164,7 +166,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100 antialiased selection:bg-emerald-500/20 selection:text-emerald-300">
+    <div className="min-h-screen flex flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 antialiased selection:bg-emerald-500/20 selection:text-emerald-700 dark:selection:text-emerald-300 transition-colors duration-150">
       <Navbar
         appMode={appMode}
         setAppMode={(m) => {
@@ -190,15 +192,20 @@ export default function App() {
           <div className="space-y-4">
             <ConverterView />
           </div>
+        ) : appMode === 'pdfstudio' ? (
+          /* PDF Studio Suite Mode */
+          <div className="space-y-4">
+            <PdfStudioView />
+          </div>
         ) : (
           /* Compressor Mode */
           <div className="space-y-4 sm:space-y-5">
             <DropZone onFilesAdded={handleFilesAdded} />
 
             {items.length > 0 && (
-              <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800">
-                <div className="text-xs text-zinc-300">
-                  <span className="font-semibold text-zinc-100">{items.length}</span> file(s) queued
+              <div className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xs">
+                <div className="text-xs text-zinc-600 dark:text-zinc-300">
+                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">{items.length}</span> file(s) queued
                 </div>
                 <button
                   onClick={handleProcessAll}
