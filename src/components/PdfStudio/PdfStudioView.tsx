@@ -209,6 +209,10 @@ export const PdfStudioView: React.FC = () => {
           isOpen={true}
           onClose={() => setActiveModal(null)}
           initialFile={droppedFile}
+          onOpenInEditor={(ocrFile) => {
+            setDroppedFile(ocrFile);
+            setActiveModal('edit');
+          }}
         />
       )}
     </div>

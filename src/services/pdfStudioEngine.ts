@@ -1,4 +1,12 @@
-import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib';
+import {
+  PDFDocument,
+  rgb,
+  StandardFonts,
+  degrees,
+  PDFName,
+  PDFString,
+  PDFFont
+} from 'pdf-lib';
 import { getDocumentProxy } from 'unpdf';
 
 export interface TextOverlay {
@@ -9,6 +17,11 @@ export interface TextOverlay {
   y: number; // PDF points (from bottom-left)
   size: number;
   color: string; // hex or rgb
+  fontFamily?: 'Helvetica' | 'TimesRoman' | 'Courier' | string;
+  isBold?: boolean;
+  isItalic?: boolean;
+  isUnderline?: boolean;
+  alignment?: 'left' | 'center' | 'right';
 }
 
 export interface ImageOverlay {
@@ -32,15 +45,37 @@ export interface ExistingTextItem {
   width: number; // PDF points
   height: number; // PDF points
   fontSize: number;
+  fontFamily?: 'Helvetica' | 'TimesRoman' | 'Courier' | string;
+  isBold?: boolean;
+  isItalic?: boolean;
+  color?: string;
   isModified?: boolean;
+}
+
+export interface HyperlinkOverlay {
+  id: string;
+  pageIndex: number;
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface InsertBlankPageSpec {
+  insertAfterIndex: number; // -1 for beginning, pageIndex for after that page
+  width?: number;
+  height?: number;
 }
 
 export interface PdfEditPayload {
   rotations?: Record<number, number>; // pageIndex -> degrees (90, 180, 270)
   deletedPages?: number[]; // list of 0-indexed page numbers to remove
+  insertedBlankPages?: InsertBlankPageSpec[];
   textOverlays?: TextOverlay[];
   imageOverlays?: ImageOverlay[];
   textReplacements?: ExistingTextItem[];
+  hyperlinks?: HyperlinkOverlay[];
 }
 
 export class PdfStudioEngine {
@@ -54,7 +89,7 @@ export class PdfStudioEngine {
     const totalFiles = files.length;
     for (let i = 0; i < totalFiles; i++) {
       const file = files[i];
-      const buffer = await file.arrayBuffer();
+      const buffer = (await file.arrayBuffer()).slice(0);
       const donorDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
       const donorPages = await mergedDoc.copyPages(donorDoc, donorDoc.getPageIndices());
 
@@ -98,43 +133,80 @@ export class PdfStudioEngine {
       splitDoc.addPage(page);
     }
 
-    onProgress?.(85);
+    onProgress?.(90);
     const pdfBytes = await splitDoc.save();
     onProgress?.(100);
-    const array = new Uint8Array(pdfBytes);
     return {
-      blob: new Blob([array], { type: 'application/pdf' }),
+      blob: new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' }),
       pageCount: selectedIndices.length,
     };
   }
 
   /**
-   * Apply rich edits to PDF: text overlays, inserted photos/images, page rotations, and page removals
+   * Apply rich edits: font/weight matched text replacement, inserted text,
+   * photos, blank page insertions, page deletions, rotations, and hyperlinks
    */
   static async applyEdits(
     file: File | Blob,
     payload: PdfEditPayload,
     onProgress?: (pct: number) => void
   ): Promise<Blob> {
-    onProgress?.(15);
+    onProgress?.(10);
     const buffer = (await file.arrayBuffer()).slice(0);
     const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-    const helveticaFont = await doc.embedFont(StandardFonts.Helvetica);
 
-    onProgress?.(30);
+    // Pre-embed standard font combinations for precise matching
+    const fontHelvetica = await doc.embedFont(StandardFonts.Helvetica);
+    const fontHelveticaBold = await doc.embedFont(StandardFonts.HelveticaBold);
+    const fontHelveticaItalic = await doc.embedFont(StandardFonts.HelveticaOblique);
+    const fontHelveticaBoldItalic = await doc.embedFont(StandardFonts.HelveticaBoldOblique);
 
-    // 0. Apply Existing Text Replacements (erases original bounding box and writes replacement text)
+    const fontTimes = await doc.embedFont(StandardFonts.TimesRoman);
+    const fontTimesBold = await doc.embedFont(StandardFonts.TimesRomanBold);
+    const fontTimesItalic = await doc.embedFont(StandardFonts.TimesRomanItalic);
+    const fontTimesBoldItalic = await doc.embedFont(StandardFonts.TimesRomanBoldItalic);
+
+    const fontCourier = await doc.embedFont(StandardFonts.Courier);
+    const fontCourierBold = await doc.embedFont(StandardFonts.CourierBold);
+    const fontCourierItalic = await doc.embedFont(StandardFonts.CourierOblique);
+    const fontCourierBoldItalic = await doc.embedFont(StandardFonts.CourierBoldOblique);
+
+    const selectFont = (family?: string, isBold?: boolean, isItalic?: boolean): PDFFont => {
+      const fam = (family || 'Helvetica').toLowerCase();
+      if (fam.includes('times') || fam.includes('roman') || fam.includes('serif')) {
+        if (isBold && isItalic) return fontTimesBoldItalic;
+        if (isBold) return fontTimesBold;
+        if (isItalic) return fontTimesItalic;
+        return fontTimes;
+      }
+      if (fam.includes('courier') || fam.includes('mono')) {
+        if (isBold && isItalic) return fontCourierBoldItalic;
+        if (isBold) return fontCourierBold;
+        if (isItalic) return fontCourierItalic;
+        return fontCourier;
+      }
+      // Default to Helvetica/Arial
+      if (isBold && isItalic) return fontHelveticaBoldItalic;
+      if (isBold) return fontHelveticaBold;
+      if (isItalic) return fontHelveticaItalic;
+      return fontHelvetica;
+    };
+
+    onProgress?.(25);
+
+    // 0. Apply Existing Text Replacements (erases original bounding box with white cover, redraws matching font & weight)
     if (payload.textReplacements && payload.textReplacements.length > 0) {
       for (const rep of payload.textReplacements) {
         if (!rep.isModified && rep.currentText === rep.originalText) continue;
         if (rep.pageIndex >= 0 && rep.pageIndex < doc.getPageCount()) {
           const page = doc.getPage(rep.pageIndex);
+          const chosenFont = selectFont(rep.fontFamily, rep.isBold, rep.isItalic);
 
-          // Erase old text bounding box with clean white rectangle
-          const padY = Math.max(2, rep.fontSize * 0.25);
+          // Erase old text bounding box with white background rectangle
+          const padY = Math.max(2, rep.fontSize * 0.22);
           const eraseY = Math.max(0, rep.y - padY);
-          const eraseHeight = rep.height + padY * 1.6;
-          const eraseWidth = Math.max(rep.width + 4, rep.currentText.length * rep.fontSize * 0.65);
+          const eraseHeight = rep.height + padY * 1.5;
+          const eraseWidth = Math.max(rep.width + 4, rep.currentText.length * rep.fontSize * 0.7);
 
           page.drawRectangle({
             x: Math.max(0, rep.x - 2),
@@ -144,21 +216,36 @@ export class PdfStudioEngine {
             color: rgb(1, 1, 1),
           });
 
-          // Draw replacement text
+          // Draw replacement text matching original coordinates, font, size & weight
           if (rep.currentText.trim().length > 0) {
+            const textColor = rep.color ? this.parseHexColor(rep.color) : rgb(0.05, 0.05, 0.05);
             page.drawText(rep.currentText, {
               x: rep.x,
               y: rep.y,
               size: rep.fontSize || 12,
-              font: helveticaFont,
-              color: rgb(0, 0, 0),
+              font: chosenFont,
+              color: textColor,
             });
           }
         }
       }
     }
 
-    // 1. Apply Rotations
+    // 1. Insert Blank Pages
+    if (payload.insertedBlankPages && payload.insertedBlankPages.length > 0) {
+      // Sort by insertAfterIndex descending to preserve sequential insertions
+      const sortedInserts = [...payload.insertedBlankPages].sort(
+        (a, b) => b.insertAfterIndex - a.insertAfterIndex
+      );
+      for (const ins of sortedInserts) {
+        const w = ins.width || 595.28;
+        const h = ins.height || 841.89;
+        const targetIndex = Math.min(doc.getPageCount(), Math.max(0, ins.insertAfterIndex + 1));
+        doc.insertPage(targetIndex, [w, h]);
+      }
+    }
+
+    // 2. Apply Rotations
     if (payload.rotations) {
       for (const [pageIdxStr, deg] of Object.entries(payload.rotations)) {
         const pageIdx = parseInt(pageIdxStr, 10);
@@ -170,7 +257,7 @@ export class PdfStudioEngine {
       }
     }
 
-    // 2. Insert Images / Photos
+    // 3. Insert Images / Photos
     if (payload.imageOverlays && payload.imageOverlays.length > 0) {
       for (const imgOverlay of payload.imageOverlays) {
         if (imgOverlay.pageIndex >= 0 && imgOverlay.pageIndex < doc.getPageCount()) {
@@ -189,25 +276,72 @@ export class PdfStudioEngine {
       }
     }
 
-    // 3. Insert Text Overlays
+    // 4. Insert Text Overlays with rich font family, weight, style & alignment
     if (payload.textOverlays && payload.textOverlays.length > 0) {
       for (const textItem of payload.textOverlays) {
         if (textItem.pageIndex >= 0 && textItem.pageIndex < doc.getPageCount()) {
           const page = doc.getPage(textItem.pageIndex);
+          const chosenFont = selectFont(textItem.fontFamily, textItem.isBold, textItem.isItalic);
           const color = this.parseHexColor(textItem.color);
+          const size = textItem.size || 12;
+
+          let posX = textItem.x;
+          if (textItem.alignment === 'center' || textItem.alignment === 'right') {
+            const measuredWidth = chosenFont.widthOfTextAtSize(textItem.text, size);
+            if (textItem.alignment === 'center') posX -= measuredWidth / 2;
+            else if (textItem.alignment === 'right') posX -= measuredWidth;
+          }
 
           page.drawText(textItem.text, {
-            x: textItem.x,
+            x: posX,
             y: textItem.y,
-            size: textItem.size || 12,
-            font: helveticaFont,
+            size,
+            font: chosenFont,
             color,
           });
+
+          // Underline if enabled
+          if (textItem.isUnderline) {
+            const textWidth = chosenFont.widthOfTextAtSize(textItem.text, size);
+            page.drawLine({
+              start: { x: posX, y: textItem.y - 1.5 },
+              end: { x: posX + textWidth, y: textItem.y - 1.5 },
+              thickness: Math.max(0.75, size * 0.06),
+              color,
+            });
+          }
         }
       }
     }
 
-    // 4. Delete Pages (must be deleted from highest index to lowest)
+    // 5. Add Clickable Hyperlink Annotations
+    if (payload.hyperlinks && payload.hyperlinks.length > 0) {
+      for (const link of payload.hyperlinks) {
+        if (link.pageIndex >= 0 && link.pageIndex < doc.getPageCount()) {
+          const page = doc.getPage(link.pageIndex);
+          const linkAnnot = doc.context.obj({
+            Type: 'Annot',
+            Subtype: 'Link',
+            Rect: [link.x, link.y, link.x + link.width, link.y + link.height],
+            Border: [0, 0, 0],
+            A: {
+              Type: 'Action',
+              S: 'URI',
+              URI: PDFString.of(link.url.startsWith('http') ? link.url : `https://${link.url}`),
+            },
+          });
+          const linkAnnotRef = doc.context.register(linkAnnot);
+          let annots = page.node.Annots();
+          if (!annots) {
+            annots = doc.context.obj([]);
+            page.node.set(PDFName.of('Annots'), annots);
+          }
+          annots.push(linkAnnotRef);
+        }
+      }
+    }
+
+    // 6. Delete Pages (must be deleted from highest index to lowest)
     if (payload.deletedPages && payload.deletedPages.length > 0) {
       const sortedToDelete = [...payload.deletedPages]
         .filter((idx) => idx >= 0 && idx < doc.getPageCount())
@@ -228,34 +362,122 @@ export class PdfStudioEngine {
   }
 
   /**
-   * Render PDF page to HTML5 Canvas for real-time reader and visual editor preview
+   * Render PDF page to HTML5 Canvas with High-DPI supersampling (eliminates blurriness)
    */
   static async renderPageToCanvas(
     pdfBufferOrProxy: ArrayBuffer | any,
     pageNumber: number, // 1-indexed
-    scale: number = 1.5
-  ): Promise<{ canvas: HTMLCanvasElement; width: number; height: number }> {
+    scale: number = 1.25,
+    dpr: number = typeof window !== 'undefined' ? Math.max(window.devicePixelRatio || 1, 2) : 2
+  ): Promise<{ canvas: HTMLCanvasElement; width: number; height: number; cssWidth: number; cssHeight: number }> {
     const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
       ? pdfBufferOrProxy
       : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
 
     const page = await proxy.getPage(pageNumber);
+    // Base viewport at the requested display zoom scale
     const viewport = page.getViewport({ scale });
+    // Supersampled viewport at device pixel ratio to render vector-sharp text
+    const supersampledViewport = page.getViewport({ scale: scale * dpr });
 
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(viewport.width);
-    canvas.height = Math.round(viewport.height);
-    const ctx = canvas.getContext('2d')!;
+    canvas.width = Math.round(supersampledViewport.width);
+    canvas.height = Math.round(supersampledViewport.height);
+    canvas.style.width = `${Math.round(viewport.width)}px`;
+    canvas.style.height = `${Math.round(viewport.height)}px`;
 
+    const ctx = canvas.getContext('2d')!;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     await (page.render as any)({
       canvasContext: ctx,
-      viewport,
+      viewport: supersampledViewport,
     }).promise;
 
-    return { canvas, width: viewport.width, height: viewport.height };
+    return {
+      canvas,
+      width: supersampledViewport.width,
+      height: supersampledViewport.height,
+      cssWidth: viewport.width,
+      cssHeight: viewport.height,
+    };
+  }
+
+  /**
+   * Extract selectable and editable text items from a PDF page with detected font & weight
+   */
+  static async extractPageTextItems(
+    pdfBufferOrProxy: ArrayBuffer | any,
+    pageNumber: number // 1-indexed
+  ): Promise<ExistingTextItem[]> {
+    try {
+      const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
+        ? pdfBufferOrProxy
+        : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
+      const page = await proxy.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageIndex = pageNumber - 1;
+
+      const items: ExistingTextItem[] = [];
+
+      for (let i = 0; i < textContent.items.length; i++) {
+        const item: any = textContent.items[i];
+        if (!item.str || !item.str.trim()) continue;
+
+        const fontSize = Math.round(Math.hypot(item.transform[0], item.transform[1])) || 12;
+        const x = item.transform[4];
+        const y = item.transform[5];
+        const width = item.width || Math.max(10, item.str.length * fontSize * 0.55);
+        const height = item.height || fontSize;
+
+        // Font style and weight detection
+        const fontName = (item.fontName || '').toLowerCase();
+        const fontStyle = textContent.styles ? textContent.styles[item.fontName] : null;
+        const styleFamily = (fontStyle?.fontFamily || '').toLowerCase();
+
+        const isBold = fontName.includes('bold') ||
+          fontName.includes('black') ||
+          fontName.includes('heavy') ||
+          fontName.includes('semibold') ||
+          fontName.includes('medium') ||
+          (fontStyle?.fontWeight && (fontStyle.fontWeight === 'bold' || fontStyle.fontWeight >= 600));
+
+        const isItalic = fontName.includes('italic') ||
+          fontName.includes('oblique') ||
+          fontStyle?.fontStyle === 'italic';
+
+        let fontFamily: 'Helvetica' | 'TimesRoman' | 'Courier' = 'Helvetica';
+        if (fontName.includes('times') || fontName.includes('roman') || styleFamily.includes('serif')) {
+          fontFamily = 'TimesRoman';
+        } else if (fontName.includes('courier') || fontName.includes('mono') || styleFamily.includes('monospace')) {
+          fontFamily = 'Courier';
+        } else {
+          fontFamily = 'Helvetica';
+        }
+
+        items.push({
+          id: `txt_${pageIndex}_${i}_${Math.round(x)}_${Math.round(y)}`,
+          pageIndex,
+          originalText: item.str,
+          currentText: item.str,
+          x,
+          y,
+          width,
+          height,
+          fontSize,
+          fontFamily,
+          isBold,
+          isItalic,
+          isModified: false,
+        });
+      }
+
+      return items;
+    } catch (err) {
+      console.error('Failed to extract page text items:', err);
+      return [];
+    }
   }
 
   /**
@@ -296,53 +518,5 @@ export class PdfStudioEngine {
       return rgb(r, g, b);
     }
     return rgb(0, 0, 0);
-  }
-
-  /**
-   * Extract selectable and editable text items from a PDF page with exact bounds
-   */
-  static async extractPageTextItems(
-    pdfBufferOrProxy: ArrayBuffer | any,
-    pageNumber: number // 1-indexed
-  ): Promise<ExistingTextItem[]> {
-    try {
-      const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
-        ? pdfBufferOrProxy
-        : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
-      const page = await proxy.getPage(pageNumber);
-      const textContent = await page.getTextContent();
-      const pageIndex = pageNumber - 1;
-
-      const items: ExistingTextItem[] = [];
-
-      for (let i = 0; i < textContent.items.length; i++) {
-        const item: any = textContent.items[i];
-        if (!item.str || !item.str.trim()) continue;
-
-        const fontSize = Math.round(Math.hypot(item.transform[0], item.transform[1])) || 12;
-        const x = item.transform[4];
-        const y = item.transform[5];
-        const width = item.width || Math.max(10, item.str.length * fontSize * 0.55);
-        const height = item.height || fontSize;
-
-        items.push({
-          id: `txt_${pageIndex}_${i}_${Math.round(x)}_${Math.round(y)}`,
-          pageIndex,
-          originalText: item.str,
-          currentText: item.str,
-          x,
-          y,
-          width,
-          height,
-          fontSize,
-          isModified: false,
-        });
-      }
-
-      return items;
-    } catch (err) {
-      console.error('Failed to extract page text items:', err);
-      return [];
-    }
   }
 }
