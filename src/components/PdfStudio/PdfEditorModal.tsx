@@ -152,6 +152,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Sidebar & Layout
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [viewportDims, setViewportDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [basePageDims, setBasePageDims] = useState<{ width: number; height: number }>({ width: 595.28, height: 841.89 });
   const [detectedTextItems, setDetectedTextItems] = useState<ExistingTextItem[]>([]);
   const [activeEditingId, setActiveEditingId] = useState<string | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
@@ -464,6 +465,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           if (ctx) {
             ctx.drawImage(canvas, 0, 0);
           }
+          const baseW = cssWidth / zoomScale;
+          const baseH = cssHeight / zoomScale;
+          setBasePageDims({ width: baseW, height: baseH });
           setViewportDims({ width: cssWidth, height: cssHeight });
           lastRenderedPageRef.current = currentPage;
 
@@ -757,41 +761,43 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  // Two-Finger Pinch-to-Zoom Gesture Support (Android & Touch Devices)
+  // Two-Finger Pinch-to-Zoom & Pan Gesture Support (Android & Touch Devices)
   const touchStartDistRef = useRef<number | null>(null);
   const touchStartScaleRef = useRef<number>(1);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 2) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      touchStartDistRef.current = dist;
-      touchStartScaleRef.current = zoomScale;
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (e.touches.length === 2 && touchStartDistRef.current !== null && touchStartDistRef.current > 0) {
-      const dist = Math.hypot(
-        e.touches[0].clientX - e.touches[1].clientX,
-        e.touches[0].clientY - e.touches[1].clientY
-      );
-      const ratio = dist / touchStartDistRef.current;
-      const targetScale = Number((touchStartScaleRef.current * ratio).toFixed(2));
-      setZoomScale(Math.min(4.0, Math.max(0.25, targetScale)));
-    }
-  };
-
-  const handleTouchEnd = () => {
-    touchStartDistRef.current = null;
-  };
-
-  // Two-Finger Desktop Trackpad / Mousewheel Pinch-to-Zoom (Non-passive listener allows smooth zoom)
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        touchStartDistRef.current = dist;
+        touchStartScaleRef.current = zoomScale;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && touchStartDistRef.current !== null && touchStartDistRef.current > 0) {
+        e.preventDefault();
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const ratio = dist / touchStartDistRef.current;
+        const targetScale = Number((touchStartScaleRef.current * ratio).toFixed(2));
+        setZoomScale(Math.min(4.0, Math.max(0.25, targetScale)));
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        touchStartDistRef.current = null;
+      }
+    };
 
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) {
@@ -801,11 +807,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
     };
 
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+    el.addEventListener('touchcancel', onTouchEnd, { passive: true });
     el.addEventListener('wheel', onWheel, { passive: false });
+
     return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+      el.removeEventListener('touchcancel', onTouchEnd);
       el.removeEventListener('wheel', onWheel);
     };
-  }, []);
+  }, [zoomScale]);
 
   const modalContent = (
     <div
@@ -1248,31 +1263,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         {/* Central Viewport Area */}
         <main
           ref={containerRef}
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-          onTouchEnd={handleTouchEnd}
-          onTouchCancel={handleTouchEnd}
-          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 p-3 sm:p-8 flex flex-col items-center relative touch-pan-x touch-pan-y"
+          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 relative touch-pan-x touch-pan-y"
+          style={{ WebkitOverflowScrolling: 'touch' }}
         >
-          {error && (
-            <div className="mb-4 max-w-xl w-full flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
+          <div className="min-w-full min-h-full w-max h-max p-4 sm:p-8 flex flex-col items-center justify-center m-auto">
+            {error && (
+              <div className="mb-4 max-w-xl w-full flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
-          {/* Active Canvas Page Frame with High-DPI Resolution */}
-          <div
-            onClick={handleCanvasClick}
-            className="relative bg-white shadow-2xl rounded-xs border border-zinc-300/70 dark:border-zinc-800 transition-all select-none"
-            style={{
-              width: viewportDims.width || 400,
-              height: viewportDims.height || 600,
-              cursor: activeTool === 'add-text' ? 'crosshair' : activeTool === 'add-link' ? 'pointer' : 'default',
-            }}
-          >
-            {/* High-DPI Supersampled Canvas (Razor-Sharp) */}
-            <canvas ref={canvasRef} className="block w-full h-full pointer-events-none" />
+            {/* Active Canvas Page Frame with High-DPI Resolution */}
+            <div
+              onClick={handleCanvasClick}
+              className="relative bg-white shadow-2xl rounded-xs border border-zinc-300/70 dark:border-zinc-800 select-none flex-shrink-0"
+              style={{
+                width: Math.max(100, Math.round((basePageDims.width || 595) * zoomScale)),
+                height: Math.max(100, Math.round((basePageDims.height || 842) * zoomScale)),
+                cursor: activeTool === 'add-text' ? 'crosshair' : activeTool === 'add-link' ? 'pointer' : 'default',
+              }}
+            >
+              {/* High-DPI Supersampled Canvas (Razor-Sharp) */}
+              <canvas ref={canvasRef} className="block w-full h-full pointer-events-none" />
 
             {/* In-Place Interactive Existing Text Bounding Boxes (Edit Text Mode) */}
             {activeTool === 'edit-text' &&
@@ -1531,8 +1544,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
             )}
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
+    </div>
 
       {/* FOOTER: Clean Responsive Zoom Bar (NO Squished Text, fully visible above Android navigation bar) */}
       <footer

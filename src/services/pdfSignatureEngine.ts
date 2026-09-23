@@ -1,5 +1,5 @@
 import forge from 'node-forge';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts, PDFDict, PDFName } from 'pdf-lib';
 
 export interface CertificateInfo {
   subject: {
@@ -240,7 +240,19 @@ export class PdfSignatureEngine {
         const hr = parseInt(rawDate.substring(8, 10), 10);
         const mi = parseInt(rawDate.substring(10, 12), 10);
         const se = parseInt(rawDate.substring(12, 14), 10);
-        signingTime = new Date(Date.UTC(yr, mo, da, hr, mi, se));
+
+        const tzMatch = dateMatch[0].match(/([+\-])(\d{2})'?(\d{2})'?/);
+        let offsetMs = 0;
+        if (tzMatch) {
+          const sign = tzMatch[1] === '+' ? 1 : -1;
+          const hrOff = parseInt(tzMatch[2], 10);
+          const miOff = parseInt(tzMatch[3] || '0', 10);
+          offsetMs = sign * (hrOff * 3600 + miOff * 60) * 1000;
+        } else if (signerName.toLowerCase().includes('india') || rawText.includes('IST')) {
+          offsetMs = 5.5 * 3600 * 1000;
+        }
+        const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - offsetMs;
+        signingTime = new Date(utcMs);
       } else {
         const textDateMatch = rawText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
         if (textDateMatch) {
@@ -480,71 +492,99 @@ export class PdfSignatureEngine {
     const page = doc.getPage(pageIndex);
     const { width: pageWidth, height: pageHeight } = page.getSize();
 
-    // Determine stamp coordinates: use original signature rect or default to bottom-right
-    let x = sig.rect?.x ?? 22;
-    let y = sig.rect?.y ?? 334;
-    let width = sig.rect?.width ?? 158;
-    let height = sig.rect?.height ?? 42;
+    // Clean up any interactive signature widget annotations to prevent PDF.js from rendering the unverified appearance overlay
+    try {
+      const annots = page.node.Annots();
+      if (annots) {
+        const remainingAnnots = [];
+        for (let i = 0; i < annots.size(); i++) {
+          const annot = annots.lookup(i);
+          if (annot instanceof PDFDict) {
+            const subtype = annot.lookup(PDFName.of('Subtype'));
+            const ft = annot.lookup(PDFName.of('FT'));
+            if (subtype?.toString() === '/Widget' || ft?.toString() === '/Sig') {
+              continue; // Drop signature widget annotation overlay
+            }
+          }
+          remainingAnnots.push(annots.get(i));
+        }
+        page.node.set(PDFName.of('Annots'), doc.context.obj(remainingAnnots));
+      }
+    } catch (e) {
+      console.warn('Annotation cleanup warning:', e);
+    }
+
+    // Determine stamp coordinates:
+    let x = sig.rect?.x ?? 16;
+    let y = sig.rect?.y ?? 312;
+    let width = sig.rect?.width ?? 171;
+    let height = sig.rect?.height ?? 74;
 
     const isAadhaarLayout =
-      (x >= 40 && x <= 120 && y >= 300 && y <= 380) ||
+      (x >= 0 && x <= 140 && y >= 290 && y <= 400) ||
       (sig.signerName && sig.signerName.toLowerCase().includes('unique identification authority'));
 
     if (isAadhaarLayout) {
-      // In Aadhaar documents, the entire signature block (yellow question mark + text) starts at x=22
-      // and ends at x=180, strictly leaving the QR code (at x=188) untouched.
-      x = 22;
-      y = 334;
-      width = 158;
-      height = 42;
+      // In Aadhaar documents, the entire signature area (yellow question mark + text lines)
+      // spans from x=16 to x=187, and y=312 to y=386, strictly preserving the QR code at x=188
+      x = 16;
+      y = 312;
+      width = 171;
+      height = 74;
+    } else {
+      // For general signatures, ensure the erase box has generous padding so no old unverified ? or text leaks
+      x = Math.max(0, x - 10);
+      y = Math.max(0, y - 10);
+      width = width + 20;
+      height = height + 20;
     }
 
     // Constrain within page bounds
-    x = Math.max(10, Math.min(x, pageWidth - width - 10));
-    y = Math.max(10, Math.min(y, pageHeight - height - 10));
+    x = Math.max(5, Math.min(x, pageWidth - width - 5));
+    y = Math.max(5, Math.min(y, pageHeight - height - 5));
 
-    // 1. Completely erase old unverified yellow question mark and text cleanly with white background
+    // 1. Completely erase the unverified yellow question mark and text cleanly with white background
     page.drawRectangle({
-      x: x - 2,
-      y: y - 2,
-      width: width + 4,
-      height: height + 4,
+      x: x - 1,
+      y: y - 1,
+      width: width + 2,
+      height: height + 2,
       color: rgb(1, 1, 1),
     });
 
-    // 2. Adobe Acrobat-Style Clean Vector Checkmark (✓) - Exactly matches Acrobat (NO green box, NO circle)
-    const checkStartX = x + 3;
-    const checkCenterY = y + height - 16;
+    // 2. Adobe Acrobat-Style Clean Vector Checkmark (✓)
+    const checkStartX = x + 4;
+    const checkCenterY = y + height - 24;
 
     // Down-stroke of the checkmark
     page.drawLine({
       start: { x: checkStartX, y: checkCenterY },
-      end: { x: checkStartX + 4.5, y: checkCenterY - 7 },
+      end: { x: checkStartX + 5, y: checkCenterY - 7.5 },
       thickness: 2.8,
       color: rgb(0.12, 0.65, 0.22),
     });
-    // Up-stroke of the checkmark (longer sweeping stroke)
+    // Up-stroke of the checkmark
     page.drawLine({
-      start: { x: checkStartX + 3.8, y: checkCenterY - 7 },
-      end: { x: checkStartX + 12, y: checkCenterY + 7 },
+      start: { x: checkStartX + 4.2, y: checkCenterY - 7.5 },
+      end: { x: checkStartX + 13.5, y: checkCenterY + 8 },
       thickness: 2.8,
       color: rgb(0.12, 0.65, 0.22),
     });
 
     // 3. Header: "Signature valid"
     page.drawText('Signature valid', {
-      x: checkStartX + 17,
+      x: checkStartX + 18,
       y: checkCenterY - 2,
-      size: 8.5,
+      size: 9.0,
       font: fontHelvetica,
       color: rgb(0.1, 0.1, 0.1),
     });
 
-    // 4. Signer Details & Official GMT Timestamp (matching Acrobat)
-    const textStartX = checkStartX + 17;
-    let textY = y + height - 24;
+    // 4. Signer Details & Official Timestamp (matching Acrobat)
+    const textStartX = checkStartX + 18;
+    let textY = checkCenterY - 14;
     const fontSize = 6.0;
-    const lineHeight = 7.5;
+    const lineHeight = 8.0;
 
     page.drawText(`Digitally signed by ${sig.signerName}`, {
       x: textStartX,
