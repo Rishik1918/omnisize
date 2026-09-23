@@ -67,7 +67,7 @@ export class OcrEngine {
       percent: 5,
     });
 
-    const arrayBuffer = await file.arrayBuffer();
+    const arrayBuffer = (await file.arrayBuffer()).slice(0);
     const proxy = await getDocumentProxy(new Uint8Array(arrayBuffer));
     const totalPdfPages = proxy.numPages;
 

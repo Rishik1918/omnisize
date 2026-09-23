@@ -63,6 +63,39 @@
         "nsis"
       ]
     },
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDF Document",
+        "role": "Editor",
+        "icon": "electron/icon.ico"
+      },
+      {
+        "ext": [
+          "png",
+          "jpg",
+          "jpeg",
+          "webp",
+          "gif",
+          "bmp"
+        ],
+        "name": "Image Document",
+        "role": "Viewer",
+        "icon": "electron/icon.ico"
+      },
+      {
+        "ext": [
+          "mp4",
+          "webm",
+          "mkv",
+          "avi",
+          "mov"
+        ],
+        "name": "Video File",
+        "role": "Viewer",
+        "icon": "electron/icon.ico"
+      }
+    ],
     "nsis": {
       "oneClick": true,
       "perMachine": false,

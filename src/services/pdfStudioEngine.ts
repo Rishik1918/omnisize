@@ -81,7 +81,7 @@ export class PdfStudioEngine {
     onProgress?: (pct: number) => void
   ): Promise<{ blob: Blob; pageCount: number }> {
     onProgress?.(15);
-    const buffer = await file.arrayBuffer();
+    const buffer = (await file.arrayBuffer()).slice(0);
     const srcDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
     const totalPages = srcDoc.getPageCount();
 
@@ -117,7 +117,7 @@ export class PdfStudioEngine {
     onProgress?: (pct: number) => void
   ): Promise<Blob> {
     onProgress?.(15);
-    const buffer = await file.arrayBuffer();
+    const buffer = (await file.arrayBuffer()).slice(0);
     const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
     const helveticaFont = await doc.embedFont(StandardFonts.Helvetica);
 
@@ -231,11 +231,14 @@ export class PdfStudioEngine {
    * Render PDF page to HTML5 Canvas for real-time reader and visual editor preview
    */
   static async renderPageToCanvas(
-    pdfBuffer: ArrayBuffer,
+    pdfBufferOrProxy: ArrayBuffer | any,
     pageNumber: number, // 1-indexed
     scale: number = 1.5
   ): Promise<{ canvas: HTMLCanvasElement; width: number; height: number }> {
-    const proxy = await getDocumentProxy(new Uint8Array(pdfBuffer));
+    const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
+      ? pdfBufferOrProxy
+      : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
+
     const page = await proxy.getPage(pageNumber);
     const viewport = page.getViewport({ scale });
 
@@ -299,11 +302,13 @@ export class PdfStudioEngine {
    * Extract selectable and editable text items from a PDF page with exact bounds
    */
   static async extractPageTextItems(
-    pdfBuffer: ArrayBuffer,
+    pdfBufferOrProxy: ArrayBuffer | any,
     pageNumber: number // 1-indexed
   ): Promise<ExistingTextItem[]> {
     try {
-      const proxy = await getDocumentProxy(new Uint8Array(pdfBuffer));
+      const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
+        ? pdfBufferOrProxy
+        : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
       const page = await proxy.getPage(pageNumber);
       const textContent = await page.getTextContent();
       const pageIndex = pageNumber - 1;

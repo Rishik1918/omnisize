@@ -10,7 +10,6 @@ import {
   Image as ImageIcon,
   RotateCw,
   Trash2,
-  Download,
   ScanText,
   Save,
   Loader2,
@@ -18,8 +17,8 @@ import {
   Redo2,
   Check,
   AlertCircle,
-  Eye,
-  FileText
+  FileText,
+  Sparkles
 } from 'lucide-react';
 import {
   PdfStudioEngine,
@@ -93,6 +92,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const pdfProxyRef = useRef<any>(null);
 
   // Record a snapshot in history
   const pushSnapshot = useCallback(
@@ -146,7 +146,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Keyboard shortcut listener for Ctrl+Z and Ctrl+Y
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Check if user is typing inside an active input element
       const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
       const isInput = targetTag === 'input' || targetTag === 'textarea';
 
@@ -174,10 +173,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Load PDF buffer on file selection
   useEffect(() => {
     if (!file) return;
+    let isMounted = true;
+
     file.arrayBuffer().then(async (buf) => {
-      setArrayBuffer(buf);
+      if (!isMounted) return;
+      // Keep a safe clone so the original ArrayBuffer is NEVER detached
+      const safeBuf = buf.slice(0);
+      setArrayBuffer(safeBuf);
+
       try {
-        const proxy = await getDocumentProxy(new Uint8Array(buf));
+        const proxy = await getDocumentProxy(new Uint8Array(safeBuf.slice(0)));
+        if (!isMounted) return;
+        pdfProxyRef.current = proxy;
         setTotalPages(proxy.numPages);
         setCurrentPage(1);
         setModifiedTexts({});
@@ -196,19 +203,26 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         ]);
         setHistoryIndex(0);
       } catch (err: any) {
-        setError('Failed to parse PDF: ' + (err?.message || 'Invalid format'));
+        if (isMounted) setError('Failed to parse PDF: ' + (err?.message || 'Invalid format'));
       }
     });
+
+    return () => {
+      isMounted = false;
+    };
   }, [file]);
 
   // Render current page to canvas and extract text items
   useEffect(() => {
-    if (!arrayBuffer || totalPages === 0) return;
+    if ((!pdfProxyRef.current && !arrayBuffer) || totalPages === 0) return;
 
     let isMounted = true;
     setIsRendering(true);
+    setError(null);
 
-    PdfStudioEngine.renderPageToCanvas(arrayBuffer, currentPage, zoomScale)
+    const proxyOrBuf = pdfProxyRef.current || arrayBuffer;
+
+    PdfStudioEngine.renderPageToCanvas(proxyOrBuf, currentPage, zoomScale)
       .then(async ({ canvas, width, height }) => {
         if (!isMounted || !canvasRef.current) return;
         const targetCanvas = canvasRef.current;
@@ -218,16 +232,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         if (ctx) {
           ctx.drawImage(canvas, 0, 0);
         }
-        setViewportDims({ width, height });
+        setViewportDims({ width: canvas.width, height: canvas.height });
 
         // Extract selectable text elements for the current page
-        const textItems = await PdfStudioEngine.extractPageTextItems(arrayBuffer, currentPage);
-        if (isMounted) {
-          setDetectedTextItems(textItems);
+        try {
+          const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
+          if (isMounted) {
+            setDetectedTextItems(textItems);
+          }
+        } catch (textErr) {
+          console.warn('Text extraction warning:', textErr);
         }
       })
       .catch((err) => {
         console.error('Page render error:', err);
+        if (isMounted) setError('Rendering page failed: ' + (err?.message || 'Unknown error'));
       })
       .finally(() => {
         if (isMounted) setIsRendering(false);
@@ -236,7 +255,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     return () => {
       isMounted = false;
     };
-  }, [arrayBuffer, currentPage, zoomScale, pageRotations]);
+  }, [arrayBuffer, currentPage, zoomScale, pageRotations, totalPages]);
 
   // Handle clicking on page canvas to place new text overlay
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -382,33 +401,38 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   return (
     <>
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-fade-in">
-        <div className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl w-full max-w-5xl h-[94vh] border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden flex flex-col">
-          {/* Top Bar: Navigation & Acrobat-grade Actions */}
-          <div className="flex flex-wrap items-center justify-between px-3 sm:px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/90 gap-2">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-1 sm:p-4 bg-slate-900/60 dark:bg-black/85 backdrop-blur-md animate-fade-in">
+        <div className="bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100 rounded-2xl w-full max-w-5xl h-[95vh] sm:h-[92vh] border border-slate-200 dark:border-zinc-800 shadow-2xl overflow-hidden flex flex-col">
+          {/* Top Bar: Clean Adobe Acrobat / iLovePDF Header */}
+          <div className="flex flex-wrap items-center justify-between px-3 sm:px-5 py-2.5 sm:py-3 border-b border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 gap-2">
             {/* Left: Document info & pages */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="font-semibold text-xs truncate max-w-[120px] sm:max-w-[180px]">
-                {file ? file.name : 'PDF Studio'}
-              </span>
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center flex-shrink-0">
+                  <FileText className="w-3.5 h-3.5" />
+                </div>
+                <span className="font-semibold text-xs sm:text-sm truncate max-w-[110px] sm:max-w-[200px]">
+                  {file ? file.name : 'PDF Studio'}
+                </span>
+              </div>
 
               {totalPages > 0 && (
-                <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 text-xs">
+                <div className="flex items-center gap-1 bg-slate-100 dark:bg-zinc-800 px-2 py-1 rounded-lg border border-slate-200 dark:border-zinc-700 text-xs">
                   <button
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                     disabled={currentPage <= 1}
-                    className="p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 disabled:opacity-30"
+                    className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700 disabled:opacity-30 transition-colors"
                     title="Previous Page"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" />
                   </button>
-                  <span className="font-mono text-[11px] px-1 font-medium">
+                  <span className="font-mono text-[11px] px-1 font-medium text-slate-700 dark:text-zinc-300">
                     {currentPage} / {totalPages}
                   </span>
                   <button
                     onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                     disabled={currentPage >= totalPages}
-                    className="p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 disabled:opacity-30"
+                    className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700 disabled:opacity-30 transition-colors"
                     title="Next Page"
                   >
                     <ChevronRight className="w-3.5 h-3.5" />
@@ -417,11 +441,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               )}
 
               {/* Undo / Redo Buttons */}
-              <div className="flex items-center gap-0.5 bg-white dark:bg-zinc-800 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700">
+              <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-zinc-800 p-0.5 rounded-lg border border-slate-200 dark:border-zinc-700">
                 <button
                   onClick={handleUndo}
                   disabled={historyIndex <= 0}
-                  className="p-1 rounded text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30 transition-colors"
+                  className="p-1 rounded text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 disabled:opacity-30 transition-colors"
                   title="Undo (Ctrl+Z)"
                 >
                   <Undo2 className="w-3.5 h-3.5" />
@@ -429,7 +453,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 <button
                   onClick={handleRedo}
                   disabled={historyIndex >= history.length - 1}
-                  className="p-1 rounded text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 disabled:opacity-30 transition-colors"
+                  className="p-1 rounded text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-zinc-100 disabled:opacity-30 transition-colors"
                   title="Redo (Ctrl+Y)"
                 >
                   <Redo2 className="w-3.5 h-3.5" />
@@ -437,14 +461,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
             </div>
 
-            {/* Middle: Editing Tools */}
-            <div className="flex items-center gap-1.5 overflow-x-auto py-1">
+            {/* Middle: Editing Tools Segment */}
+            <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto py-0.5">
               <button
                 onClick={() => setActiveTool('edit-text')}
                 className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   activeTool === 'edit-text'
                     ? 'bg-emerald-600 text-white shadow-xs font-semibold'
-                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700'
+                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700'
                 }`}
                 title="Click any existing text on the page to edit in place"
               >
@@ -457,16 +481,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   activeTool === 'add-text'
                     ? 'bg-emerald-600 text-white shadow-xs font-semibold'
-                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700'
+                    : 'bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700'
                 }`}
-                title="Add new text overlay on page"
+                title="Add new text overlay"
               >
                 <Type className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Add Text</span>
               </button>
 
               <label
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 cursor-pointer shadow-xs"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700 cursor-pointer shadow-xs"
                 title="Insert Photo or Signature"
               >
                 <ImageIcon className="w-3.5 h-3.5 text-blue-500" />
@@ -481,7 +505,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
               <button
                 onClick={handleRotateCurrentPage}
-                className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700"
+                className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs bg-slate-100 dark:bg-zinc-800 text-slate-700 dark:text-zinc-300 hover:bg-slate-200 dark:hover:bg-zinc-700 border border-slate-200 dark:border-zinc-700"
                 title="Rotate Page 90° Clockwise"
               >
                 <RotateCw className="w-3.5 h-3.5" />
@@ -489,7 +513,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
               <button
                 onClick={handleDeleteCurrentPage}
-                className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs bg-white dark:bg-zinc-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 border border-zinc-200 dark:border-zinc-700"
+                className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs bg-slate-100 dark:bg-zinc-800 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 border border-slate-200 dark:border-zinc-700"
                 title="Delete Current Page"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -507,10 +531,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             {/* Right: Zoom & Save */}
             <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 px-1.5 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 text-xs">
+              <div className="flex items-center gap-1 bg-slate-100 dark:bg-zinc-800 px-1.5 py-1 rounded-lg border border-slate-200 dark:border-zinc-700 text-xs">
                 <button
                   onClick={() => setZoomScale((z) => Math.max(0.75, z - 0.25))}
-                  className="p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                  className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700"
                   title="Zoom Out"
                 >
                   <ZoomOut className="w-3 h-3" />
@@ -518,7 +542,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 <span className="font-mono text-[10px] w-8 text-center">{Math.round(zoomScale * 100)}%</span>
                 <button
                   onClick={() => setZoomScale((z) => Math.min(2.5, z + 0.25))}
-                  className="p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                  className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-zinc-700"
                   title="Zoom In"
                 >
                   <ZoomIn className="w-3 h-3" />
@@ -528,7 +552,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               <button
                 onClick={handleSaveDocument}
                 disabled={!file || isSaving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium text-xs shadow-xs active:scale-95 transition-all"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-medium text-xs shadow-xs active:scale-95 transition-all"
               >
                 {isSaving ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -542,7 +566,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
               <button
                 onClick={onClose}
-                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -551,37 +575,37 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
           {/* Secondary Notification / Instruction Bar */}
           {activeTool === 'edit-text' && (
-            <div className="flex items-center justify-between px-4 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-emerald-500/10 text-xs text-emerald-700 dark:text-emerald-300">
+            <div className="flex items-center justify-between px-4 py-1.5 border-b border-slate-200 dark:border-zinc-800 bg-emerald-50 dark:bg-emerald-950/20 text-xs text-emerald-800 dark:text-emerald-300">
               <span className="flex items-center gap-1.5">
-                <Edit3 className="w-3.5 h-3.5" />
+                <Edit3 className="w-3.5 h-3.5 text-emerald-600" />
                 <span>
-                  <strong>Interactive Text Edit Mode:</strong> Click any word or line on the page to edit directly.
+                  <strong>Interactive Text Editing:</strong> Click any word or line on the page to edit directly.
                 </span>
               </span>
               {modifiedTextCount > 0 && (
                 <span className="text-[11px] font-semibold bg-emerald-600 text-white px-2 py-0.5 rounded-full">
-                  {modifiedTextCount} text edit(s) made
+                  {modifiedTextCount} edit(s) made
                 </span>
               )}
             </div>
           )}
 
           {activeTool === 'add-text' && (
-            <div className="flex flex-wrap items-center gap-3 px-4 py-1.5 border-b border-zinc-200 dark:border-zinc-800 bg-amber-500/5 text-xs">
-              <span className="font-semibold text-amber-600 dark:text-amber-400">Click canvas to place:</span>
+            <div className="flex flex-wrap items-center gap-3 px-4 py-1.5 border-b border-slate-200 dark:border-zinc-800 bg-amber-50 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300">
+              <span className="font-semibold">Click page to place:</span>
               <input
                 type="text"
                 value={pendingText}
                 onChange={(e) => setPendingText(e.target.value)}
                 placeholder="Text overlay..."
-                className="px-2.5 py-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs w-48 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs w-48 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
               <div className="flex items-center gap-1">
-                <span className="text-[10px] text-zinc-400">Size:</span>
+                <span className="text-[10px] text-slate-500 dark:text-zinc-400">Size:</span>
                 <select
                   value={textSize}
                   onChange={(e) => setTextSize(parseInt(e.target.value, 10))}
-                  className="px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-[11px]"
+                  className="px-2 py-1 rounded border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-[11px]"
                 >
                   <option value={10}>10 pt</option>
                   <option value={12}>12 pt</option>
@@ -607,20 +631,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           {/* Main Visual Reader & Canvas Area */}
           <div
             ref={containerRef}
-            className="flex-1 overflow-auto bg-zinc-200 dark:bg-zinc-950 p-4 flex flex-col items-center justify-start relative select-none"
+            className="flex-1 overflow-auto bg-slate-100 dark:bg-zinc-950 p-3 sm:p-6 flex flex-col items-center justify-start relative select-none"
           >
             {error && (
-              <div className="mb-3 flex items-center gap-2 p-2.5 text-xs rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 max-w-md">
+              <div className="mb-3 flex items-center gap-2 p-2.5 text-xs rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 max-w-md shadow-xs">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
             {!file ? (
-              <label className="my-auto border-2 border-dashed border-zinc-300 dark:border-zinc-800 hover:border-emerald-500/50 rounded-2xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors text-center bg-white dark:bg-zinc-900 shadow-sm">
-                <FileText className="w-12 h-12 text-zinc-400 dark:text-zinc-600 mb-3 stroke-1" />
-                <p className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Open a PDF Document in Studio</p>
-                <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1">Read, edit text, add photos, extract OCR, and rotate pages</p>
+              <label className="my-auto border-2 border-dashed border-slate-300 dark:border-zinc-800 hover:border-emerald-500/50 rounded-2xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors text-center bg-white dark:bg-zinc-900 shadow-sm">
+                <FileText className="w-12 h-12 text-slate-400 dark:text-zinc-600 mb-3 stroke-1" />
+                <p className="text-sm font-semibold text-slate-800 dark:text-zinc-200">Open a PDF Document in Studio</p>
+                <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Read, edit text, add photos, extract OCR, and rotate pages</p>
                 <input
                   type="file"
                   accept="application/pdf,.pdf"
@@ -647,10 +671,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
             ) : (
               <div
-                className="relative shadow-2xl rounded-sm overflow-hidden bg-white border border-zinc-300 dark:border-zinc-800"
+                className="relative shadow-2xl rounded-sm overflow-hidden bg-white border border-slate-300 dark:border-zinc-800 ring-1 ring-slate-900/5"
                 style={{
-                  width: canvasRef.current ? canvasRef.current.width : 'auto',
-                  height: canvasRef.current ? canvasRef.current.height : 'auto',
+                  width: viewportDims.width > 0 ? `${viewportDims.width}px` : 'auto',
+                  height: viewportDims.height > 0 ? `${viewportDims.height}px` : 'auto',
                   transform: `rotate(${pageRotations[currentPage - 1] || 0}deg)`,
                   transition: 'transform 0.2s ease',
                 }}
@@ -674,14 +698,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       const modifiedItem = modifiedTexts[item.id] || item;
                       const isBeingEdited = activeEditingId === item.id;
 
-                      // Convert PDF coordinates to Canvas screen coordinates
+                      // Exact PDF coordinate to screen coordinate mapping
                       const scale = zoomScale;
                       const pdfWidth = canvasRef.current!.width / scale;
                       const pdfHeight = canvasRef.current!.height / scale;
 
                       const screenX = (item.x / pdfWidth) * canvasRef.current!.width;
                       const screenY = (1 - (item.y + item.height) / pdfHeight) * canvasRef.current!.height;
-                      const screenW = Math.max(20, (item.width / pdfWidth) * canvasRef.current!.width);
+                      const screenW = Math.max(16, (item.width / pdfWidth) * canvasRef.current!.width);
                       const screenH = Math.max(14, (item.height / pdfHeight) * canvasRef.current!.height * 1.3);
 
                       return (
@@ -697,7 +721,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           className={`group cursor-text transition-all ${
                             modifiedItem.isModified
                               ? 'bg-amber-100/90 dark:bg-amber-900/80 border border-amber-500 rounded-xs'
-                              : 'hover:bg-emerald-500/20 hover:border hover:border-emerald-500/40 rounded-xs'
+                              : 'hover:bg-emerald-500/20 hover:ring-1 hover:ring-emerald-500/50 rounded-xs'
                           }`}
                           onClick={(e) => {
                             e.stopPropagation();
@@ -721,7 +745,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             />
                           ) : modifiedItem.isModified ? (
                             <div
-                              className="w-full h-full flex items-center bg-white px-1 text-black font-sans truncate"
+                              className="w-full h-full flex items-center bg-white px-1 text-black font-sans truncate shadow-xs"
                               style={{
                                 fontSize: `${Math.max(10, item.fontSize * zoomScale * 0.9)}px`,
                               }}
@@ -737,7 +761,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
                 {/* Overlays Indicator Banner */}
                 {(currentPageOverlays.length > 0 || currentImageOverlays.length > 0 || modifiedTextCount > 0) && (
-                  <div className="absolute bottom-2 left-2 z-20 bg-black/75 backdrop-blur-sm text-white text-[10px] px-2.5 py-1 rounded-full pointer-events-none flex items-center gap-1.5 shadow-md">
+                  <div className="absolute bottom-2 left-2 z-20 bg-slate-900/85 backdrop-blur-sm text-white text-[10px] px-2.5 py-1 rounded-full pointer-events-none flex items-center gap-1.5 shadow-md">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                     <span>
                       {modifiedTextCount > 0 && `${modifiedTextCount} text line(s) edited • `}

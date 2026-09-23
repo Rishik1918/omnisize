@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Upload, Image as ImageIcon, Film, FileText, FileCode } from 'lucide-react';
+import { Upload, Image as ImageIcon, Film, FileText } from 'lucide-react';
 
 interface DropZoneProps {
   onFilesAdded: (files: File[]) => void;
@@ -37,17 +37,17 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesAdded }) => {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3.5">
       <div
         onDragEnter={handleDrag}
         onDragOver={handleDrag}
         onDragLeave={handleDrag}
         onDrop={handleDrop}
         onClick={() => inputRef.current?.click()}
-        className={`relative cursor-pointer rounded-2xl border border-dashed p-6 sm:p-10 text-center transition-all ${
+        className={`relative cursor-pointer rounded-2xl border-2 border-dashed p-6 sm:p-10 text-center transition-all shadow-xs ${
           isDragOver
-            ? 'border-emerald-500 bg-emerald-950/20'
-            : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-700 hover:bg-zinc-900/70'
+            ? 'border-emerald-500 bg-emerald-500/10'
+            : 'border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-emerald-500/50 hover:bg-slate-50/80 dark:hover:bg-zinc-900/80'
         }`}
       >
         <input
@@ -60,44 +60,44 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesAdded }) => {
         />
 
         <div className="flex flex-col items-center justify-center space-y-3 max-w-md mx-auto">
-          <div className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl bg-zinc-800 border border-zinc-700/80 flex items-center justify-center text-zinc-300 shadow-sm">
-            <Upload className="h-5 w-5" strokeWidth={1.5} />
+          <div className="h-12 w-12 rounded-2xl bg-emerald-50 dark:bg-zinc-800 border border-emerald-500/20 dark:border-zinc-700/80 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-xs">
+            <Upload className="h-6 w-6 stroke-[1.75]" />
           </div>
 
           <div className="space-y-1">
-            <h3 className="text-sm sm:text-base font-medium text-zinc-200">
+            <h3 className="text-sm sm:text-base font-semibold text-slate-800 dark:text-zinc-100">
               Select files or drag and drop
             </h3>
-            <p className="text-xs text-zinc-400">
+            <p className="text-xs text-slate-500 dark:text-zinc-400">
               Images, Videos, PDFs, and Office Documents
             </p>
           </div>
         </div>
       </div>
 
-      {/* Quick Action Chips with Clean SVG Icons */}
-      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+      {/* Quick Action Chips */}
+      <div className="flex flex-wrap items-center justify-center gap-2 pt-0.5">
         <button
           onClick={() => inputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition-colors"
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 text-xs font-medium transition-colors shadow-xs"
         >
-          <FileText className="w-3.5 h-3.5 text-zinc-400" strokeWidth={1.5} />
+          <FileText className="w-3.5 h-3.5 text-emerald-500" strokeWidth={1.5} />
           <span>Compress PDF</span>
         </button>
 
         <button
           onClick={() => inputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition-colors"
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 text-xs font-medium transition-colors shadow-xs"
         >
-          <ImageIcon className="w-3.5 h-3.5 text-zinc-400" strokeWidth={1.5} />
+          <ImageIcon className="w-3.5 h-3.5 text-blue-500" strokeWidth={1.5} />
           <span>Resize Image</span>
         </button>
 
         <button
           onClick={() => inputRef.current?.click()}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800 text-xs transition-colors"
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 text-xs font-medium transition-colors shadow-xs"
         >
-          <Film className="w-3.5 h-3.5 text-zinc-400" strokeWidth={1.5} />
+          <Film className="w-3.5 h-3.5 text-purple-500" strokeWidth={1.5} />
           <span>Compress Video</span>
         </button>
       </div>

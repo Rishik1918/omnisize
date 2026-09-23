@@ -9,6 +9,7 @@ import { DocumentOptionsModal } from './components/DocumentOptionsModal';
 import { PdfUnlockerModal } from './components/PdfUnlockerModal';
 import { ConverterView } from './components/ConverterView';
 import { PdfStudioView } from './components/PdfStudio/PdfStudioView';
+import { PdfEditorModal } from './components/PdfStudio/PdfEditorModal';
 import { InitialChoiceScreen } from './components/InitialChoiceScreen';
 import { BottomNav } from './components/BottomNav';
 import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOptions, DocumentProcessingOptions } from './types';
@@ -22,6 +23,7 @@ import { Play } from 'lucide-react';
 export default function App() {
   const [hasSelectedInitialMode, setHasSelectedInitialMode] = useState<boolean>(false);
   const [appMode, setAppMode] = useState<'compress' | 'convert' | 'pdfstudio'>('compress');
+  const [externalEditorPdf, setExternalEditorPdf] = useState<File | null>(null);
 
   useEffect(() => {
     ThemeManager.init();
@@ -60,6 +62,75 @@ export default function App() {
       if (firstPdf) setUnlockModalItem(firstPdf);
     }
   };
+
+  const handleIncomingFile = (file: File) => {
+    setHasSelectedInitialMode(true);
+    const type = detectType(file);
+    if (type === 'pdf') {
+      setAppMode('pdfstudio');
+      setExternalEditorPdf(file);
+    } else {
+      setAppMode('compress');
+      handleFilesAdded([file]);
+    }
+  };
+
+  useEffect(() => {
+    // 1. Electron Desktop listener (via preload bridge)
+    const electronAPI = (window as any).electronAPI;
+    if (electronAPI) {
+      if (typeof electronAPI.getInitialFile === 'function') {
+        electronAPI.getInitialFile().then((fileData: any) => {
+          if (fileData && fileData.data) {
+            const ext = fileData.extension || fileData.name.split('.').pop() || '';
+            const mimeType = ext === 'pdf' ? 'application/pdf' : fileData.mimeType || 'application/octet-stream';
+            const file = new File([fileData.data], fileData.name, { type: mimeType });
+            handleIncomingFile(file);
+          }
+        }).catch((err: any) => console.error('Error fetching initial desktop file:', err));
+      }
+
+      if (typeof electronAPI.onOpenFile === 'function') {
+        const unsubscribe = electronAPI.onOpenFile((fileData: any) => {
+          if (fileData && fileData.data) {
+            const ext = fileData.extension || fileData.name.split('.').pop() || '';
+            const mimeType = ext === 'pdf' ? 'application/pdf' : fileData.mimeType || 'application/octet-stream';
+            const file = new File([fileData.data], fileData.name, { type: mimeType });
+            handleIncomingFile(file);
+          }
+        });
+        return () => {
+          if (unsubscribe) unsubscribe();
+        };
+      }
+    }
+
+    // 2. Android "Open With" intent listener
+    const handleAndroidData = (payload: any) => {
+      if (!payload || !payload.base64) return;
+      try {
+        const binaryString = atob(payload.base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const file = new File([bytes], payload.name || 'document.pdf', {
+          type: payload.mimeType || 'application/pdf',
+        });
+        handleIncomingFile(file);
+      } catch (e) {
+        console.error('Failed to parse external android file', e);
+      }
+    };
+
+    (window as any).handleExternalAndroidFile = handleAndroidData;
+
+    // Check if Android queued a pending file during cold start
+    if ((window as any).__omnisize_pending_file) {
+      handleAndroidData((window as any).__omnisize_pending_file);
+      (window as any).__omnisize_pending_file = null;
+    }
+  }, []);
 
   const handleRemove = (id: string) => {
     setItems((prev) => prev.filter((item) => item.id !== id));
@@ -355,6 +426,14 @@ export default function App() {
               )
             );
           }}
+        />
+      )}
+
+      {externalEditorPdf && (
+        <PdfEditorModal
+          isOpen={Boolean(externalEditorPdf)}
+          onClose={() => setExternalEditorPdf(null)}
+          initialFile={externalEditorPdf}
         />
       )}
     </div>
