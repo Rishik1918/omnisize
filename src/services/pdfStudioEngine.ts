@@ -22,11 +22,25 @@ export interface ImageOverlay {
   height: number;
 }
 
+export interface ExistingTextItem {
+  id: string;
+  pageIndex: number; // 0-indexed
+  originalText: string;
+  currentText: string;
+  x: number; // PDF points
+  y: number; // PDF points (baseline)
+  width: number; // PDF points
+  height: number; // PDF points
+  fontSize: number;
+  isModified?: boolean;
+}
+
 export interface PdfEditPayload {
   rotations?: Record<number, number>; // pageIndex -> degrees (90, 180, 270)
   deletedPages?: number[]; // list of 0-indexed page numbers to remove
   textOverlays?: TextOverlay[];
   imageOverlays?: ImageOverlay[];
+  textReplacements?: ExistingTextItem[];
 }
 
 export class PdfStudioEngine {
@@ -108,6 +122,41 @@ export class PdfStudioEngine {
     const helveticaFont = await doc.embedFont(StandardFonts.Helvetica);
 
     onProgress?.(30);
+
+    // 0. Apply Existing Text Replacements (erases original bounding box and writes replacement text)
+    if (payload.textReplacements && payload.textReplacements.length > 0) {
+      for (const rep of payload.textReplacements) {
+        if (!rep.isModified && rep.currentText === rep.originalText) continue;
+        if (rep.pageIndex >= 0 && rep.pageIndex < doc.getPageCount()) {
+          const page = doc.getPage(rep.pageIndex);
+
+          // Erase old text bounding box with clean white rectangle
+          const padY = Math.max(2, rep.fontSize * 0.25);
+          const eraseY = Math.max(0, rep.y - padY);
+          const eraseHeight = rep.height + padY * 1.6;
+          const eraseWidth = Math.max(rep.width + 4, rep.currentText.length * rep.fontSize * 0.65);
+
+          page.drawRectangle({
+            x: Math.max(0, rep.x - 2),
+            y: eraseY,
+            width: eraseWidth,
+            height: eraseHeight,
+            color: rgb(1, 1, 1),
+          });
+
+          // Draw replacement text
+          if (rep.currentText.trim().length > 0) {
+            page.drawText(rep.currentText, {
+              x: rep.x,
+              y: rep.y,
+              size: rep.fontSize || 12,
+              font: helveticaFont,
+              color: rgb(0, 0, 0),
+            });
+          }
+        }
+      }
+    }
 
     // 1. Apply Rotations
     if (payload.rotations) {
@@ -244,5 +293,51 @@ export class PdfStudioEngine {
       return rgb(r, g, b);
     }
     return rgb(0, 0, 0);
+  }
+
+  /**
+   * Extract selectable and editable text items from a PDF page with exact bounds
+   */
+  static async extractPageTextItems(
+    pdfBuffer: ArrayBuffer,
+    pageNumber: number // 1-indexed
+  ): Promise<ExistingTextItem[]> {
+    try {
+      const proxy = await getDocumentProxy(new Uint8Array(pdfBuffer));
+      const page = await proxy.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageIndex = pageNumber - 1;
+
+      const items: ExistingTextItem[] = [];
+
+      for (let i = 0; i < textContent.items.length; i++) {
+        const item: any = textContent.items[i];
+        if (!item.str || !item.str.trim()) continue;
+
+        const fontSize = Math.round(Math.hypot(item.transform[0], item.transform[1])) || 12;
+        const x = item.transform[4];
+        const y = item.transform[5];
+        const width = item.width || Math.max(10, item.str.length * fontSize * 0.55);
+        const height = item.height || fontSize;
+
+        items.push({
+          id: `txt_${pageIndex}_${i}_${Math.round(x)}_${Math.round(y)}`,
+          pageIndex,
+          originalText: item.str,
+          currentText: item.str,
+          x,
+          y,
+          width,
+          height,
+          fontSize,
+          isModified: false,
+        });
+      }
+
+      return items;
+    } catch (err) {
+      console.error('Failed to extract page text items:', err);
+      return [];
+    }
   }
 }
