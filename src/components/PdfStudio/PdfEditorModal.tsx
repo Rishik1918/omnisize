@@ -275,6 +275,25 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
+  // Stamp Acrobat-grade verified green tick badge over unverified question mark
+  const handleStampSignature = async () => {
+    const targetBuf = arrayBuffer || originalSignedBuffer;
+    if (!targetBuf || signatures.length === 0) return;
+    try {
+      setIsVerifyingSignatures(true);
+      const verifiedBlob = await PdfSignatureEngine.applyVerifiedSignatureStamp(targetBuf, signatures[0]);
+      const outName = file?.name ? file.name.replace(/\.pdf$/i, '_verified.pdf') : `verified_signed_${Date.now()}.pdf`;
+      await saveFile(verifiedBlob, outName);
+      // Reload editor with the new stamped PDF so user sees the green tick right away in the editor
+      const newFile = new File([verifiedBlob], outName, { type: 'application/pdf' });
+      setFile(newFile);
+    } catch (e) {
+      console.error('Failed to stamp signature:', e);
+    } finally {
+      setIsVerifyingSignatures(false);
+    }
+  };
+
   // Undo action
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
@@ -317,6 +336,31 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       const safeBuf = buf.slice(0);
       setArrayBuffer(safeBuf);
 
+      // Cryptographic Digital Signature & Certificate Detection
+      // Run immediately on the initial file buffer so signatures survive password unlocking
+      const sigSourceBuf = originalSignedBuffer || safeBuf;
+      try {
+        setIsVerifyingSignatures(true);
+        const extractedSigs = await PdfSignatureEngine.extractSignatures(sigSourceBuf);
+        if (extractedSigs.length > 0) {
+          if (!originalSignedBuffer) {
+            setOriginalSignedBuffer(sigSourceBuf);
+          }
+          const verifiedSigs: PdfSignatureInfo[] = [];
+          for (const sig of extractedSigs) {
+            const verified = await PdfSignatureEngine.verifySignature(sigSourceBuf, sig);
+            verifiedSigs.push(verified);
+          }
+          if (isMounted) {
+            setSignatures(verifiedSigs);
+          }
+        }
+      } catch (err) {
+        console.warn('Initial signature extraction note:', err);
+      } finally {
+        if (isMounted) setIsVerifyingSignatures(false);
+      }
+
       try {
         const proxy = await getDocumentProxy(new Uint8Array(safeBuf.slice(0)));
         if (!isMounted) return;
@@ -333,26 +377,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           const optimalScale = Math.min(2.0, Math.max(0.4, (containerW - padding) / firstViewport.width));
           setZoomScale(Number(optimalScale.toFixed(2)));
         }
-
-        // Cryptographic Digital Signature & Certificate Detection
-        setIsVerifyingSignatures(true);
-        const sigSourceBuf = originalSignedBuffer || safeBuf;
-        PdfSignatureEngine.extractSignatures(sigSourceBuf)
-          .then(async (extractedSigs) => {
-            if (!isMounted) return;
-            const verifiedSigs: PdfSignatureInfo[] = [];
-            for (const sig of extractedSigs) {
-              const verified = await PdfSignatureEngine.verifySignature(sigSourceBuf, sig);
-              verifiedSigs.push(verified);
-            }
-            if (isMounted) {
-              setSignatures(verifiedSigs);
-            }
-          })
-          .catch((err) => console.warn('Signature verification error:', err))
-          .finally(() => {
-            if (isMounted) setIsVerifyingSignatures(false);
-          });
 
         setModifiedTexts({});
         setTextOverlays([]);
@@ -810,7 +834,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       {/* DIGITAL SIGNATURE BANNER (Acrobat-style genuine verification banner) */}
       {signatures.length > 0 && (
         <div
-          className={`flex items-center justify-between px-3 sm:px-5 py-1.5 border-b text-xs flex-shrink-0 transition-colors ${
+          className={`flex flex-wrap items-center justify-between gap-2 px-3 sm:px-5 py-2 border-b text-xs flex-shrink-0 transition-colors ${
             signatures[0].status === 'valid'
               ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-800 dark:text-emerald-300'
               : signatures[0].status === 'untrusted_cert'
@@ -818,7 +842,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               : 'bg-red-500/10 border-red-500/25 text-red-800 dark:text-red-300'
           }`}
         >
-          <div className="flex items-center gap-2 overflow-hidden">
+          <div className="flex items-center gap-2 overflow-hidden min-w-0">
             {signatures[0].status === 'valid' ? (
               <ShieldCheck className="w-4 h-4 text-emerald-600 flex-shrink-0" />
             ) : signatures[0].status === 'untrusted_cert' ? (
@@ -835,26 +859,35 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </span>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             {signatures[0].status === 'untrusted_cert' && (
               <button
                 onClick={async () => {
                   if (signatures[0].certificate) {
                     PdfSignatureEngine.trustCertificate(signatures[0].certificate.serialNumber);
-                    if (arrayBuffer) {
-                      const reVer = await PdfSignatureEngine.verifySignature(arrayBuffer, signatures[0]);
+                    const buf = originalSignedBuffer || arrayBuffer;
+                    if (buf) {
+                      const reVer = await PdfSignatureEngine.verifySignature(buf, signatures[0]);
                       setSignatures([reVer]);
                     }
                   }
                 }}
-                className="px-2.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] shadow-xs active:scale-95"
+                className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-semibold text-[11px] shadow-xs active:scale-95 whitespace-nowrap"
               >
-                Trust & Verify
+                Trust Certificate
               </button>
             )}
             <button
+              onClick={handleStampSignature}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] shadow-xs active:scale-95 whitespace-nowrap"
+              title="Apply verified green checkmark badge in place of unverified yellow question mark and save PDF"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Verify & Stamp Green Tick</span>
+            </button>
+            <button
               onClick={() => setSelectedSigForModal(signatures[0])}
-              className="px-2.5 py-0.5 rounded border border-current font-medium text-[11px] hover:bg-black/5 dark:hover:bg-white/5"
+              className="px-2.5 py-1 rounded-lg border border-current font-medium text-[11px] hover:bg-black/5 dark:hover:bg-white/5 whitespace-nowrap"
             >
               Certificate Details
             </button>
@@ -1358,6 +1391,66 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })}
 
+            {/* Interactive Digital Signature Overlays on Canvas */}
+            {signatures
+              .filter((sig) => (sig.rect ? sig.rect.pageIndex === currentPage - 1 : currentPage === 1))
+              .map((sig) => {
+                const scale = zoomScale;
+                const rect = sig.rect || { x: 80, y: 339, width: 165, height: 42 };
+                const cssX = rect.x * scale;
+                const cssY = viewportDims.height - (rect.y + Math.max(rect.height, 42)) * scale;
+                const cssW = Math.max(rect.width, 165) * scale;
+                const cssH = Math.max(rect.height, 42) * scale;
+
+                const isValid = sig.status === 'valid';
+
+                return (
+                  <div
+                    key={sig.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedSigForModal(sig);
+                    }}
+                    style={{
+                      left: `${cssX}px`,
+                      top: `${cssY}px`,
+                      width: `${cssW}px`,
+                      height: `${cssH}px`,
+                    }}
+                    className={`absolute rounded-lg cursor-pointer z-30 transition-all flex flex-col justify-between p-1.5 select-none ${
+                      isValid
+                        ? 'border-2 border-emerald-500/80 bg-emerald-500/10 hover:bg-emerald-500/25 hover:border-emerald-600 shadow-sm'
+                        : 'border-2 border-dashed border-amber-500/80 bg-amber-500/15 hover:bg-amber-500/25 hover:border-amber-600 animate-pulse'
+                    }`}
+                    title={`Digital Signature: ${sig.signerName} • Click to view certificate & stamp green tick`}
+                  >
+                    <div className="flex items-center justify-between pointer-events-none">
+                      <div className="flex items-center gap-1 overflow-hidden">
+                        {isValid ? (
+                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                        ) : (
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+                        )}
+                        <span
+                          className={`text-[10px] font-bold truncate ${
+                            isValid ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'
+                          }`}
+                        >
+                          {isValid ? 'Signature Valid' : 'Signature Unverified'}
+                        </span>
+                      </div>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/90 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-semibold shadow-xs flex-shrink-0">
+                        Details
+                      </span>
+                    </div>
+
+                    <div className="text-[8.5px] text-zinc-600 dark:text-zinc-400 font-mono truncate pointer-events-none">
+                      {sig.signerName}
+                    </div>
+                  </div>
+                );
+              })}
+
             {/* Rendering Spinner */}
             {isRendering && (
               <div className="absolute inset-0 bg-white/70 dark:bg-zinc-950/70 backdrop-blur-xs flex items-center justify-center z-50 rounded">
@@ -1568,7 +1661,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           isOpen={true}
           onClose={() => setSelectedSigForModal(null)}
           signature={selectedSigForModal}
-          pdfBuffer={arrayBuffer}
+          pdfBuffer={originalSignedBuffer || arrayBuffer}
           onSignatureUpdated={(updated) => {
             setSignatures([updated]);
             setSelectedSigForModal(updated);

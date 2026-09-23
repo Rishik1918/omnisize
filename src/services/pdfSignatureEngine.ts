@@ -68,6 +68,13 @@ const BUILT_IN_TRUST_LIST = [
   'entrust',
   'quovadis',
   'docusign',
+  'ncode',
+  '(n)code',
+  'income tax department',
+  'gstn',
+  'epfo',
+  'cbic',
+  'mca',
 ];
 
 export class PdfSignatureEngine {
@@ -137,10 +144,14 @@ export class PdfSignatureEngine {
       const gapBytes = uint8.slice(gapStart, gapEnd);
       const gapText = decoder.decode(gapBytes);
 
+      let rawHex = '';
       const contentsMatch = gapText.match(/\/Contents\s*<([0-9a-fA-F\s\r\n]+)>/);
-      if (!contentsMatch) continue;
+      if (contentsMatch) {
+        rawHex = contentsMatch[1].replace(/[\s\r\n]/g, '');
+      } else {
+        rawHex = gapText.replace(/[\s\r\n]/g, '').replace(/^<+/, '').replace(/>+$/, '');
+      }
 
-      const rawHex = contentsMatch[1].replace(/[\s\r\n]/g, '');
       if (!rawHex || rawHex.length < 64) continue;
 
       // Also parse metadata around this signature dictionary
@@ -151,21 +162,43 @@ export class PdfSignatureEngine {
       const contactMatch = surroundingText.match(/\/ContactInfo\s*\(([^)]+)\)/);
       const dateMatch = surroundingText.match(/\/M\s*\(D:([0-9]{14}[^)]*)\)/);
 
-      // Search for visual Rect
+      // Search for visual Rect (near signature or throughout document widget annotations)
       let rect: { x: number; y: number; width: number; height: number; pageIndex: number } | undefined = undefined;
-      const rectMatch = surroundingText.match(/\/Rect\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]/);
-      if (rectMatch) {
-        const x1 = parseFloat(rectMatch[1]);
-        const y1 = parseFloat(rectMatch[2]);
-        const x2 = parseFloat(rectMatch[3]);
-        const y2 = parseFloat(rectMatch[4]);
-        rect = {
-          x: Math.min(x1, x2),
-          y: Math.min(y1, y2),
-          width: Math.abs(x2 - x1),
-          height: Math.abs(y2 - y1),
-          pageIndex: 0,
-        };
+      const parseRectNumbers = (rStr: string) => {
+        const parts = rStr.trim().split(/\s+/).map(Number);
+        if (parts.length >= 4 && !parts.some(isNaN)) {
+          return {
+            x: Math.min(parts[0], parts[2]),
+            y: Math.min(parts[1], parts[3]),
+            width: Math.abs(parts[2] - parts[0]),
+            height: Math.abs(parts[3] - parts[1]),
+            pageIndex: 0,
+          };
+        }
+        return undefined;
+      };
+
+      const rectMatchNear = surroundingText.match(/\/Rect\s*\[\s*([\d.\s]+)\s*\]/);
+      if (rectMatchNear) {
+        rect = parseRectNumbers(rectMatchNear[1]);
+      }
+
+      if (!rect) {
+        // Search full PDF for widget annotation rectangles (/FT /Sig or /Subtype /Widget)
+        const widgetRegex = /<<[^>]*\/Subtype\s*\/Widget[^>]*\/Rect\s*\[\s*([\d.\s]+)\s*\][^>]*>>/g;
+        let wMatch = widgetRegex.exec(rawText);
+        if (!wMatch) {
+          const widgetRegex2 = /<<[^>]*\/Rect\s*\[\s*([\d.\s]+)\s*\][^>]*\/Subtype\s*\/Widget[^>]*>>/g;
+          wMatch = widgetRegex2.exec(rawText);
+        }
+        if (!wMatch) {
+          const anyRect = rawText.match(/\/Rect\s*\[\s*([\d.\s]+)\s*\]/);
+          if (anyRect) {
+            rect = parseRectNumbers(anyRect[1]);
+          }
+        } else {
+          rect = parseRectNumbers(wMatch[1]);
+        }
       }
 
       // Parse PKCS#7 with node-forge
@@ -187,47 +220,63 @@ export class PdfSignatureEngine {
       }
 
       try {
-        const derString = forge.util.hexToBytes(rawHex);
-        const asn1 = forge.asn1.fromDer(derString);
+        let derString = forge.util.hexToBytes(rawHex);
+        let asn1: any;
+        try {
+          asn1 = forge.asn1.fromDer(derString, false);
+        } catch (e: any) {
+          if (e && typeof e.remaining === 'number' && e.remaining > 0) {
+            // Trim trailing zero padding bytes from PDF /Contents
+            derString = derString.slice(0, derString.length - e.remaining);
+            asn1 = forge.asn1.fromDer(derString, false);
+          } else {
+            throw e;
+          }
+        }
+
         const p7: any = forge.pkcs7.messageFromAsn1(asn1);
 
-        // Extract certificates
+        // Extract certificates - find the leaf certificate in the chain
         if (p7.certificates && p7.certificates.length > 0) {
-          const cert: any = p7.certificates[0];
+          const leaf: any =
+            p7.certificates.find((c: any) => {
+              const cn = c.subject.getField('CN')?.value;
+              return !p7.certificates.some((other: any) => other.issuer.getField('CN')?.value === cn && other !== c);
+            }) || p7.certificates[p7.certificates.length - 1];
 
           const getAttr = (attrs: any[], typeName: string) => {
             const a = attrs.find((x) => x.name === typeName || x.shortName === typeName);
             return a ? a.value : undefined;
           };
 
-          const subjCN = getAttr(cert.subject.attributes, 'commonName') || signerName;
+          const subjCN = leaf.subject.getField('CN')?.value || getAttr(leaf.subject.attributes, 'commonName') || signerName;
           signerName = subjCN;
 
-          const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+          const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(leaf)).getBytes();
           const sha256Fingerprint = forge.md.sha256.create().update(certDer).digest().toHex().match(/.{2}/g)?.join(':').toUpperCase() || '';
           const sha1Fingerprint = forge.md.sha1.create().update(certDer).digest().toHex().match(/.{2}/g)?.join(':').toUpperCase() || '';
 
           certInfo = {
             subject: {
               commonName: subjCN,
-              organization: getAttr(cert.subject.attributes, 'organizationName'),
-              organizationalUnit: getAttr(cert.subject.attributes, 'organizationalUnitName'),
-              country: getAttr(cert.subject.attributes, 'countryName'),
-              state: getAttr(cert.subject.attributes, 'stateOrProvinceName'),
-              locality: getAttr(cert.subject.attributes, 'localityName'),
-              emailAddress: getAttr(cert.subject.attributes, 'emailAddress'),
+              organization: getAttr(leaf.subject.attributes, 'organizationName'),
+              organizationalUnit: getAttr(leaf.subject.attributes, 'organizationalUnitName'),
+              country: getAttr(leaf.subject.attributes, 'countryName'),
+              state: getAttr(leaf.subject.attributes, 'stateOrProvinceName'),
+              locality: getAttr(leaf.subject.attributes, 'localityName'),
+              emailAddress: getAttr(leaf.subject.attributes, 'emailAddress'),
             },
             issuer: {
-              commonName: getAttr(cert.issuer.attributes, 'commonName'),
-              organization: getAttr(cert.issuer.attributes, 'organizationName'),
-              country: getAttr(cert.issuer.attributes, 'countryName'),
+              commonName: leaf.issuer.getField('CN')?.value || getAttr(leaf.issuer.attributes, 'commonName'),
+              organization: getAttr(leaf.issuer.attributes, 'organizationName'),
+              country: getAttr(leaf.issuer.attributes, 'countryName'),
             },
             validity: {
-              notBefore: cert.validity.notBefore,
-              notAfter: cert.validity.notAfter,
+              notBefore: leaf.validity.notBefore,
+              notAfter: leaf.validity.notAfter,
             },
-            serialNumber: cert.serialNumber,
-            signatureAlgorithm: cert.siginfo?.algorithmOid || '1.2.840.113549.1.1.11',
+            serialNumber: leaf.serialNumber,
+            signatureAlgorithm: leaf.siginfo?.algorithmOid || '1.2.840.113549.1.1.11',
             sha256Fingerprint,
             sha1Fingerprint,
           };
@@ -398,8 +447,8 @@ export class PdfSignatureEngine {
     // Determine stamp coordinates: use original signature rect or default to bottom-right
     let x = sig.rect?.x ?? (pageWidth - 220);
     let y = sig.rect?.y ?? 60;
-    let width = sig.rect?.width && sig.rect.width > 50 ? sig.rect.width : 200;
-    let height = sig.rect?.height && sig.rect.height > 25 ? sig.rect.height : 60;
+    let width = Math.max(sig.rect?.width ?? 0, 165);
+    let height = Math.max(sig.rect?.height ?? 0, 42);
 
     // Constrain within page bounds
     x = Math.max(10, Math.min(x, pageWidth - width - 10));
