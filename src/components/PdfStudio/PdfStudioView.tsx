@@ -7,10 +7,7 @@ import {
   Upload,
   FileText,
   Sparkles,
-  ArrowRight,
-  ShieldCheck,
-  CheckCircle2,
-  FileCheck
+  ArrowRight
 } from 'lucide-react';
 import { PdfMergeModal } from './PdfMergeModal';
 import { PdfSplitModal } from './PdfSplitModal';
@@ -20,22 +17,25 @@ import { PdfOcrModal } from './PdfOcrModal';
 export const PdfStudioView: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'merge' | 'split' | 'edit' | 'ocr' | null>(null);
   const [droppedFile, setDroppedFile] = useState<File | undefined>(undefined);
+  const [droppedFiles, setDroppedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      setDroppedFile(file);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      setDroppedFiles(files);
+      setDroppedFile(files[0]);
       setActiveModal('edit');
     }
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setDroppedFile(file);
+    if (e.target.files && e.target.files.length > 0) {
+      const files = Array.from(e.target.files);
+      setDroppedFiles(files);
+      setDroppedFile(files[0]);
       setActiveModal('edit');
     }
   };
@@ -96,7 +96,7 @@ export const PdfStudioView: React.FC = () => {
             Omnisize PDF Studio & Reader
           </h2>
           <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 leading-relaxed">
-            Combine documents, split ranges, edit text overlays, stamp photos or signatures, and run multi-page optical OCR on any document length with zero privacy exposure.
+            Combine documents, split ranges, edit text overlays, stamp photos or signatures, and run multi-page optical OCR on any document.
           </p>
         </div>
       </div>
@@ -153,7 +153,7 @@ export const PdfStudioView: React.FC = () => {
       >
         <FileText className="w-10 h-10 mx-auto text-zinc-400 dark:text-zinc-600 mb-2 stroke-1" />
         <p className="text-xs sm:text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Drop any PDF document here to open directly in PDF Studio
+          Drop any PDF document or image here to open directly in PDF Studio
         </p>
         <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1 mb-3">
           Instant visual reading, editing, text overlaying, and optical character extraction
@@ -163,27 +163,12 @@ export const PdfStudioView: React.FC = () => {
           <span>Browse Document</span>
           <input
             type="file"
-            accept="application/pdf,.pdf"
+            multiple
+            accept="application/pdf,.pdf,image/*,.png,.jpg,.jpeg,.webp,.docx,.xlsx,.xls,.csv,.txt,.md"
             className="hidden"
             onChange={handleFileInput}
           />
         </label>
-      </div>
-
-      {/* Feature Highlights */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
-        <div className="flex items-center gap-2 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/40 text-zinc-600 dark:text-zinc-400">
-          <ShieldCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-          <span>Zero cloud uploads, 100% private</span>
-        </div>
-        <div className="flex items-center gap-2 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/40 text-zinc-600 dark:text-zinc-400">
-          <FileCheck className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-          <span>High-fidelity vector PDF preservation</span>
-        </div>
-        <div className="flex items-center gap-2 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/40 text-zinc-600 dark:text-zinc-400">
-          <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-          <span>Desktop & Android file storage integration</span>
-        </div>
       </div>
 
       {/* Modals */}
@@ -196,8 +181,13 @@ export const PdfStudioView: React.FC = () => {
       {activeModal === 'edit' && (
         <PdfEditorModal
           isOpen={true}
-          onClose={() => setActiveModal(null)}
+          onClose={() => {
+            setActiveModal(null);
+            setDroppedFile(undefined);
+            setDroppedFiles([]);
+          }}
           initialFile={droppedFile}
+          initialFiles={droppedFiles}
         />
       )}
       {activeModal === 'ocr' && (

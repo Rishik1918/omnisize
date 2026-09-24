@@ -53,38 +53,141 @@ import { saveFile } from '../../utils/fileSaver';
 import { getDocumentProxy } from 'unpdf';
 import { createPortal } from 'react-dom';
 import { PDFDocument } from 'pdf-lib';
+import { OcrEngine } from '../../services/ocrEngine';
+import { UniversalDocumentLoader } from '../../services/universalDocumentLoader';
 import { PdfOcrModal } from './PdfOcrModal';
 import { SignatureCertificateModal } from './SignatureCertificateModal';
 import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
 import { PdfUnlocker } from '../../services/pdfUnlocker';
 
 export const MS_WORD_FONTS = [
-  'Calibri',
-  'Calibri Light',
-  'Arial',
-  'Arial Black',
-  'Times New Roman',
+  // Microsoft Modern Standard
   'Aptos',
   'Aptos Display',
-  'Georgia',
-  'Cambria',
-  'Garamond',
+  'Aptos Mono',
+  'Aptos Serif',
+  'Calibri',
+  'Calibri Light',
+  // Classic Sans-Serif
+  'Arial',
+  'Arial Black',
+  'Arial Narrow',
+  'Arial Rounded MT Bold',
+  'Bahnschrift',
+  'Century Gothic',
+  'Franklin Gothic Medium',
+  'Franklin Gothic Book',
+  'Franklin Gothic Demi',
+  'Franklin Gothic Heavy',
+  'Gill Sans MT',
+  'Helvetica',
+  'Impact',
+  'Lucida Sans',
+  'Lucida Sans Unicode',
   'Segoe UI',
-  'Verdana',
+  'Segoe UI Semibold',
+  'Segoe UI Light',
+  'Segoe UI Black',
   'Tahoma',
   'Trebuchet MS',
-  'Century Gothic',
+  'Tw Cen MT',
+  'Tw Cen MT Condensed',
+  'Verdana',
+  // Classic Serif & Formal
+  'Times New Roman',
+  'Baskerville Old Face',
+  'Bell MT',
+  'Bodoni MT',
+  'Bodoni MT Black',
   'Book Antiqua',
-  'Palatino Linotype',
+  'Bookman Old Style',
+  'Cambria',
+  'Centaur',
+  'Century Schoolbook',
   'Constantia',
-  'Corbel',
-  'Candara',
-  'Franklin Gothic Medium',
-  'Comic Sans MS',
-  'Courier New',
+  'Didot',
+  'Elephant',
+  'Engravers MT',
+  'Garamond',
+  'Georgia',
+  'Goudy Old Style',
+  'High Tower Text',
+  'Modern No. 20',
+  'Palatino Linotype',
+  'Perpetua',
+  'Rockwell',
+  'Rockwell Condensed',
+  // Coding & Monospace
+  'Cascadia Code',
+  'Cascadia Mono',
   'Consolas',
+  'Courier New',
   'Lucida Console',
-  'Impact',
+  'OCR A Extended',
+  // Display, Script & Calligraphy
+  'Berlin Sans FB',
+  'Bernard MT Condensed',
+  'Blackadder ITC',
+  'Bradley Hand ITC',
+  'Broadway',
+  'Brush Script MT',
+  'Castellar',
+  'Chiller',
+  'Colonna MT',
+  'Comic Sans MS',
+  'Cooper Black',
+  'Copperplate Gothic Bold',
+  'Copperplate Gothic Light',
+  'Curlz MT',
+  'Edwardian Script ITC',
+  'Felix Titling',
+  'Forte',
+  'Freestyle Script',
+  'French Script MT',
+  'Gabriola',
+  'Gigi',
+  'Gloucester MT Extra Condensed',
+  'Haettenschweiler',
+  'Harlow Solid Italic',
+  'Harrington',
+  'Informal Roman',
+  'Jokerman',
+  'Juice ITC',
+  'Kristen ITC',
+  'Kunstler Script',
+  'Lucida Calligraphy',
+  'Lucida Handwriting',
+  'Magneto',
+  'Maiandra GD',
+  'Matura MT Script Capitals',
+  'Mistral',
+  'Monotype Corsiva',
+  'Niagara Engraved',
+  'Niagara Solid',
+  'Old English Text MT',
+  'Onyx',
+  'Palace Script MT',
+  'Papyrus',
+  'Parchment',
+  'Playbill',
+  'Poor Richard',
+  'Pristina',
+  'Rage Italic',
+  'Ravie',
+  'Showcard Gothic',
+  'Snap ITC',
+  'Stencil',
+  'Tempus Sans ITC',
+  'Vivaldi',
+  'Vladimir Script',
+  'Wide Latin',
+  // Modern Sans Web Favorites
+  'Inter',
+  'Roboto',
+  'Open Sans',
+  'Montserrat',
+  'Lato',
+  'Poppins',
   'Symbol'
 ];
 
@@ -92,6 +195,25 @@ interface PdfEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialFile?: File;
+  initialFiles?: File[];
+}
+
+export interface EditorTabItem {
+  id: string;
+  name: string;
+  file: File;
+  modifiedTexts: Record<string, ExistingTextItem>;
+  textOverlays: TextOverlay[];
+  imageOverlays: ImageOverlay[];
+  hyperlinks: HyperlinkOverlay[];
+  pageRotations: Record<number, number>;
+  deletedPages: number[];
+  insertedBlankPages: InsertBlankPageSpec[];
+  currentPage: number;
+  zoomScale: number;
+  history: EditorSnapshot[];
+  historyIndex: number;
+  hasUnsavedEdits: boolean;
 }
 
 interface EditorSnapshot {
@@ -104,11 +226,79 @@ interface EditorSnapshot {
   insertedBlankPages: InsertBlankPageSpec[];
 }
 
-export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile }) => {
+export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile, initialFiles }) => {
   if (!isOpen) return null;
 
-  const [file, setFile] = useState<File | null>(initialFile || null);
-  const [showInitialPrompt, setShowInitialPrompt] = useState<boolean>(!initialFile);
+  const initialTabIdRef = useRef<string>('tab_' + Date.now());
+  const [tabs, setTabs] = useState<EditorTabItem[]>(() => {
+    if (initialFiles && initialFiles.length > 0) {
+      return initialFiles.map((f, i) => ({
+        id: `tab_${Date.now()}_${i}`,
+        name: f.name,
+        file: f,
+        modifiedTexts: {},
+        textOverlays: [],
+        imageOverlays: [],
+        hyperlinks: [],
+        pageRotations: {},
+        deletedPages: [],
+        insertedBlankPages: [],
+        currentPage: 1,
+        zoomScale: 1.0,
+        history: [{
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+        }],
+        historyIndex: 0,
+        hasUnsavedEdits: false,
+      }));
+    }
+    if (initialFile) {
+      return [{
+        id: initialTabIdRef.current,
+        name: initialFile.name,
+        file: initialFile,
+        modifiedTexts: {},
+        textOverlays: [],
+        imageOverlays: [],
+        hyperlinks: [],
+        pageRotations: {},
+        deletedPages: [],
+        insertedBlankPages: [],
+        currentPage: 1,
+        zoomScale: 1.0,
+        history: [{
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+        }],
+        historyIndex: 0,
+        hasUnsavedEdits: false,
+      }];
+    }
+    return [];
+  });
+  const [activeTabId, setActiveTabId] = useState<string>(() => {
+    if (initialFiles && initialFiles.length > 0) return `tab_${Date.now()}_0`;
+    return initialFile ? initialTabIdRef.current : '';
+  });
+  const [tabCloseConfirmTarget, setTabCloseConfirmTarget] = useState<EditorTabItem | null>(null);
+  const [showMultiTabCloseModal, setShowMultiTabCloseModal] = useState<boolean>(false);
+
+  const [file, setFile] = useState<File | null>(() => {
+    if (initialFiles && initialFiles.length > 0) return initialFiles[0];
+    return initialFile || null;
+  });
+  const [showInitialPrompt, setShowInitialPrompt] = useState<boolean>(!initialFile && (!initialFiles || initialFiles.length === 0));
   const [arrayBuffer, setArrayBuffer] = useState<ArrayBuffer | null>(null);
   const [totalPages, setTotalPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1); // 1-indexed
@@ -134,6 +324,82 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Password Protected PDF Prompt
   const [passwordModalFile, setPasswordModalFile] = useState<File | null>(null);
   const [originalSignedBuffer, setOriginalSignedBuffer] = useState<ArrayBuffer | null>(null);
+
+  // Sync initialFile or initialFiles prop changes
+  useEffect(() => {
+    if (initialFiles && initialFiles.length > 0) {
+      const newTabs = initialFiles.map((f, i) => ({
+        id: `tab_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 5)}`,
+        name: f.name,
+        file: f,
+        modifiedTexts: {},
+        textOverlays: [],
+        imageOverlays: [],
+        hyperlinks: [],
+        pageRotations: {},
+        deletedPages: [],
+        insertedBlankPages: [],
+        currentPage: 1,
+        zoomScale: 1.0,
+        history: [{
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+        }],
+        historyIndex: 0,
+        hasUnsavedEdits: false,
+      }));
+      setTabs(newTabs);
+      setActiveTabId(newTabs[0].id);
+      setFile(newTabs[0].file);
+      setShowInitialPrompt(false);
+    } else if (initialFile) {
+      setTabs((prev) => {
+        const exists = prev.find((t) => t.file.name === initialFile.name);
+        if (exists) {
+          setActiveTabId(exists.id);
+          setFile(exists.file);
+          return prev;
+        }
+        const newId = `tab_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
+        setActiveTabId(newId);
+        setFile(initialFile);
+        setShowInitialPrompt(false);
+        return [
+          ...prev,
+          {
+            id: newId,
+            name: initialFile.name,
+            file: initialFile,
+            modifiedTexts: {},
+            textOverlays: [],
+            imageOverlays: [],
+            hyperlinks: [],
+            pageRotations: {},
+            deletedPages: [],
+            insertedBlankPages: [],
+            currentPage: 1,
+            zoomScale: 1.0,
+            history: [{
+              modifiedTexts: {},
+              textOverlays: [],
+              imageOverlays: [],
+              hyperlinks: [],
+              pageRotations: {},
+              deletedPages: [],
+              insertedBlankPages: [],
+            }],
+            historyIndex: 0,
+            hasUnsavedEdits: false,
+          },
+        ];
+      });
+    }
+  }, [initialFile, initialFiles]);
 
   // Lock body overflow when editor is open so background never scrolls
   useEffect(() => {
@@ -206,6 +472,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const pdfProxyRef = useRef<any>(null);
   const filePickerRef = useRef<HTMLInputElement | null>(null);
 
+  // Stable reference to page container frame for 120 FPS GPU transform zooming
+  const pageFrameRef = useRef<HTMLDivElement | null>(null);
+  const zoomScaleRef = useRef<number>(zoomScale);
+  useEffect(() => {
+    zoomScaleRef.current = zoomScale;
+  }, [zoomScale]);
+
+  // Scanned Document OCR in-place editing state
+  const [isOcrScanningPage, setIsOcrScanningPage] = useState<boolean>(false);
+  const [ocrProgressText, setOcrProgressText] = useState<string>('');
+  const [ocrLanguage, setOcrLanguage] = useState<string>('eng+hin');
+  const pageOcrCache = useRef<Record<number, ExistingTextItem[]>>({});
+
   // Check if document has unsaved edits
   const hasUnsavedEdits =
     Object.keys(modifiedTexts).length > 0 ||
@@ -257,6 +536,71 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     ]
   );
 
+  // Auto-populate tabs if a file is loaded but tabs array is empty
+  useEffect(() => {
+    if (file && tabs.length === 0) {
+      const tabId = `tab_${Date.now()}`;
+      setTabs([
+        {
+          id: tabId,
+          name: file.name,
+          file: file,
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+          currentPage: 1,
+          zoomScale: 1.0,
+          history: [{
+            modifiedTexts: {},
+            textOverlays: [],
+            imageOverlays: [],
+            hyperlinks: [],
+            pageRotations: {},
+            deletedPages: [],
+            insertedBlankPages: [],
+          }],
+          historyIndex: 0,
+          hasUnsavedEdits: false,
+        },
+      ]);
+      setActiveTabId(tabId);
+    }
+  }, [file, tabs.length]);
+
+  // Run OCR on current page canvas to extract bounding boxes for in-place editing
+  const handleRunOcrOnCurrentPage = async (lang: string = ocrLanguage) => {
+    if (!canvasRef.current) return;
+    try {
+      setIsOcrScanningPage(true);
+      setOcrProgressText('Initializing OCR optical recognition...');
+
+      const items = await OcrEngine.extractTextBoundingBoxes(
+        canvasRef.current,
+        basePageDims.width,
+        basePageDims.height,
+        lang,
+        currentPage - 1,
+        (pct, status) => {
+          setOcrProgressText(`${status} (${pct}%)`);
+        }
+      );
+
+      pageOcrCache.current[currentPage] = items as ExistingTextItem[];
+      setDetectedTextItems(items as ExistingTextItem[]);
+      setActiveTool('edit-text');
+    } catch (err: any) {
+      console.error('OCR page recognition error:', err);
+      setError('OCR text extraction failed: ' + (err?.message || 'Check document quality'));
+    } finally {
+      setIsOcrScanningPage(false);
+      setOcrProgressText('');
+    }
+  };
+
   // Create Blank Document
   const handleCreateBlankDocument = async () => {
     const doc = await PDFDocument.create();
@@ -264,14 +608,70 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     const pdfBytes = await doc.save();
     const blankBlob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
     const blankFile = new File([blankBlob], 'Blank_Document.pdf', { type: 'application/pdf' });
+    const newId = `tab_${Date.now()}`;
+    const newTab: EditorTabItem = {
+      id: newId,
+      name: blankFile.name,
+      file: blankFile,
+      modifiedTexts: {},
+      textOverlays: [],
+      imageOverlays: [],
+      hyperlinks: [],
+      pageRotations: {},
+      deletedPages: [],
+      insertedBlankPages: [],
+      currentPage: 1,
+      zoomScale: 1.0,
+      history: [{
+        modifiedTexts: {},
+        textOverlays: [],
+        imageOverlays: [],
+        hyperlinks: [],
+        pageRotations: {},
+        deletedPages: [],
+        insertedBlankPages: [],
+      }],
+      historyIndex: 0,
+      hasUnsavedEdits: false,
+    };
+    setTabs([newTab]);
+    setActiveTabId(newId);
     setFile(blankFile);
     setShowInitialPrompt(false);
   };
 
   // Select File from Device
   const handleSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      const selectedFiles = Array.from(e.target.files);
+      const newTabs: EditorTabItem[] = selectedFiles.map((f, i) => ({
+        id: `tab_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 5)}`,
+        name: f.name,
+        file: f,
+        modifiedTexts: {},
+        textOverlays: [],
+        imageOverlays: [],
+        hyperlinks: [],
+        pageRotations: {},
+        deletedPages: [],
+        insertedBlankPages: [],
+        currentPage: 1,
+        zoomScale: 1.0,
+        history: [{
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+        }],
+        historyIndex: 0,
+        hasUnsavedEdits: false,
+      }));
+      setTabs(newTabs);
+      setActiveTabId(newTabs[0].id);
+      setFile(newTabs[0].file);
       setShowInitialPrompt(false);
     }
   };
@@ -331,6 +731,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   useEffect(() => {
     if (!file) return;
     let isMounted = true;
+
+    // Auto-convert non-PDF files (Images, Word docx, Excel xlsx/csv, Text) to high-fidelity PDF
+    const isNonPdf = !file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf';
+    if (isNonPdf) {
+      UniversalDocumentLoader.loadAsPdf(file)
+        .then((convertedPdf) => {
+          if (isMounted) {
+            setFile(convertedPdf);
+            setTabs((prev) =>
+              prev.map((t) => (t.id === activeTabId ? { ...t, file: convertedPdf, name: convertedPdf.name } : t))
+            );
+            setShowInitialPrompt(false);
+          }
+        })
+        .catch((err) => {
+          if (isMounted) {
+            setError('Failed to open document: ' + (err?.message || 'Conversion error'));
+          }
+        });
+      return () => {
+        isMounted = false;
+      };
+    }
 
     file.arrayBuffer().then(async (buf) => {
       if (!isMounted) return;
@@ -473,12 +896,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
           // Extract selectable text elements for the current page
           try {
-            const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
-            if (isMounted) {
-              setDetectedTextItems(textItems);
+            if (pageOcrCache.current[currentPage]) {
+              if (isMounted) {
+                setDetectedTextItems(pageOcrCache.current[currentPage]);
+              }
+            } else {
+              const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
+              if (isMounted) {
+                setDetectedTextItems(textItems);
 
-              // Check page text items for signature timestamp (e.g., Aadhaar Date: 2020.09.11 23:26:28 IST)
-              for (const item of textItems) {
+                // Check page text items for signature timestamp (e.g., Aadhaar Date: 2020.09.11 23:26:28 IST)
+                for (const item of textItems) {
                 const dm = item.originalText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
                 if (dm) {
                   const yr = parseInt(dm[1], 10);
@@ -499,6 +927,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 }
               }
             }
+          }
           } catch (e) {
             console.warn('Text item extraction warning:', e);
           }
@@ -550,6 +979,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       const baseName = file.name.replace(/\.pdf$/i, '');
       await saveFile(editedBlob, `${baseName}_edited.pdf`);
       setSaveSuccess(true);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: false } : t))
+      );
       setTimeout(() => setSaveSuccess(false), 2500);
       return true;
     } catch (err: any) {
@@ -560,17 +992,182 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  // Close Request handler (checks for unsaved edits & autosave)
-  const handleRequestClose = async () => {
-    if (autoSaveEnabled && hasUnsavedEdits) {
-      await handleSave();
+  // Sync window global flag so Electron knows if unsaved edits exist
+  useEffect(() => {
+    const hasUnsaved = hasUnsavedEdits || tabs.some((t) => t.hasUnsavedEdits);
+    (window as any).__hasUnsavedStudioEdits = hasUnsaved;
+    return () => {
+      (window as any).__hasUnsavedStudioEdits = false;
+    };
+  }, [hasUnsavedEdits, tabs]);
+
+  // Switch Active Document Tab
+  const switchTab = (targetTabId: string) => {
+    if (targetTabId === activeTabId) return;
+
+    // Snapshot current active tab state into tabs array
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              file: file!,
+              modifiedTexts,
+              textOverlays,
+              imageOverlays,
+              hyperlinks,
+              pageRotations,
+              deletedPages,
+              insertedBlankPages,
+              currentPage,
+              zoomScale,
+              history,
+              historyIndex,
+              hasUnsavedEdits,
+            }
+          : t
+      )
+    );
+
+    const target = tabs.find((t) => t.id === targetTabId);
+    if (!target) return;
+
+    setActiveTabId(target.id);
+    setFile(target.file);
+    setModifiedTexts(target.modifiedTexts);
+    setTextOverlays(target.textOverlays);
+    setImageOverlays(target.imageOverlays);
+    setHyperlinks(target.hyperlinks);
+    setPageRotations(target.pageRotations);
+    setDeletedPages(target.deletedPages);
+    setInsertedBlankPages(target.insertedBlankPages);
+    setCurrentPage(target.currentPage || 1);
+    setZoomScale(target.zoomScale || 1.0);
+    setHistory(target.history);
+    setHistoryIndex(target.historyIndex);
+    setShowInitialPrompt(false);
+  };
+
+  // Add one or more files as new document tabs
+  const handleAddNewTabFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const selectedFiles = Array.from(e.target.files);
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const rawFile = selectedFiles[i];
+      try {
+        const pdfFile = await UniversalDocumentLoader.loadAsPdf(rawFile);
+        const newTabId = `tab_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`;
+        const newTab: EditorTabItem = {
+          id: newTabId,
+          name: rawFile.name,
+          file: pdfFile,
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+          currentPage: 1,
+          zoomScale: 1.0,
+          history: [{
+            modifiedTexts: {},
+            textOverlays: [],
+            imageOverlays: [],
+            hyperlinks: [],
+            pageRotations: {},
+            deletedPages: [],
+            insertedBlankPages: [],
+          }],
+          historyIndex: 0,
+          hasUnsavedEdits: false,
+        };
+
+        setTabs((prev) => [...prev, newTab]);
+        if (i === selectedFiles.length - 1) {
+          setActiveTabId(newTabId);
+          setFile(pdfFile);
+          setModifiedTexts({});
+          setTextOverlays([]);
+          setImageOverlays([]);
+          setHyperlinks([]);
+          setPageRotations({});
+          setDeletedPages([]);
+          setInsertedBlankPages([]);
+          setCurrentPage(1);
+          setShowInitialPrompt(false);
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Failed to open document.');
+      }
+    }
+    e.target.value = '';
+  };
+
+  // Request close for an individual tab
+  const handleRequestCloseTab = (tabId: string) => {
+    const targetTab = tabs.find((t) => t.id === tabId);
+    if (!targetTab) return;
+
+    const tabHasEdits = tabId === activeTabId ? hasUnsavedEdits : targetTab.hasUnsavedEdits;
+    if (tabHasEdits) {
+      setTabCloseConfirmTarget(targetTab);
+    } else {
+      performCloseTab(tabId);
+    }
+  };
+
+  // Remove tab and switch to adjacent tab
+  const performCloseTab = (tabId: string) => {
+    const remaining = tabs.filter((t) => t.id !== tabId);
+    setTabs(remaining);
+
+    if (remaining.length === 0) {
       onClose();
       return;
     }
+
+    if (tabId === activeTabId) {
+      const nextActive = remaining[0];
+      setActiveTabId(nextActive.id);
+      setFile(nextActive.file);
+      setModifiedTexts(nextActive.modifiedTexts);
+      setTextOverlays(nextActive.textOverlays);
+      setImageOverlays(nextActive.imageOverlays);
+      setHyperlinks(nextActive.hyperlinks);
+      setPageRotations(nextActive.pageRotations);
+      setDeletedPages(nextActive.deletedPages);
+      setInsertedBlankPages(nextActive.insertedBlankPages);
+      setCurrentPage(nextActive.currentPage || 1);
+      setZoomScale(nextActive.zoomScale || 1.0);
+      setHistory(nextActive.history);
+      setHistoryIndex(nextActive.historyIndex);
+    }
+  };
+
+  // Close Request handler (checks for multiple tabs, unsaved edits & autosave)
+  const handleRequestClose = async () => {
+    if (autoSaveEnabled && hasUnsavedEdits) {
+      await handleSave();
+      if (tabs.length > 1) {
+        setShowMultiTabCloseModal(true);
+      } else {
+        onClose();
+      }
+      return;
+    }
+
+    if (tabs.length > 1) {
+      setShowMultiTabCloseModal(true);
+      return;
+    }
+
     if (hasUnsavedEdits) {
       setShowCloseConfirmModal(true);
       return;
     }
+
     onClose();
   };
 
@@ -761,49 +1358,82 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  // Two-Finger Pinch-to-Zoom & Pan Gesture Support (Android & Touch Devices)
-  const touchStartDistRef = useRef<number | null>(null);
-  const touchStartScaleRef = useRef<number>(1);
+  // Two-Finger Pinch-to-Zoom & Pan Gesture Support (High Performance Compositor Driven)
+  const isGesturingRef = useRef<boolean>(false);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
+    let initialDist = 0;
+    let initialScale = 1;
+    let currentRatio = 1;
+
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length === 2) {
-        const dist = Math.hypot(
+        isGesturingRef.current = true;
+        initialDist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        touchStartDistRef.current = dist;
-        touchStartScaleRef.current = zoomScale;
+        initialScale = zoomScaleRef.current;
+        currentRatio = 1;
+        if (pageFrameRef.current) {
+          pageFrameRef.current.style.transition = 'none';
+          pageFrameRef.current.style.willChange = 'transform';
+        }
       }
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length === 2 && touchStartDistRef.current !== null && touchStartDistRef.current > 0) {
+      if (e.touches.length === 2 && initialDist > 0 && isGesturingRef.current) {
         e.preventDefault();
         const dist = Math.hypot(
           e.touches[0].clientX - e.touches[1].clientX,
           e.touches[0].clientY - e.touches[1].clientY
         );
-        const ratio = dist / touchStartDistRef.current;
-        const targetScale = Number((touchStartScaleRef.current * ratio).toFixed(2));
-        setZoomScale(Math.min(4.0, Math.max(0.25, targetScale)));
+        currentRatio = dist / initialDist;
+        const tempScale = initialScale * currentRatio;
+        const clampedScale = Math.min(4.0, Math.max(0.25, tempScale));
+        const visualRatio = clampedScale / initialScale;
+
+        // Apply fast GPU transform scaling on compositor thread with ZERO React re-renders!
+        if (pageFrameRef.current) {
+          pageFrameRef.current.style.transform = `scale(${visualRatio})`;
+          pageFrameRef.current.style.transformOrigin = 'center center';
+        }
       }
     };
 
     const onTouchEnd = (e: TouchEvent) => {
-      if (e.touches.length < 2) {
-        touchStartDistRef.current = null;
+      if (isGesturingRef.current && e.touches.length < 2) {
+        isGesturingRef.current = false;
+        initialDist = 0;
+        if (pageFrameRef.current) {
+          pageFrameRef.current.style.transform = 'none';
+          pageFrameRef.current.style.willChange = 'auto';
+        }
+        const finalScale = Math.min(4.0, Math.max(0.25, Number((initialScale * currentRatio).toFixed(2))));
+        if (Math.abs(finalScale - zoomScaleRef.current) > 0.01) {
+          setZoomScale(finalScale);
+        }
       }
     };
 
+    let wheelTimeout: any = null;
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) {
         e.preventDefault();
         const delta = e.deltaY < 0 ? 0.08 : -0.08;
-        setZoomScale((prev) => Math.min(4.0, Math.max(0.25, Number((prev + delta).toFixed(2)))));
+        const next = Math.min(4.0, Math.max(0.25, Number((zoomScaleRef.current + delta).toFixed(2))));
+        zoomScaleRef.current = next;
+        if (pageFrameRef.current) {
+          pageFrameRef.current.style.transition = 'transform 0.05s ease-out';
+        }
+        if (wheelTimeout) clearTimeout(wheelTimeout);
+        wheelTimeout = setTimeout(() => {
+          setZoomScale(next);
+        }, 50);
       }
     };
 
@@ -819,8 +1449,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchEnd);
       el.removeEventListener('wheel', onWheel);
+      if (wheelTimeout) clearTimeout(wheelTimeout);
     };
-  }, [zoomScale]);
+  }, []);
 
   const modalContent = (
     <div
@@ -836,11 +1467,64 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         zIndex: 999999,
       }}
     >
-      {/* TIER 1: Primary Header Bar (ALWAYS fully visible on Android & Desktop) */}
+      {/* TIER 0: Multi-Document Tab Bar (Always Visible Acrobat / Chrome Style) */}
+      <div className="flex items-center gap-1.5 px-3 sm:px-4 py-2 bg-zinc-950 border-b border-zinc-800 overflow-x-auto no-scrollbar flex-shrink-0 z-30 select-none">
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeTabId;
+          const tabHasEdits = isActive ? hasUnsavedEdits : tab.hasUnsavedEdits;
+          return (
+            <div
+              key={tab.id}
+              onClick={() => switchTab(tab.id)}
+              className={`group flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer max-w-[190px] sm:max-w-[240px] transition-all flex-shrink-0 text-xs ${
+                isActive
+                  ? 'bg-zinc-800 text-white font-medium border border-zinc-700 shadow-xs'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 border border-transparent'
+              }`}
+            >
+              <FileText className={`w-3.5 h-3.5 flex-shrink-0 ${isActive ? 'text-emerald-400' : 'text-zinc-500'}`} />
+              <span className="truncate">{tab.name}</span>
+              {tabHasEdits && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0 animate-pulse" title="Unsaved edits" />
+              )}
+              {tabs.length > 1 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRequestCloseTab(tab.id);
+                  }}
+                  className="p-0.5 rounded-md hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors ml-1"
+                  title="Close Tab"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Add New Tab Button (+) */}
+        <label
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900 border border-dashed border-zinc-800 hover:border-emerald-500/50 cursor-pointer transition-all flex-shrink-0 text-xs font-semibold"
+          title="Open Document in New Tab (PDF, Word, Excel, Images, Text)"
+        >
+          <Plus className="w-4 h-4 text-emerald-400" />
+          <span className="text-[11px] font-medium">New Document</span>
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.docx,.xlsx,.xls,.csv,.txt,.md,application/pdf,image/*"
+            className="hidden"
+            onChange={handleAddNewTabFiles}
+          />
+        </label>
+      </div>
+
+      {/* TIER 1: Primary Header Bar (ALWAYS clean & comfortable on Desktop & Android) */}
       <header
-        className="px-3 sm:px-5 py-2 sm:py-2.5 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0"
+        className="px-3 sm:px-5 py-2.5 sm:py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0"
         style={{
-          paddingTop: 'env(safe-area-inset-top, 0px)',
+          paddingTop: 'max(0.4rem, env(safe-area-inset-top, 0px))',
         }}
       >
         <div className="flex items-center justify-between gap-2 sm:gap-4">
@@ -1076,6 +1760,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           <span>OCR Engine</span>
         </button>
 
+        <button
+          onClick={() => handleRunOcrOnCurrentPage(ocrLanguage)}
+          disabled={isOcrScanningPage}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 shadow-xs"
+          title="Extract text with bounding boxes on current page to make scanned document editable"
+        >
+          {isOcrScanningPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-emerald-500" />}
+          <span>{isOcrScanningPage ? 'Scanning...' : 'OCR to Edit'}</span>
+        </button>
+
         <div className="h-4 w-px bg-zinc-300 dark:bg-zinc-700 flex-shrink-0 mx-1" />
 
         <button
@@ -1125,7 +1819,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             className="px-2 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500"
           >
             {MS_WORD_FONTS.map((font) => (
-              <option key={font} value={font}>
+              <option key={font} value={font} style={{ fontFamily: font }}>
                 {font}
               </option>
             ))}
@@ -1263,10 +1957,23 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         {/* Central Viewport Area */}
         <main
           ref={containerRef}
-          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 relative touch-pan-x touch-pan-y"
-          style={{ WebkitOverflowScrolling: 'touch' }}
+          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 relative"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-x pan-y',
+            overscrollBehavior: 'contain',
+          }}
         >
-          <div className="min-w-full min-h-full w-max h-max p-4 sm:p-8 flex flex-col items-center justify-center m-auto">
+          <div
+            className="w-fit h-fit p-4 sm:p-8 flex flex-col items-center"
+            style={{
+              minWidth: '100%',
+              minHeight: '100%',
+              display: 'flex',
+              justifyContent: 'safe center',
+              alignItems: 'safe center',
+            }}
+          >
             {error && (
               <div className="mb-4 max-w-xl w-full flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
@@ -1274,18 +1981,67 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
             )}
 
-            {/* Active Canvas Page Frame with High-DPI Resolution */}
+            {/* Scanned Document / Image Detected Banner (1-Click OCR & Make Editable) */}
+            {activeTool === 'edit-text' && detectedTextItems.length === 0 && !isRendering && (
+              <div className="mb-4 max-w-2xl w-full flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs shadow-sm">
+                <div className="flex items-center gap-2.5">
+                  <Sparkles className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 animate-pulse" />
+                  <div>
+                    <div className="font-bold text-zinc-900 dark:text-zinc-100">Scanned Document / Image Detected</div>
+                    <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
+                      No digital text layer found. Run OCR to make all text clickable & editable in-place!
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <select
+                    value={ocrLanguage}
+                    onChange={(e) => setOcrLanguage(e.target.value)}
+                    className="px-2 py-1.5 rounded-lg border border-amber-500/30 bg-white dark:bg-zinc-800 text-[11px] font-semibold text-zinc-800 dark:text-zinc-200"
+                  >
+                    <option value="eng+hin">English + Hindi</option>
+                    <option value="eng">English</option>
+                    <option value="hin">Hindi</option>
+                  </select>
+                  <button
+                    onClick={() => handleRunOcrOnCurrentPage(ocrLanguage)}
+                    disabled={isOcrScanningPage}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm active:scale-95 disabled:opacity-50"
+                  >
+                    {isOcrScanningPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    <span>{isOcrScanningPage ? 'Scanning...' : '⚡ OCR & Make Text Editable'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Active Canvas Page Frame with High-DPI Resolution & GPU transform */}
             <div
+              ref={pageFrameRef}
               onClick={handleCanvasClick}
               className="relative bg-white shadow-2xl rounded-xs border border-zinc-300/70 dark:border-zinc-800 select-none flex-shrink-0"
               style={{
                 width: Math.max(100, Math.round((basePageDims.width || 595) * zoomScale)),
                 height: Math.max(100, Math.round((basePageDims.height || 842) * zoomScale)),
                 cursor: activeTool === 'add-text' ? 'crosshair' : activeTool === 'add-link' ? 'pointer' : 'default',
+                transformOrigin: 'center center',
               }}
             >
               {/* High-DPI Supersampled Canvas (Razor-Sharp) */}
               <canvas ref={canvasRef} className="block w-full h-full pointer-events-none" />
+
+              {/* OCR Scanning Overlay */}
+              {isOcrScanningPage && (
+                <div className="absolute inset-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xs flex flex-col items-center justify-center z-50 rounded space-y-2 p-4 text-center">
+                  <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                  <div className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
+                    Optical Character Recognition in Progress
+                  </div>
+                  <div className="text-[11px] text-zinc-500 font-mono">
+                    {ocrProgressText || 'Extracting words and layout...'}
+                  </div>
+                </div>
+              )}
 
             {/* In-Place Interactive Existing Text Bounding Boxes (Edit Text Mode) */}
             {activeTool === 'edit-text' &&
@@ -1678,7 +2434,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <input
               ref={filePickerRef}
               type="file"
-              accept="application/pdf,.pdf"
+              multiple
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.docx,.xlsx,.xls,.csv,.txt,.md,application/pdf,image/*"
               onChange={handleSelectFile}
               className="hidden"
             />
@@ -1731,6 +2488,112 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   onClose();
                 }}
                 className="w-full sm:w-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-sm active:scale-95"
+              >
+                Save & Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Multi-Tab Close Choice Modal */}
+      {showMultiTabCloseModal && (
+        <div className="fixed inset-0 z-[9999999] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in select-none">
+          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">
+                <FileText className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                  Multiple Documents Open ({tabs.length} Tabs)
+                </h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  Do you want to close all open document tabs or close only the current active tab?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setShowMultiTabCloseModal(false);
+                  handleRequestCloseTab(activeTabId);
+                }}
+                className="w-full py-2.5 px-4 text-xs font-semibold rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 transition-colors text-center"
+              >
+                Close Current Tab Only
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowMultiTabCloseModal(false);
+                  const anyUnsaved = tabs.some((t) => t.hasUnsavedEdits) || hasUnsavedEdits;
+                  if (anyUnsaved) {
+                    setShowCloseConfirmModal(true);
+                  } else {
+                    onClose();
+                  }
+                }}
+                className="w-full py-2.5 px-4 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-500 text-white transition-colors text-center shadow-xs"
+              >
+                Close All Tabs
+              </button>
+
+              <button
+                onClick={() => setShowMultiTabCloseModal(false)}
+                className="w-full py-2 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 text-center"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Single Tab Unsaved Edits Confirmation Modal */}
+      {tabCloseConfirmTarget && (
+        <div className="fixed inset-0 z-[9999999] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in select-none">
+          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex-shrink-0">
+                <AlertCircle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                  Save Changes to "{tabCloseConfirmTarget.name}"?
+                </h3>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
+                  This document has unsaved edits. If you close without saving, your changes will be discarded.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-2 sm:justify-end">
+              <button
+                onClick={() => setTabCloseConfirmTarget(null)}
+                className="px-4 py-2 text-xs font-medium rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const id = tabCloseConfirmTarget.id;
+                  setTabCloseConfirmTarget(null);
+                  performCloseTab(id);
+                }}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 transition-colors"
+              >
+                Don't Save
+              </button>
+              <button
+                onClick={async () => {
+                  const id = tabCloseConfirmTarget.id;
+                  setTabCloseConfirmTarget(null);
+                  await handleSave();
+                  performCloseTab(id);
+                }}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shadow-xs"
               >
                 Save & Close
               </button>

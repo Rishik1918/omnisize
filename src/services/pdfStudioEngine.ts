@@ -8,6 +8,7 @@ import {
   PDFFont
 } from 'pdf-lib';
 import { getDocumentProxy } from 'unpdf';
+import { UniversalDocumentLoader } from './universalDocumentLoader';
 
 export interface TextOverlay {
   id: string;
@@ -152,7 +153,17 @@ export class PdfStudioEngine {
     onProgress?: (pct: number) => void
   ): Promise<Blob> {
     onProgress?.(10);
-    const buffer = (await file.arrayBuffer()).slice(0);
+
+    // CRITICAL: Ensure document is a valid PDF before passing to pdf-lib
+    // If the user modified a non-PDF tab (Images, DOCX, XLSX, TXT), convert it first
+    let pdfFile: File | Blob = file;
+    const isPdf =
+      ((file as File).name?.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf');
+    if (!isPdf && (file instanceof File || file instanceof Blob)) {
+      pdfFile = await UniversalDocumentLoader.loadAsPdf(file as File);
+    }
+
+    const buffer = (await pdfFile.arrayBuffer()).slice(0);
     const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
 
     // Pre-embed standard font combinations for precise matching
@@ -173,7 +184,7 @@ export class PdfStudioEngine {
 
     const selectFont = (family?: string, isBold?: boolean, isItalic?: boolean): PDFFont => {
       const fam = (family || 'Helvetica').toLowerCase();
-      // Serif MS Word fonts -> Times Roman family
+      // Complete MS Word Serif Families -> Times Roman
       if (
         fam.includes('times') ||
         fam.includes('roman') ||
@@ -185,27 +196,39 @@ export class PdfStudioEngine {
         fam.includes('palatino') ||
         fam.includes('constantia') ||
         fam.includes('book antiqua') ||
+        fam.includes('bookman') ||
+        fam.includes('century schoolbook') ||
         fam.includes('didot') ||
-        fam.includes('rockwell')
+        fam.includes('rockwell') ||
+        fam.includes('bell mt') ||
+        fam.includes('bodoni') ||
+        fam.includes('centaur') ||
+        fam.includes('elephant') ||
+        fam.includes('goudy') ||
+        fam.includes('high tower') ||
+        fam.includes('perpetua') ||
+        fam.includes('poor richard')
       ) {
         if (isBold && isItalic) return fontTimesBoldItalic;
         if (isBold) return fontTimesBold;
         if (isItalic) return fontTimesItalic;
         return fontTimes;
       }
-      // Monospaced MS Word fonts -> Courier family
+      // Complete MS Word Monospaced Families -> Courier
       if (
         fam.includes('courier') ||
         fam.includes('mono') ||
         fam.includes('consolas') ||
-        fam.includes('lucida console')
+        fam.includes('cascadia') ||
+        fam.includes('lucida console') ||
+        fam.includes('ocr a')
       ) {
         if (isBold && isItalic) return fontCourierBoldItalic;
         if (isBold) return fontCourierBold;
         if (isItalic) return fontCourierItalic;
         return fontCourier;
       }
-      // Sans-serif MS Word fonts -> Helvetica family (Calibri, Arial, Segoe UI, Verdana, Tahoma, Trebuchet, Century Gothic, Impact, etc.)
+      // Complete MS Word Sans-Serif, Display, & Script Families -> Helvetica
       if (isBold && isItalic) return fontHelveticaBoldItalic;
       if (isBold) return fontHelveticaBold;
       if (isItalic) return fontHelveticaItalic;
@@ -397,8 +420,15 @@ export class PdfStudioEngine {
     const page = await proxy.getPage(pageNumber);
     // Base viewport at the requested display zoom scale
     const viewport = page.getViewport({ scale });
-    // Supersampled viewport at device pixel ratio to render vector-sharp text
-    const supersampledViewport = page.getViewport({ scale: scale * dpr });
+
+    // Safety clamp: Ensure supersampled canvas never exceeds browser/GPU max texture dimension (4096px)
+    // or total pixel area, which would cause Chrome/WebView to fail allocation and render blank white!
+    const MAX_CANVAS_DIM = 4096;
+    let effectiveDpr = dpr;
+    if (viewport.width * effectiveDpr > MAX_CANVAS_DIM || viewport.height * effectiveDpr > MAX_CANVAS_DIM) {
+      effectiveDpr = Math.min(MAX_CANVAS_DIM / viewport.width, MAX_CANVAS_DIM / viewport.height);
+    }
+    const supersampledViewport = page.getViewport({ scale: scale * effectiveDpr });
 
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(supersampledViewport.width);

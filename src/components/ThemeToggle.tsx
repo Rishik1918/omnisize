@@ -25,18 +25,16 @@ export const ThemeToggle: React.FC<{ compact?: boolean }> = ({ compact = false }
         type="button"
         onClick={() => setMenuOpen(!menuOpen)}
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs font-medium transition-all shadow-sm active:scale-95"
-        title={`Theme: ${mode.toUpperCase()} (${isDark ? 'Dark UI active' : 'Light UI active'})`}
+        title={`Theme: ${isDark ? 'Dark Mode' : 'Light Mode'}${mode === 'sunset' ? ' (Sunset Auto)' : ''}`}
       >
-        {mode === 'sunset' ? (
-          <Sunset className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-        ) : isDark ? (
+        {isDark ? (
           <Moon className="w-3.5 h-3.5 text-indigo-400" />
         ) : (
           <Sun className="w-3.5 h-3.5 text-amber-500" />
         )}
         {!compact && (
           <span className="capitalize hidden sm:inline-block">
-            {mode === 'sunset' ? 'Sunset' : mode}
+            {isDark ? 'Dark Mode' : 'Light Mode'}
           </span>
         )}
       </button>

@@ -112,7 +112,15 @@ export default function App() {
 
       if (typeof electronAPI.onRequestAppClose === 'function') {
         unsubClose = electronAPI.onRequestAppClose(() => {
-          setShowDesktopCloseModal(true);
+          const hasActiveJobs = items.some((i) => i.status === 'processing');
+          const hasUnsavedEdits = Boolean((window as any).__hasUnsavedStudioEdits);
+
+          if (hasActiveJobs || hasUnsavedEdits) {
+            setShowDesktopCloseModal(true);
+          } else {
+            // Close immediately with zero prompt when no active processing or unsaved edits
+            electronAPI.confirmAppClose?.();
+          }
         });
       }
 
@@ -374,12 +382,9 @@ export default function App() {
         }}
       />
 
-      <footer className="border-t border-zinc-800/80 py-4 text-center text-xs text-zinc-500 mb-14 sm:mb-0">
-        <div className="max-w-5xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px]">
-          <span>Omnisize • Studio & Universal Converter</span>
-          <span className="text-zinc-400">
-            100% Client-Side • Zero External Server Uploads
-          </span>
+      <footer className="border-t border-zinc-200 dark:border-zinc-800/80 py-4 text-center text-xs text-zinc-500 mb-14 sm:mb-0">
+        <div className="max-w-5xl mx-auto px-4 flex items-center justify-between text-[11px]">
+          <span>Omnisize</span>
         </div>
       </footer>
 

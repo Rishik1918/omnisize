@@ -46,6 +46,7 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
   const [extractedText, setExtractedText] = useState<string>('');
   const [pageResults, setPageResults] = useState<OcrPageResult[]>([]);
   const [activePageTab, setActivePageTab] = useState<number>(1);
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('eng+hin');
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [passwordModalFile, setPasswordModalFile] = useState<File | null>(null);
@@ -74,12 +75,12 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
       const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
 
       if (isPdf) {
-        const res = await OcrEngine.runOcrOnPdf(file, undefined, (p) => setProgress(p));
+        const res = await OcrEngine.runOcrOnPdf(file, undefined, selectedLanguage, (p) => setProgress(p));
         setExtractedText(res.fullText);
         setPageResults(res.pages);
         if (res.pages.length > 0) setActivePageTab(res.pages[0].pageNumber);
       } else {
-        const text = await OcrEngine.runOcrOnImage(file, (p) => setProgress(p));
+        const text = await OcrEngine.runOcrOnImage(file, selectedLanguage, (p) => setProgress(p));
         setExtractedText(text);
         setPageResults([{ pageNumber: 1, text, confidence: 95 }]);
         setActivePageTab(1);
@@ -155,7 +156,6 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
       const ocrFile = new File([pdfBlob], `${baseName}_ocr.pdf`, { type: 'application/pdf' });
       if (onOpenInEditor) {
         onOpenInEditor(ocrFile);
-        onClose();
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to open in editor.');
@@ -239,6 +239,29 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
                   Change
                 </button>
               )}
+            </div>
+          )}
+
+          {file && !isProcessing && (
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-center gap-2">
+                <FileType className="w-4 h-4 text-emerald-500" />
+                <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                  Recognition Language:
+                </span>
+              </div>
+              <select
+                value={selectedLanguage}
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                className="text-xs font-medium bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-lg px-2.5 py-1 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="eng+hin">Bilingual (English + Hindi / हिंदी)</option>
+                <option value="eng">English Only</option>
+                <option value="hin">Hindi Only (हिंदी)</option>
+                <option value="eng+spa">English + Spanish</option>
+                <option value="eng+fra">English + French</option>
+                <option value="eng+deu">English + German</option>
+              </select>
             </div>
           )}
 

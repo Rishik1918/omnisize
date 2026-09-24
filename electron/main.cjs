@@ -68,7 +68,7 @@ function createWindow() {
     height: 820,
     minWidth: 850,
     minHeight: 600,
-    title: 'Omnisize | Zero-Trust Media Compressor & Studio',
+    title: 'Omnisize',
     icon: path.join(__dirname, 'icon.ico'),
     backgroundColor: '#020617',
     autoHideMenuBar: true,
