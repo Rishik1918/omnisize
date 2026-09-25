@@ -49,6 +49,8 @@ export interface ExistingTextItem {
   fontFamily?: 'Helvetica' | 'TimesRoman' | 'Courier' | string;
   isBold?: boolean;
   isItalic?: boolean;
+  isUnderline?: boolean;
+  alignment?: 'left' | 'center' | 'right';
   color?: string;
   backgroundColor?: { r: number; g: number; b: number };
   isModified?: boolean;
@@ -187,9 +189,8 @@ export class PdfStudioEngine {
       const fam = (family || 'Helvetica').toLowerCase();
       // Complete MS Word Serif Families -> Times Roman
       if (
-        fam.includes('times') ||
+        (fam.includes('times') ||
         fam.includes('roman') ||
-        fam.includes('serif') ||
         fam.includes('cambria') ||
         fam.includes('georgia') ||
         fam.includes('garamond') ||
@@ -208,7 +209,9 @@ export class PdfStudioEngine {
         fam.includes('goudy') ||
         fam.includes('high tower') ||
         fam.includes('perpetua') ||
-        fam.includes('poor richard')
+        fam.includes('poor richard') ||
+        fam.includes('serif')) &&
+        !fam.includes('sans')
       ) {
         if (isBold && isItalic) return fontTimesBoldItalic;
         if (isBold) return fontTimesBold;
@@ -238,19 +241,20 @@ export class PdfStudioEngine {
 
     onProgress?.(25);
 
-    // 0. Apply Existing Text Replacements (erases original bounding box with white cover, redraws matching font & weight)
+    // 0. Apply Existing Text Replacements (erases original bounding box with sampled cover, redraws matching font, weight, style & alignment)
     if (payload.textReplacements && payload.textReplacements.length > 0) {
       for (const rep of payload.textReplacements) {
         if (!rep.isModified && rep.currentText === rep.originalText) continue;
         if (rep.pageIndex >= 0 && rep.pageIndex < doc.getPageCount()) {
           const page = doc.getPage(rep.pageIndex);
           const chosenFont = selectFont(rep.fontFamily, rep.isBold, rep.isItalic);
+          const size = rep.fontSize || 12;
 
-          // Erase old text bounding box with white background rectangle
-          const padY = Math.max(2, rep.fontSize * 0.22);
+          // Erase old text bounding box with sampled background color
+          const padY = Math.max(2, size * 0.22);
           const eraseY = Math.max(0, rep.y - padY);
           const eraseHeight = rep.height + padY * 1.5;
-          const eraseWidth = Math.max(rep.width + 4, rep.currentText.length * rep.fontSize * 0.7);
+          const eraseWidth = Math.max(rep.width + 6, rep.currentText.length * size * 0.7);
 
           const bg = rep.backgroundColor || { r: 1, g: 1, b: 1 };
           page.drawRectangle({
@@ -261,16 +265,34 @@ export class PdfStudioEngine {
             color: rgb(bg.r, bg.g, bg.b),
           });
 
-          // Draw replacement text matching original coordinates, font, size & weight
+          // Draw replacement text matching original coordinates, font, size, weight & alignment
           if (rep.currentText.trim().length > 0) {
             const textColor = rep.color ? this.parseHexColor(rep.color) : rgb(0.05, 0.05, 0.05);
+            let posX = rep.x;
+            if (rep.alignment === 'center' || rep.alignment === 'right') {
+              const measuredWidth = chosenFont.widthOfTextAtSize(rep.currentText, size);
+              if (rep.alignment === 'center') posX += Math.max(0, (rep.width - measuredWidth) / 2);
+              else if (rep.alignment === 'right') posX += Math.max(0, rep.width - measuredWidth);
+            }
+
             page.drawText(rep.currentText, {
-              x: rep.x,
+              x: posX,
               y: rep.y,
-              size: rep.fontSize || 12,
+              size,
               font: chosenFont,
               color: textColor,
             });
+
+            // Underline if enabled
+            if (rep.isUnderline) {
+              const textWidth = chosenFont.widthOfTextAtSize(rep.currentText, size);
+              page.drawLine({
+                start: { x: posX, y: rep.y - 1.5 },
+                end: { x: posX + textWidth, y: rep.y - 1.5 },
+                thickness: Math.max(0.75, size * 0.06),
+                color: textColor,
+              });
+            }
           }
         }
       }
@@ -477,36 +499,118 @@ export class PdfStudioEngine {
         const item: any = textContent.items[i];
         if (!item.str || !item.str.trim()) continue;
 
-        const fontSize = Math.round(Math.hypot(item.transform[0], item.transform[1])) || 12;
+        const hSize = Math.abs(item.transform[3]) || 0;
+        const wSize = Math.abs(item.transform[0]) || 0;
+        const fontSize = Math.round(Math.max(hSize, wSize)) || Math.round(Math.hypot(item.transform[0], item.transform[1])) || 12;
         const x = item.transform[4];
         const y = item.transform[5];
         const width = item.width || Math.max(10, item.str.length * fontSize * 0.55);
         const height = item.height || fontSize;
 
-        // Font style and weight detection
-        const fontName = (item.fontName || '').toLowerCase();
+        // Accurate Font style, family, and weight detection
+        let resolvedFontName = (item.fontName || '').toLowerCase();
+        let isBold = false;
+        let isItalic = false;
+
+        try {
+          const fontObj = page.commonObjs?.get?.(item.fontName) || (page as any).objs?.get?.(item.fontName);
+          if (fontObj) {
+            if (fontObj.name) resolvedFontName = fontObj.name.toLowerCase();
+            else if (fontObj.loadedName) resolvedFontName = fontObj.loadedName.toLowerCase();
+            else if (fontObj.fallbackName) resolvedFontName = fontObj.fallbackName.toLowerCase();
+
+            if (fontObj.bold || fontObj.black || (fontObj.weight && fontObj.weight >= 600)) {
+              isBold = true;
+            }
+          }
+        } catch {}
+
         const fontStyle = textContent.styles ? textContent.styles[item.fontName] : null;
         const styleFamily = (fontStyle?.fontFamily || '').toLowerCase();
 
-        const isBold = fontName.includes('bold') ||
-          fontName.includes('black') ||
-          fontName.includes('heavy') ||
-          fontName.includes('semibold') ||
-          fontName.includes('medium') ||
-          (fontStyle?.fontWeight && (fontStyle.fontWeight === 'bold' || fontStyle.fontWeight >= 600));
-
-        const isItalic = fontName.includes('italic') ||
-          fontName.includes('oblique') ||
-          fontStyle?.fontStyle === 'italic';
-
-        let fontFamily: 'Helvetica' | 'TimesRoman' | 'Courier' = 'Helvetica';
-        if (fontName.includes('times') || fontName.includes('roman') || styleFamily.includes('serif')) {
-          fontFamily = 'TimesRoman';
-        } else if (fontName.includes('courier') || fontName.includes('mono') || styleFamily.includes('monospace')) {
-          fontFamily = 'Courier';
-        } else {
-          fontFamily = 'Helvetica';
+        if (
+          !isBold && (
+            resolvedFontName.includes('bold') ||
+            resolvedFontName.includes('black') ||
+            resolvedFontName.includes('heavy') ||
+            resolvedFontName.includes('semibold') ||
+            resolvedFontName.includes('medium') ||
+            resolvedFontName.includes('-b') ||
+            (fontStyle?.fontWeight && (fontStyle.fontWeight === 'bold' || fontStyle.fontWeight >= 600))
+          )
+        ) {
+          isBold = true;
         }
+
+        if (
+          resolvedFontName.includes('italic') ||
+          resolvedFontName.includes('oblique') ||
+          resolvedFontName.includes('-i') ||
+          fontStyle?.fontStyle === 'italic'
+        ) {
+          isItalic = true;
+        }
+
+        const isSans =
+          resolvedFontName.includes('calibri') ||
+          resolvedFontName.includes('arial') ||
+          resolvedFontName.includes('helvetica') ||
+          resolvedFontName.includes('aptos') ||
+          resolvedFontName.includes('segoe') ||
+          resolvedFontName.includes('tahoma') ||
+          resolvedFontName.includes('trebuchet') ||
+          resolvedFontName.includes('verdana') ||
+          resolvedFontName.includes('inter') ||
+          resolvedFontName.includes('roboto') ||
+          resolvedFontName.includes('lato') ||
+          resolvedFontName.includes('poppins') ||
+          resolvedFontName.includes('montserrat') ||
+          resolvedFontName.includes('century gothic') ||
+          resolvedFontName.includes('franklin') ||
+          resolvedFontName.includes('gill') ||
+          styleFamily.includes('sans');
+
+        const isMono =
+          resolvedFontName.includes('courier') ||
+          resolvedFontName.includes('mono') ||
+          resolvedFontName.includes('consolas') ||
+          resolvedFontName.includes('cascadia') ||
+          resolvedFontName.includes('lucida console') ||
+          resolvedFontName.includes('ocr') ||
+          styleFamily.includes('mono');
+
+        const isSerif =
+          !isSans && (
+            resolvedFontName.includes('times') ||
+            resolvedFontName.includes('roman') ||
+            resolvedFontName.includes('cambria') ||
+            resolvedFontName.includes('georgia') ||
+            resolvedFontName.includes('garamond') ||
+            resolvedFontName.includes('baskerville') ||
+            resolvedFontName.includes('palatino') ||
+            resolvedFontName.includes('century') ||
+            resolvedFontName.includes('bookman') ||
+            resolvedFontName.includes('bodoni') ||
+            resolvedFontName.includes('didot') ||
+            (styleFamily.includes('serif') && !styleFamily.includes('sans'))
+          );
+
+        let fontFamily = 'Calibri';
+        if (resolvedFontName.includes('arial')) fontFamily = 'Arial';
+        else if (resolvedFontName.includes('calibri')) fontFamily = 'Calibri';
+        else if (resolvedFontName.includes('aptos')) fontFamily = 'Aptos';
+        else if (resolvedFontName.includes('segoe')) fontFamily = 'Segoe UI';
+        else if (resolvedFontName.includes('georgia')) fontFamily = 'Georgia';
+        else if (resolvedFontName.includes('cambria')) fontFamily = 'Cambria';
+        else if (resolvedFontName.includes('consolas')) fontFamily = 'Consolas';
+        else if (resolvedFontName.includes('courier')) fontFamily = 'Courier New';
+        else if (resolvedFontName.includes('verdana')) fontFamily = 'Verdana';
+        else if (resolvedFontName.includes('tahoma')) fontFamily = 'Tahoma';
+        else if (resolvedFontName.includes('trebuchet')) fontFamily = 'Trebuchet MS';
+        else if (resolvedFontName.includes('helvetica')) fontFamily = 'Helvetica';
+        else if (isSerif) fontFamily = 'Times New Roman';
+        else if (isMono) fontFamily = 'Courier New';
+        else fontFamily = 'Calibri';
 
         items.push({
           id: `txt_${pageIndex}_${i}_${Math.round(x)}_${Math.round(y)}`,

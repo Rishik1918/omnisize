@@ -35,7 +35,8 @@ import {
   AlertTriangle,
   FolderOpen,
   FilePlus,
-  Sparkles
+  Sparkles,
+  Eye
 } from 'lucide-react';
 import {
   PdfStudioEngine,
@@ -274,6 +275,18 @@ const sampleCanvasBgColor = (
   return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
 };
 
+export const resolveCssFontFamily = (family?: string): string => {
+  if (!family) return `'Calibri', 'Segoe UI', Arial, sans-serif`;
+  const fam = family.toLowerCase();
+  if (fam.includes('times') || fam.includes('roman') || (fam.includes('serif') && !fam.includes('sans'))) {
+    return `'Times New Roman', Cambria, Georgia, serif`;
+  }
+  if (fam.includes('courier') || fam.includes('mono') || fam.includes('consolas')) {
+    return `'Courier New', Consolas, monospace`;
+  }
+  return `'${family}', Calibri, 'Segoe UI', Arial, sans-serif`;
+};
+
 export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile, initialFiles }) => {
   if (!isOpen) return null;
 
@@ -353,7 +366,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [activeTool, setActiveTool] = useState<
     'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image'
-  >('edit-text');
+  >('view');
 
   // Digital Signature & Certificate State
   const [signatures, setSignatures] = useState<PdfSignatureInfo[]>([]);
@@ -470,6 +483,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [detectedTextItems, setDetectedTextItems] = useState<ExistingTextItem[]>([]);
   const [activeEditingId, setActiveEditingId] = useState<string | null>(null);
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  const [selectedTextItemId, setSelectedTextItemId] = useState<string | null>(null);
 
   // Edit operations state
   const [modifiedTexts, setModifiedTexts] = useState<Record<string, ExistingTextItem>>({});
@@ -489,6 +503,32 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [isUnderline, setIsUnderline] = useState<boolean>(false);
   const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   const [textColor, setTextColor] = useState<string>('#000000');
+
+  // Update properties on the currently selected or active text item in-place
+  const updateActiveTextItemProps = useCallback(
+    (patch: Partial<ExistingTextItem>) => {
+      const targetId = activeEditingId || selectedTextItemId;
+      if (!targetId) return;
+
+      const originalItem = detectedTextItems.find((t) => t.id === targetId);
+      if (!originalItem) return;
+
+      setModifiedTexts((prev) => {
+        const existing = prev[targetId] || { ...originalItem, isModified: true };
+        const updated: ExistingTextItem = {
+          ...existing,
+          ...patch,
+          isModified: true,
+        };
+        return { ...prev, [targetId]: updated };
+      });
+
+      setDetectedTextItems((prev) =>
+        prev.map((t) => (t.id === targetId ? { ...t, ...patch } : t))
+      );
+    },
+    [activeEditingId, selectedTextItemId, detectedTextItems]
+  );
 
   // Link tool state
   const [pendingUrl, setPendingUrl] = useState<string>('https://');
@@ -1501,6 +1541,152 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     };
   }, []);
 
+  // Desktop Global Keyboard Shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E, Ctrl+L, Ctrl+R, Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+S, Ctrl+P)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isCtrlOrMeta = e.ctrlKey || e.metaKey;
+
+      // Undo: Ctrl+Z (without shift)
+      if (isCtrlOrMeta && !e.shiftKey && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+
+      // Redo: Ctrl+Y or Ctrl+Shift+Z
+      if ((isCtrlOrMeta && e.key.toLowerCase() === 'y') || (isCtrlOrMeta && e.shiftKey && e.key.toLowerCase() === 'z')) {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+
+      // Save: Ctrl+S
+      if (isCtrlOrMeta && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSave();
+        return;
+      }
+
+      // Print: Ctrl+P
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        handlePrint();
+        return;
+      }
+
+      // Bold: Ctrl+B
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        const next = !isBold;
+        setIsBold(next);
+        updateActiveTextItemProps({ isBold: next });
+        return;
+      }
+
+      // Italic: Ctrl+I
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'i') {
+        e.preventDefault();
+        const next = !isItalic;
+        setIsItalic(next);
+        updateActiveTextItemProps({ isItalic: next });
+        return;
+      }
+
+      // Underline: Ctrl+U
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'u') {
+        e.preventDefault();
+        const next = !isUnderline;
+        setIsUnderline(next);
+        updateActiveTextItemProps({ isUnderline: next });
+        return;
+      }
+
+      // Align Center: Ctrl+E
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'e') {
+        e.preventDefault();
+        setAlignment('center');
+        updateActiveTextItemProps({ alignment: 'center' });
+        return;
+      }
+
+      // Align Left: Ctrl+L
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setAlignment('left');
+        updateActiveTextItemProps({ alignment: 'left' });
+        return;
+      }
+
+      // Align Right: Ctrl+R
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        setAlignment('right');
+        updateActiveTextItemProps({ alignment: 'right' });
+        return;
+      }
+
+      // Cut: Ctrl+X (when text selected or item active)
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'x') {
+        const activeItem = activeEditingId || selectedTextItemId;
+        const tag = (document.activeElement?.tagName || '').toLowerCase();
+        if (activeItem && tag !== 'input' && tag !== 'textarea') {
+          e.preventDefault();
+          const currentVal =
+            modifiedTexts[activeItem]?.currentText ??
+            detectedTextItems.find((t) => t.id === activeItem)?.originalText ??
+            '';
+          navigator.clipboard?.writeText(currentVal);
+          updateActiveTextItemProps({ currentText: '', isModified: true });
+          return;
+        }
+      }
+
+      // Delete item when selected and not typing in an input
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (selectedOverlayId || selectedTextItemId)) {
+        const tag = (document.activeElement?.tagName || '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') {
+          e.preventDefault();
+          if (selectedOverlayId) {
+            setTextOverlays((prev) => prev.filter((t) => t.id !== selectedOverlayId));
+            setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
+            setHyperlinks((prev) => prev.filter((h) => h.id !== selectedOverlayId));
+            setSelectedOverlayId(null);
+          } else if (selectedTextItemId) {
+            updateActiveTextItemProps({ currentText: '', isModified: true });
+          }
+          return;
+        }
+      }
+
+      // Escape: clear selection / cancel edit
+      if (e.key === 'Escape') {
+        setActiveEditingId(null);
+        setSelectedTextItemId(null);
+        setSelectedOverlayId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+    };
+  }, [
+    isOpen,
+    isBold,
+    isItalic,
+    isUnderline,
+    activeEditingId,
+    selectedTextItemId,
+    selectedOverlayId,
+    detectedTextItems,
+    modifiedTexts,
+    handleUndo,
+    handleRedo,
+    updateActiveTextItemProps,
+  ]);
+
   const modalContent = (
     <div
       className="fixed inset-0 z-[999999] bg-slate-100 dark:bg-zinc-950 flex flex-col w-screen h-screen select-none overflow-hidden m-0 p-0"
@@ -1734,24 +1920,51 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       {/* TIER 2: Scrollable Mobile & Desktop Tools Strip */}
       <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar px-3 py-1.5 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 text-xs flex-shrink-0">
         <button
-          onClick={() => setActiveTool('edit-text')}
+          onClick={() => {
+            setActiveTool('view');
+            setActiveEditingId(null);
+            setSelectedTextItemId(null);
+            setSelectedOverlayId(null);
+          }}
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
+            activeTool === 'view'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
+          }`}
+          title="Read Mode - Pristine viewing without edit bounding boxes"
+        >
+          <Eye className="w-3.5 h-3.5" />
+          <span>Read Mode</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTool('edit-text');
+            setSelectedOverlayId(null);
+          }}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
             activeTool === 'edit-text'
               ? 'bg-indigo-600 text-white shadow-xs'
               : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
           }`}
+          title="Edit Text - Click any text on page to edit in-place naturally"
         >
           <Edit3 className="w-3.5 h-3.5" />
           <span>Edit Text</span>
         </button>
 
         <button
-          onClick={() => setActiveTool('add-text')}
+          onClick={() => {
+            setActiveTool('add-text');
+            setActiveEditingId(null);
+            setSelectedTextItemId(null);
+          }}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
             activeTool === 'add-text'
               ? 'bg-indigo-600 text-white shadow-xs'
               : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
           }`}
+          title="Add Text - Insert new formatted text anywhere on document"
         >
           <Type className="w-3.5 h-3.5" />
           <span>Add Text</span>
@@ -1849,111 +2062,246 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         </button>
       </div>
 
-      {/* TIER 3: Rich MS Word Font Selection & Styling Bar (When 'Add Text' is Active) */}
-      {activeTool === 'add-text' && (
-        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-50/50 dark:bg-zinc-900 border-b border-indigo-500/20 text-xs z-20 flex-shrink-0 animate-fade-in overflow-x-auto no-scrollbar">
-          <input
-            type="text"
-            value={textValue}
-            onChange={(e) => setTextValue(e.target.value)}
-            placeholder="Type text to place..."
-            className="px-2.5 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs w-36 sm:w-52 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+      {/* TIER 3: High-Contrast MS Word Formatting Bar (Active for both 'Edit Text' and 'Add Text') */}
+      {(activeTool === 'edit-text' || activeTool === 'add-text') && (
+        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-1.5 bg-slate-100 dark:bg-zinc-900 border-b border-zinc-300 dark:border-zinc-800 text-xs z-20 flex-shrink-0 animate-fade-in overflow-x-auto no-scrollbar">
+          {activeTool === 'add-text' && (
+            <input
+              type="text"
+              value={textValue}
+              onChange={(e) => setTextValue(e.target.value)}
+              placeholder="Type text to place on page..."
+              className="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 text-xs w-36 sm:w-52 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium shadow-xs"
+            />
+          )}
 
-          {/* Full MS Word Fonts Dropdown */}
+          {/* Full MS Word Fonts Dropdown - 100% High Contrast & Readable on Windows Desktop */}
           <select
             value={fontFamily}
-            onChange={(e) => setFontFamily(e.target.value)}
-            className="px-2 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            onChange={(e) => {
+              const newFam = e.target.value;
+              setFontFamily(newFam);
+              updateActiveTextItemProps({ fontFamily: newFam });
+            }}
+            className="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold text-xs shadow-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer max-w-[160px] sm:max-w-[200px]"
+            title="Font Family"
           >
             {MS_WORD_FONTS.map((font) => (
-              <option key={font} value={font} style={{ fontFamily: font }}>
+              <option
+                key={font}
+                value={font}
+                style={{
+                  fontFamily: font,
+                  color: '#0f172a',
+                  backgroundColor: '#ffffff',
+                  fontSize: '13px',
+                }}
+                className="text-zinc-900 bg-white py-1"
+              >
                 {font}
               </option>
             ))}
           </select>
 
-          {/* Size Stepper */}
-          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-md">
+          {/* Font Size Stepper & Direct Input */}
+          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden">
             <button
-              onClick={() => setFontSize((s) => Math.max(8, s - 1))}
-              className="px-2 py-0.5 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-xs font-bold"
+              type="button"
+              onClick={() => {
+                const newSize = Math.max(8, fontSize - 1);
+                setFontSize(newSize);
+                updateActiveTextItemProps({ fontSize: newSize });
+              }}
+              className="px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition-colors"
+              title="Decrease Font Size"
             >
               -
             </button>
-            <span className="px-1.5 text-xs font-mono font-semibold">{fontSize}pt</span>
+            <input
+              type="number"
+              value={fontSize}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val >= 6 && val <= 120) {
+                  setFontSize(val);
+                  updateActiveTextItemProps({ fontSize: val });
+                }
+              }}
+              className="w-10 text-center text-xs font-mono font-bold bg-transparent text-zinc-800 dark:text-zinc-200 border-x border-zinc-200 dark:border-zinc-700 py-0.5 focus:outline-none"
+            />
+            <span className="text-[10px] text-zinc-500 pr-1 select-none font-semibold">pt</span>
             <button
-              onClick={() => setFontSize((s) => Math.min(72, s + 1))}
-              className="px-2 py-0.5 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-xs font-bold"
+              type="button"
+              onClick={() => {
+                const newSize = Math.min(120, fontSize + 1);
+                setFontSize(newSize);
+                updateActiveTextItemProps({ fontSize: newSize });
+              }}
+              className="px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition-colors"
+              title="Increase Font Size"
             >
               +
             </button>
           </div>
 
           {/* Bold, Italic, Underline */}
-          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-md">
+          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden p-0.5 gap-0.5">
             <button
-              onClick={() => setIsBold(!isBold)}
-              className={`p-1.5 transition-colors ${
-                isBold ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold' : ''
+              type="button"
+              onClick={() => {
+                const next = !isBold;
+                setIsBold(next);
+                updateActiveTextItemProps({ isBold: next });
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                isBold
+                  ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Bold"
+              title="Bold (Ctrl+B)"
             >
-              <Bold className="w-3 h-3" />
+              <Bold className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => setIsItalic(!isItalic)}
-              className={`p-1.5 transition-colors ${
-                isItalic ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold' : ''
+              type="button"
+              onClick={() => {
+                const next = !isItalic;
+                setIsItalic(next);
+                updateActiveTextItemProps({ isItalic: next });
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                isItalic
+                  ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Italic"
+              title="Italic (Ctrl+I)"
             >
-              <Italic className="w-3 h-3" />
+              <Italic className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => setIsUnderline(!isUnderline)}
-              className={`p-1.5 transition-colors ${
-                isUnderline ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold' : ''
+              type="button"
+              onClick={() => {
+                const next = !isUnderline;
+                setIsUnderline(next);
+                updateActiveTextItemProps({ isUnderline: next });
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                isUnderline
+                  ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Underline"
+              title="Underline (Ctrl+U)"
             >
-              <Underline className="w-3 h-3" />
+              <Underline className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* Alignment */}
-          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-md">
+          {/* Alignment (Left, Center, Right) */}
+          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden p-0.5 gap-0.5">
             <button
-              onClick={() => setAlignment('left')}
-              className={`p-1.5 ${alignment === 'left' ? 'text-indigo-600 bg-indigo-500/15' : ''}`}
+              type="button"
+              onClick={() => {
+                setAlignment('left');
+                updateActiveTextItemProps({ alignment: 'left' });
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                alignment === 'left'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Align Left (Ctrl+L)"
             >
-              <AlignLeft className="w-3 h-3" />
+              <AlignLeft className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => setAlignment('center')}
-              className={`p-1.5 ${alignment === 'center' ? 'text-indigo-600 bg-indigo-500/15' : ''}`}
+              type="button"
+              onClick={() => {
+                setAlignment('center');
+                updateActiveTextItemProps({ alignment: 'center' });
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                alignment === 'center'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Align Center (Ctrl+E)"
             >
-              <AlignCenter className="w-3 h-3" />
+              <AlignCenter className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => setAlignment('right')}
-              className={`p-1.5 ${alignment === 'right' ? 'text-indigo-600 bg-indigo-500/15' : ''}`}
+              type="button"
+              onClick={() => {
+                setAlignment('right');
+                updateActiveTextItemProps({ alignment: 'right' });
+              }}
+              className={`p-1.5 rounded-md transition-all ${
+                alignment === 'right'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Align Right (Ctrl+R)"
             >
-              <AlignRight className="w-3 h-3" />
+              <AlignRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* Color Picker */}
-          <input
-            type="color"
-            value={textColor}
-            onChange={(e) => setTextColor(e.target.value)}
-            className="w-6 h-6 rounded cursor-pointer border border-zinc-300 dark:border-zinc-700 bg-transparent p-0"
-            title="Text Color"
-          />
+          {/* Text Color Picker & Presets */}
+          <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-xs">
+            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider select-none">Color</label>
+            <input
+              type="color"
+              value={textColor}
+              onChange={(e) => {
+                const newColor = e.target.value;
+                setTextColor(newColor);
+                updateActiveTextItemProps({ color: newColor });
+              }}
+              className="w-5 h-5 rounded cursor-pointer border border-zinc-300 dark:border-zinc-600 bg-transparent p-0"
+              title="Pick Custom Text Color"
+            />
+            {['#000000', '#1e293b', '#4f46e5', '#dc2626', '#16a34a'].map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => {
+                  setTextColor(c);
+                  updateActiveTextItemProps({ color: c });
+                }}
+                style={{ backgroundColor: c }}
+                className="w-3.5 h-3.5 rounded-full border border-black/15 dark:border-white/20 transition-transform hover:scale-125"
+                title={c}
+              />
+            ))}
+          </div>
 
-          <span className="text-[11px] text-zinc-500 italic ml-auto hidden lg:inline">
-            Tap anywhere on page to place text
+          {/* Clear Text button when text item is selected */}
+          {(activeEditingId || selectedTextItemId || selectedOverlayId) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedOverlayId) {
+                  setTextOverlays((prev) => prev.filter((t) => t.id !== selectedOverlayId));
+                  setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
+                  setHyperlinks((prev) => prev.filter((h) => h.id !== selectedOverlayId));
+                  setSelectedOverlayId(null);
+                } else if (activeEditingId || selectedTextItemId) {
+                  updateActiveTextItemProps({ currentText: '', isModified: true });
+                }
+              }}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 transition-colors text-xs font-semibold shadow-xs"
+              title="Clear/Delete Text (Delete / Backspace)"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear Text</span>
+            </button>
+          )}
+
+          <span className="text-[11px] text-zinc-500 font-medium italic ml-auto hidden lg:inline select-none">
+            {activeTool === 'edit-text'
+              ? activeEditingId
+                ? 'Editing text in-place • Enter to save • Esc to cancel'
+                : 'Click any text on the page to edit in-place'
+              : 'Tap anywhere on the page to place formatted text'}
           </span>
         </div>
       )}
@@ -2100,9 +2448,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             {/* In-Place Interactive Existing Text Bounding Boxes (Edit Text Mode) */}
             {activeTool === 'edit-text' &&
               detectedTextItems.map((item) => {
-                const currentTextVal = modifiedTexts[item.id]?.currentText ?? item.originalText;
-                const isItemModified = modifiedTexts[item.id]?.isModified;
+                const currentItem = modifiedTexts[item.id] || item;
+                const currentTextVal = currentItem.currentText ?? item.originalText;
+                const isItemModified = currentItem.isModified;
                 const isEditing = activeEditingId === item.id;
+                const isSelected = selectedTextItemId === item.id;
+
+                const itemFontFamily = currentItem.fontFamily ?? item.fontFamily ?? 'Calibri';
+                const itemFontSize = currentItem.fontSize ?? item.fontSize ?? 12;
+                const itemIsBold = currentItem.isBold ?? item.isBold ?? false;
+                const itemIsItalic = currentItem.isItalic ?? item.isItalic ?? false;
+                const itemIsUnderline = currentItem.isUnderline ?? item.isUnderline ?? false;
+                const itemAlign = currentItem.alignment ?? item.alignment ?? 'left';
 
                 const scale = zoomScale;
                 const cssX = item.x * scale;
@@ -2110,14 +2467,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssW = Math.max(12, item.width * scale);
                 const cssH = Math.max(10, item.height * scale);
 
-                const itemFontFamily = item.fontFamily === 'TimesRoman'
-                  ? 'Times New Roman, serif'
-                  : item.fontFamily === 'Courier'
-                  ? 'Courier New, monospace'
-                  : 'Arial, Helvetica, sans-serif';
-
+                const cssFontFamily = resolveCssFontFamily(itemFontFamily);
                 const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH);
-                const textColor = item.color || (sampledBg.isDark ? '#f8fafc' : '#0f172a');
+                const textColor = currentItem.color || item.color || (sampledBg.isDark ? '#f8fafc' : '#0f172a');
 
                 return (
                   <div
@@ -2125,20 +2477,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveEditingId(item.id);
+                      setSelectedTextItemId(item.id);
+                      setSelectedOverlayId(null);
+                      setFontFamily(itemFontFamily);
+                      setFontSize(itemFontSize);
+                      setIsBold(itemIsBold);
+                      setIsItalic(itemIsItalic);
+                      setIsUnderline(itemIsUnderline);
+                      setAlignment(itemAlign);
+                      setTextColor(textColor);
                     }}
                     style={{
-                      left: `${cssX - 1}px`,
+                      left: `${cssX - 2}px`,
                       top: `${cssY - 1}px`,
-                      width: `${cssW + 2}px`,
+                      width: `${cssW + 4}px`,
                       height: `${cssH + 2}px`,
-                      backgroundColor: isEditing || isItemModified ? sampledBg.hex : 'transparent',
+                      backgroundColor: isItemModified ? sampledBg.hex : 'transparent',
                     }}
                     className={`absolute transition-all cursor-text rounded-xs ${
                       isEditing
-                        ? 'border border-teal-500 dark:border-teal-400 ring-1 ring-teal-500/40 z-40'
-                        : isItemModified
-                        ? 'border border-dashed border-teal-500/50 hover:border-teal-500'
-                        : 'border border-teal-500/40 hover:border-teal-500/90 hover:bg-teal-500/5'
+                        ? 'border border-indigo-500 ring-2 ring-indigo-500/30 z-40'
+                        : isSelected
+                        ? 'border border-indigo-400 ring-1 ring-indigo-400/20 z-30'
+                        : 'border border-transparent hover:border-indigo-400/40 hover:bg-indigo-500/5'
                     }`}
                   >
                     {isEditing ? (
@@ -2153,6 +2514,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             [item.id]: {
                               ...item,
                               currentText: updatedText,
+                              fontFamily: itemFontFamily,
+                              fontSize: itemFontSize,
+                              isBold: itemIsBold,
+                              isItalic: itemIsItalic,
+                              isUnderline: itemIsUnderline,
+                              alignment: itemAlign,
+                              color: textColor,
                               backgroundColor: sampledBg.rgb,
                               isModified: true,
                             },
@@ -2163,20 +2531,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           pushSnapshot({ modifiedTexts });
                         }}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === 'Escape') {
+                          if (e.key === 'Enter') {
                             setActiveEditingId(null);
                             pushSnapshot({ modifiedTexts });
+                          } else if (e.key === 'Escape') {
+                            setActiveEditingId(null);
                           }
                         }}
                         style={{
-                          fontFamily: itemFontFamily,
-                          fontWeight: item.isBold ? 700 : 400,
-                          fontStyle: item.isItalic ? 'italic' : 'normal',
-                          fontSize: `${item.fontSize * scale}px`,
+                          fontFamily: cssFontFamily,
+                          fontWeight: itemIsBold ? 700 : 400,
+                          fontStyle: itemIsItalic ? 'italic' : 'normal',
+                          textDecoration: itemIsUnderline ? 'underline' : 'none',
+                          fontSize: `${itemFontSize * scale}px`,
                           color: textColor,
-                          lineHeight: `${cssH}px`,
-                          caretColor: sampledBg.isDark ? '#38bdf8' : '#0d9488',
-                          backgroundColor: 'transparent',
+                          textAlign: itemAlign,
+                          caretColor: '#6366f1',
+                          backgroundColor: isItemModified ? sampledBg.hex : 'transparent',
+                          lineHeight: 'normal',
                         }}
                         className="w-full h-full p-0 m-0 border-0 outline-none select-text"
                       />
@@ -2184,15 +2556,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       isItemModified && (
                         <div
                           style={{
-                            fontFamily: itemFontFamily,
-                            fontWeight: item.isBold ? 700 : 400,
-                            fontStyle: item.isItalic ? 'italic' : 'normal',
-                            fontSize: `${item.fontSize * scale}px`,
+                            fontFamily: cssFontFamily,
+                            fontWeight: itemIsBold ? 700 : 400,
+                            fontStyle: itemIsItalic ? 'italic' : 'normal',
+                            textDecoration: itemIsUnderline ? 'underline' : 'none',
+                            fontSize: `${itemFontSize * scale}px`,
                             color: textColor,
-                            lineHeight: `${cssH}px`,
-                            backgroundColor: 'transparent',
+                            textAlign: itemAlign,
+                            backgroundColor: sampledBg.hex,
+                            lineHeight: 'normal',
                           }}
-                          className="w-full h-full truncate px-0"
+                          className="w-full h-full truncate px-0 flex items-center"
                         >
                           {currentTextVal}
                         </div>
