@@ -126,17 +126,19 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  let forceQuit = false;
-
   mainWindow.on('close', (e) => {
-    if (forceQuit) return;
+    if (isQuitting) return;
     e.preventDefault();
     mainWindow.webContents.send('request-app-close');
   });
 
   ipcMain.on('confirm-app-close', () => {
-    forceQuit = true;
-    if (mainWindow) mainWindow.close();
+    isQuitting = true;
+    if (mainWindow) {
+      mainWindow.destroy();
+      mainWindow = null;
+    }
+    app.quit();
   });
 
   mainWindow.on('closed', () => {
@@ -145,6 +147,16 @@ function createWindow() {
 }
 
 // App lifecycle
+let isQuitting = false;
+
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
+app.on('will-quit', () => {
+  isQuitting = true;
+});
+
 app.whenReady().then(() => {
   createWindow();
 
@@ -158,3 +170,4 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
+
