@@ -47,10 +47,10 @@ export const PdfStudioView: React.FC = () => {
       description: 'Add text overlays, insert photos/signatures, rotate pages, or remove pages with Acrobat-style canvas view.',
       icon: Edit3,
       badge: 'Interactive',
-      accentColor: 'emerald',
-      gradient: 'from-emerald-500/15 via-emerald-500/5 to-transparent',
-      borderColor: 'border-emerald-500/20 hover:border-emerald-500/40',
-      iconColor: 'text-emerald-500',
+      accentColor: 'indigo',
+      gradient: 'from-indigo-500/15 via-indigo-500/5 to-transparent',
+      borderColor: 'border-indigo-500/20 hover:border-indigo-500/40',
+      iconColor: 'text-indigo-600 dark:text-indigo-400',
     },
     {
       id: 'merge' as const,
@@ -90,7 +90,7 @@ export const PdfStudioView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Top Banner */}
-      <div className="relative overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-gradient-to-br from-emerald-500/10 via-zinc-50 to-white dark:from-emerald-500/10 dark:via-zinc-900 dark:to-zinc-950 p-5 sm:p-7 shadow-sm">
+      <div className="relative overflow-hidden rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-gradient-to-br from-indigo-500/10 via-zinc-50 to-white dark:from-indigo-500/10 dark:via-zinc-900 dark:to-zinc-950 p-5 sm:p-7 shadow-sm">
         <div className="relative z-10 max-w-2xl">
           <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 mb-1.5">
             Omnisize PDF Studio & Reader
@@ -123,7 +123,7 @@ export const PdfStudioView: React.FC = () => {
                     {tool.badge}
                   </span>
                 </div>
-                <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                <h3 className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                   {tool.title}
                 </h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
@@ -131,7 +131,7 @@ export const PdfStudioView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between text-xs font-medium text-emerald-600 dark:text-emerald-400">
+              <div className="mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between text-xs font-medium text-indigo-600 dark:text-indigo-400">
                 <span>Launch Tool</span>
                 <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
               </div>
@@ -147,8 +147,8 @@ export const PdfStudioView: React.FC = () => {
         onDrop={handleDrop}
         className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center transition-all ${
           isDragOver
-            ? 'border-emerald-500 bg-emerald-500/5'
-            : 'border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30'
+            ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20'
+            : 'border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30 hover:border-indigo-400'
         }`}
       >
         <FileText className="w-10 h-10 mx-auto text-zinc-400 dark:text-zinc-600 mb-2 stroke-1" />
@@ -158,7 +158,7 @@ export const PdfStudioView: React.FC = () => {
         <p className="text-[11px] text-zinc-400 dark:text-zinc-500 mt-1 mb-3">
           Instant visual reading, editing, text overlaying, and optical character extraction
         </p>
-        <label className="cursor-pointer inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-all shadow-sm active:scale-95">
+        <label className="cursor-pointer inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-all shadow-sm active:scale-95">
           <Upload className="w-3.5 h-3.5" />
           <span>Browse Document</span>
           <input

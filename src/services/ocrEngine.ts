@@ -1,5 +1,5 @@
 import { getDocumentProxy } from 'unpdf';
-import { recognize } from 'tesseract.js';
+import { recognize, createWorker } from 'tesseract.js';
 import { Document, Paragraph, TextRun, HeadingLevel, Packer } from 'docx';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
@@ -106,9 +106,57 @@ export class OcrEngine {
     fontFamily: string;
     isModified: boolean;
   }[]> {
-    const res = await this.recognizeWithFallback(source, language, onProgress);
-    const canvasW = (source as HTMLCanvasElement).width || pageWidth;
-    const canvasH = (source as HTMLCanvasElement).height || pageHeight;
+    // Convert source to safe transferrable image representation
+    let imageSource: any = source;
+    let canvasW = pageWidth;
+    let canvasH = pageHeight;
+
+    if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
+      canvasW = source.width || pageWidth;
+      canvasH = source.height || pageHeight;
+      try {
+        imageSource = source.toDataURL('image/png');
+      } catch (e) {
+        imageSource = source;
+      }
+    }
+
+    const handleLogger = (m: any) => {
+      if (m && m.progress !== undefined) {
+        const pct = Math.round((m.progress || 0) * 100);
+        let status = 'Detecting layout...';
+        if (m.status === 'loading tesseract core') status = 'Initializing OCR core...';
+        else if (m.status === 'loading language traineddata') status = `Loading language model (${language})...`;
+        else if (m.status === 'initializing api') status = 'Analyzing document characters...';
+        else if (m.status === 'recognizing text') status = `Extracting text lines (${pct}%)...`;
+        onProgress?.(pct, status);
+      }
+    };
+
+    let worker: any = null;
+    let res: any = null;
+
+    try {
+      try {
+        worker = await createWorker(language, 1, { logger: handleLogger });
+      } catch (langErr) {
+        if (language !== 'eng') {
+          console.warn(`Language ${language} worker initialization failed, falling back to English:`, langErr);
+          worker = await createWorker('eng', 1, { logger: handleLogger });
+        } else {
+          throw langErr;
+        }
+      }
+
+      res = await worker.recognize(imageSource, {}, { blocks: true });
+    } finally {
+      if (worker) {
+        try {
+          await worker.terminate();
+        } catch (_) {}
+      }
+    }
+
     const scaleX = pageWidth / canvasW;
     const scaleY = pageHeight / canvasH;
 
@@ -126,30 +174,67 @@ export class OcrEngine {
       isModified: boolean;
     }[] = [];
 
-    const lines = (res.data as any).lines || [];
+    // Extract lines from hierarchical blocks -> paragraphs -> lines
+    const lines: { text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }[] = [];
+
+    if (res?.data?.blocks && Array.isArray(res.data.blocks)) {
+      for (const block of res.data.blocks) {
+        if (!block.paragraphs) continue;
+        for (const para of block.paragraphs) {
+          if (!para.lines) continue;
+          for (const line of para.lines) {
+            const trimmed = (line.text || '').trim();
+            if (trimmed && line.bbox) {
+              lines.push({ text: trimmed, bbox: line.bbox });
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: If no blocks, but plain text exists, provide paragraph-level items
+    if (lines.length === 0 && res?.data?.text) {
+      const textLines = res.data.text.split('\n').map((l: string) => l.trim()).filter(Boolean);
+      const estLineH = Math.max(16, pageHeight / Math.max(textLines.length * 1.5, 20));
+      for (let i = 0; i < textLines.length; i++) {
+        const lineText = textLines[i];
+        const ptY = pageHeight - (i + 1) * (estLineH * 1.3);
+        items.push({
+          id: `ocr_text_${pageIndex}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+          pageIndex,
+          originalText: lineText,
+          currentText: lineText,
+          x: 50,
+          y: Math.max(20, ptY),
+          width: Math.min(pageWidth - 100, lineText.length * 8),
+          height: estLineH,
+          fontSize: Math.max(10, Math.round(estLineH * 0.75)),
+          fontFamily: 'Helvetica',
+          isModified: false,
+        });
+      }
+      return items;
+    }
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      const trimmed = line.text.trim();
-      if (!trimmed) continue;
-
       const bbox = line.bbox;
       const ptX = bbox.x0 * scaleX;
       // In PDF coordinate space, y=0 is at the bottom of the page
       const ptY = pageHeight - bbox.y1 * scaleY;
-      const ptW = Math.max(12, (bbox.x1 - bbox.x0) * scaleX);
-      const ptH = Math.max(8, (bbox.y1 - bbox.y0) * scaleY);
+      const ptW = Math.max(14, (bbox.x1 - bbox.x0) * scaleX);
+      const ptH = Math.max(10, (bbox.y1 - bbox.y0) * scaleY);
 
       items.push({
         id: `ocr_text_${pageIndex}_${i}_${Math.random().toString(36).substring(2, 6)}`,
         pageIndex,
-        originalText: trimmed,
-        currentText: trimmed,
+        originalText: line.text,
+        currentText: line.text,
         x: Math.round(ptX * 100) / 100,
         y: Math.round(ptY * 100) / 100,
         width: Math.round(ptW * 100) / 100,
         height: Math.round(ptH * 100) / 100,
-        fontSize: Math.max(8, Math.round(ptH * 0.82)),
+        fontSize: Math.max(8, Math.round(ptH * 0.8)),
         fontFamily: 'Helvetica',
         isModified: false,
       });

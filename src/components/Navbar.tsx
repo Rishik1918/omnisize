@@ -1,10 +1,10 @@
 import React from 'react';
-import { Layers, Image as ImageIcon, Film, FileText, KeyRound, RefreshCw, Edit3 } from 'lucide-react';
+import { LayoutGrid, Layers, Image as ImageIcon, Film, FileText, KeyRound, RefreshCw, Edit3 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
 interface NavbarProps {
-  appMode: 'compress' | 'convert' | 'pdfstudio';
-  setAppMode: (mode: 'compress' | 'convert' | 'pdfstudio') => void;
+  appMode: 'home' | 'compress' | 'convert' | 'pdfstudio';
+  setAppMode: (mode: 'home' | 'compress' | 'convert' | 'pdfstudio') => void;
   activeTab: 'all' | 'image' | 'video' | 'pdf' | 'unlock';
   setActiveTab: (tab: 'all' | 'image' | 'video' | 'pdf' | 'unlock') => void;
   fileCounts: { all: number; image: number; video: number; pdf: number; unlock: number };
@@ -27,15 +27,13 @@ export const Navbar: React.FC<NavbarProps> = ({
       <div className="max-w-5xl mx-auto px-3 sm:px-6">
         {/* Main Header Bar */}
         <div className="flex items-center justify-between h-14 sm:h-16 gap-2">
-          {/* Logo & Brand Name */}
+          {/* Logo & Brand Name (Returns Home) */}
           <div
-            onClick={() => {
-              setAppMode('compress');
-              setActiveTab('all');
-            }}
-            className="flex items-center gap-2.5 cursor-pointer select-none"
+            onClick={() => setAppMode('home')}
+            className="flex items-center gap-2.5 cursor-pointer select-none group"
+            title="Return to Workspace Overview"
           >
-            <div className="h-8 w-8 rounded-xl bg-emerald-500/10 dark:bg-zinc-900 border border-emerald-500/20 dark:border-zinc-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-xs">
+            <div className="h-8 w-8 rounded-xl bg-indigo-50 dark:bg-zinc-900 border border-indigo-200/80 dark:border-zinc-800 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-xs group-hover:scale-105 transition-transform">
               <Layers className="h-4 w-4" strokeWidth={2} />
             </div>
             <span className="font-bold text-base text-zinc-900 dark:text-zinc-100 tracking-tight">
@@ -45,6 +43,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Desktop Mode Segmented Switcher */}
           <div className="hidden sm:flex items-center p-1 bg-zinc-100 dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-800 text-xs">
+            <button
+              onClick={() => setAppMode('home')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
+                appMode === 'home'
+                  ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>Home</span>
+            </button>
+
             <button
               onClick={() => {
                 setAppMode('compress');
@@ -76,7 +86,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               onClick={() => setAppMode('pdfstudio')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
                 appMode === 'pdfstudio'
-                  ? 'bg-white dark:bg-zinc-800 text-purple-600 dark:text-purple-400 shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
+                  ? 'bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
                   : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
@@ -106,8 +116,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Sub-tabs when in compress mode */}
-        {appMode === 'compress' && activeTab !== 'unlock' && (
+        {/* Sub-tabs when in compress mode ONLY IF files are queued */}
+        {appMode === 'compress' && activeTab !== 'unlock' && fileCounts.all > 0 && (
           <div className="flex items-center space-x-1.5 pb-2.5 overflow-x-auto no-scrollbar -mx-3 px-3 sm:mx-0 sm:px-0">
             {[
               { id: 'all', label: 'All Files', icon: Layers, count: fileCounts.all },

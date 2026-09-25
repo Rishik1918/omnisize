@@ -1,9 +1,9 @@
 import React from 'react';
-import { Layers, RefreshCw, KeyRound, Edit3 } from 'lucide-react';
+import { LayoutGrid, Layers, RefreshCw, KeyRound, Edit3 } from 'lucide-react';
 
 interface BottomNavProps {
-  appMode: 'compress' | 'convert' | 'pdfstudio';
-  setAppMode: (mode: 'compress' | 'convert' | 'pdfstudio') => void;
+  appMode: 'home' | 'compress' | 'convert' | 'pdfstudio';
+  setAppMode: (mode: 'home' | 'compress' | 'convert' | 'pdfstudio') => void;
   activeTab: string;
   setActiveTab: (tab: 'all' | 'image' | 'video' | 'pdf' | 'unlock') => void;
   onOpenUnlocker: () => void;
@@ -16,6 +16,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   setActiveTab,
   onOpenUnlocker,
 }) => {
+  const isHomeActive = appMode === 'home';
   const isCompressActive = appMode === 'compress' && activeTab !== 'unlock';
   const isConvertActive = appMode === 'convert';
   const isPdfStudioActive = appMode === 'pdfstudio';
@@ -24,6 +25,21 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   return (
     <nav className="fixed bottom-3 inset-x-0 z-40 flex justify-center px-3 sm:hidden pointer-events-none">
       <div className="pointer-events-auto flex items-center gap-1 p-1 rounded-full bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl border border-zinc-200 dark:border-zinc-800 shadow-xl text-xs">
+        {/* Home */}
+        <button
+          onClick={() => {
+            setAppMode('home');
+          }}
+          className={`flex items-center gap-1 px-3 py-2 rounded-full font-medium transition-all ${
+            isHomeActive
+              ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+          }`}
+        >
+          <LayoutGrid className="w-3.5 h-3.5" strokeWidth={1.5} />
+          <span>Home</span>
+        </button>
+
         {/* Compress */}
         <button
           onClick={() => {
@@ -32,7 +48,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           }}
           className={`flex items-center gap-1 px-3 py-2 rounded-full font-medium transition-all ${
             isCompressActive
-              ? 'bg-zinc-900 text-white dark:bg-zinc-800 dark:text-white shadow-xs font-semibold'
+              ? 'bg-indigo-600 text-white shadow-xs font-semibold'
               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
           }`}
         >
@@ -47,7 +63,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           }}
           className={`flex items-center gap-1 px-3 py-2 rounded-full font-medium transition-all ${
             isConvertActive
-              ? 'bg-zinc-900 text-white dark:bg-zinc-800 dark:text-white shadow-xs font-semibold'
+              ? 'bg-indigo-600 text-white shadow-xs font-semibold'
               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
           }`}
         >
@@ -62,12 +78,12 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           }}
           className={`flex items-center gap-1 px-3 py-2 rounded-full font-medium transition-all ${
             isPdfStudioActive
-              ? 'bg-purple-600 text-white shadow-xs font-semibold'
+              ? 'bg-indigo-600 text-white shadow-xs font-semibold'
               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
           }`}
         >
           <Edit3 className="w-3.5 h-3.5" strokeWidth={1.5} />
-          <span>PDF Studio</span>
+          <span>Studio</span>
         </button>
 
         {/* Unlock */}
@@ -79,7 +95,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
           }}
           className={`flex items-center gap-1 px-3 py-2 rounded-full font-medium transition-all ${
             isUnlockActive
-              ? 'bg-zinc-900 text-white dark:bg-zinc-800 dark:text-white shadow-xs font-semibold'
+              ? 'bg-indigo-600 text-white shadow-xs font-semibold'
               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
           }`}
         >
@@ -90,3 +106,4 @@ export const BottomNav: React.FC<BottomNavProps> = ({
     </nav>
   );
 };
+

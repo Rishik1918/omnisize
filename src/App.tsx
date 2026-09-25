@@ -19,11 +19,10 @@ import { VideoEngine } from './services/videoEngine';
 import { DocumentEngine } from './services/documentEngine';
 import { saveFile } from './utils/fileSaver';
 import { ThemeManager } from './services/themeManager';
-import { Play, AlertCircle } from 'lucide-react';
+import { Play, AlertCircle, KeyRound, Lock, ShieldCheck, Layers, Video, Image as ImageIcon, FileText } from 'lucide-react';
 
 export default function App() {
-  const [hasSelectedInitialMode, setHasSelectedInitialMode] = useState<boolean>(false);
-  const [appMode, setAppMode] = useState<'compress' | 'convert' | 'pdfstudio'>('compress');
+  const [appMode, setAppMode] = useState<'home' | 'compress' | 'convert' | 'pdfstudio'>('home');
   const [externalEditorPdf, setExternalEditorPdf] = useState<File | null>(null);
   const [showDesktopCloseModal, setShowDesktopCloseModal] = useState<boolean>(false);
 
@@ -70,7 +69,6 @@ export default function App() {
   };
 
   const handleIncomingFile = (file: File) => {
-    setHasSelectedInitialMode(true);
     const type = detectType(file);
     if (type === 'pdf') {
       setAppMode('pdfstudio');
@@ -276,25 +274,21 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 antialiased selection:bg-emerald-500/20 selection:text-emerald-700 dark:selection:text-emerald-300 transition-colors duration-150">
+    <div className="min-h-screen flex flex-col bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 antialiased selection:bg-indigo-500/20 selection:text-indigo-700 dark:selection:text-indigo-300 transition-colors duration-150">
       <Navbar
         appMode={appMode}
-        setAppMode={(m) => {
-          setAppMode(m);
-          setHasSelectedInitialMode(true);
-        }}
+        setAppMode={setAppMode}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         fileCounts={fileCounts}
       />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 pb-24 sm:pb-8">
-        {/* Initial Choice Screen (Shown on start until user chooses) */}
-        {!hasSelectedInitialMode ? (
+        {/* Workspace Mode Selection */}
+        {appMode === 'home' ? (
           <InitialChoiceScreen
             onSelectMode={(mode) => {
               setAppMode(mode);
-              setHasSelectedInitialMode(true);
             }}
           />
         ) : appMode === 'convert' ? (
@@ -307,10 +301,179 @@ export default function App() {
           <div className="space-y-4">
             <PdfStudioView />
           </div>
+        ) : activeTab === 'unlock' ? (
+          /* Dedicated Unlock PDF Workspace View */
+          <div className="space-y-4 sm:space-y-6 animate-fade-in">
+            <div
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'application/pdf,.pdf';
+                input.onchange = (e: any) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    const file = e.target.files[0];
+                    const newItem: ProcessedItem = {
+                      id: Math.random().toString(36).substring(2, 9),
+                      file,
+                      name: file.name,
+                      type: 'pdf',
+                      originalSize: file.size,
+                      previewUrl: URL.createObjectURL(file),
+                      status: 'idle',
+                      progress: 0,
+                    };
+                    setItems((prev) => [newItem, ...prev]);
+                    setUnlockModalItem(newItem);
+                  }
+                };
+                input.click();
+              }}
+              className="cursor-pointer rounded-2xl border-2 border-dashed border-slate-300 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-indigo-500 hover:bg-indigo-50/20 dark:hover:bg-zinc-900/80 p-8 sm:p-12 text-center transition-all shadow-xs"
+            >
+              <div className="flex flex-col items-center justify-center space-y-3">
+                <div className="h-12 w-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-xs">
+                  <KeyRound className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-base sm:text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                    Select Password-Protected PDF
+                  </h3>
+                  <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 mt-1 max-w-md mx-auto">
+                    Remove password protection permanently and decrypt your documents securely on your own device.
+                  </p>
+                </div>
+                <div className="pt-2">
+                  <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs shadow-xs transition-all">
+                    <KeyRound className="w-3.5 h-3.5" />
+                    Browse Locked PDF
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Information & Capability Showcase */}
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 px-1">
+                Supported Document Formats & Security
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Government & ID Cards</h4>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                        e-Aadhaar cards (UIDAI), PAN acknowledgements, and passport documentation.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                      <FileText className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Bank & Financial Statements</h4>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                        SBI, HDFC, ICICI, Axis, Kotak statements, EPFO passbooks, and Form 16.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Ciphers & Algorithms</h4>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 leading-relaxed">
+                        Full support for AES-256, AES-128, and standard 40/128-bit RC4 encryption.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* List of any queued PDF items */}
+            {items.filter(i => i.type === 'pdf').length > 0 && (
+              <div className="space-y-3 pt-2">
+                <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 px-1">
+                  Queued PDF Documents ({items.filter(i => i.type === 'pdf').length})
+                </div>
+                <FileList
+                  items={items.filter(i => i.type === 'pdf')}
+                  onRemove={handleRemove}
+                  onOpenOptions={() => {}}
+                  onOpenUnlocker={(item) => setUnlockModalItem(item)}
+                  onProcessItem={(item) => processSingleItem(item)}
+                  onDownloadItem={handleDownload}
+                />
+              </div>
+            )}
+          </div>
         ) : (
           /* Compressor Mode */
           <div className="space-y-4 sm:space-y-5">
             <DropZone onFilesAdded={handleFilesAdded} />
+
+            {/* Capabilities showcase when no files are queued - eliminates void space */}
+            {items.length === 0 && (
+              <div className="space-y-3 pt-2">
+                <div className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 px-1">
+                  Compression Capabilities
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                        <ImageIcon className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                          Smart Image Shrink
+                        </div>
+                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">JPEG, PNG, WebP & AVIF lossless & lossy</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                        <Video className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                          Video Compressor
+                        </div>
+                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">H.264 & WebM with resolution presets</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 shadow-xs">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                          PDF Stream Optimization
+                        </div>
+                        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">Compress text streams and embedded bitmaps</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {items.length > 0 && (
               <div className="flex items-center justify-between p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-xs">
@@ -319,7 +482,7 @@ export default function App() {
                 </div>
                 <button
                   onClick={handleProcessAll}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-all shadow-sm active:scale-[0.98]"
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-all shadow-sm active:scale-[0.98]"
                 >
                   <Play className="w-3.5 h-3.5 fill-current" />
                   <span>Compress All</span>
@@ -346,10 +509,7 @@ export default function App() {
       {/* Floating Bottom Nav on Mobile */}
       <BottomNav
         appMode={appMode}
-        setAppMode={(m) => {
-          setAppMode(m);
-          setHasSelectedInitialMode(true);
-        }}
+        setAppMode={setAppMode}
         activeTab={activeTab}
         setActiveTab={(tab) => setActiveTab(tab)}
         onOpenUnlocker={() => {

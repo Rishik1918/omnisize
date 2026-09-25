@@ -46,8 +46,8 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesAdded }) => {
         onClick={() => inputRef.current?.click()}
         className={`relative cursor-pointer rounded-2xl border-2 border-dashed p-6 sm:p-10 text-center transition-all shadow-xs ${
           isDragOver
-            ? 'border-emerald-500 bg-emerald-500/10'
-            : 'border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-emerald-500/50 hover:bg-slate-50/80 dark:hover:bg-zinc-900/80'
+            ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20'
+            : 'border-slate-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/50 hover:border-indigo-500/50 hover:bg-slate-50/80 dark:hover:bg-zinc-900/80'
         }`}
       >
         <input
@@ -60,7 +60,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesAdded }) => {
         />
 
         <div className="flex flex-col items-center justify-center space-y-3 max-w-md mx-auto">
-          <div className="h-12 w-12 rounded-2xl bg-emerald-50 dark:bg-zinc-800 border border-emerald-500/20 dark:border-zinc-700/80 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shadow-xs">
+          <div className="h-12 w-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shadow-xs">
             <Upload className="h-6 w-6 stroke-[1.75]" />
           </div>
 
@@ -81,7 +81,7 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesAdded }) => {
           onClick={() => inputRef.current?.click()}
           className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white dark:bg-zinc-900 hover:bg-slate-100 dark:hover:bg-zinc-800 text-slate-700 dark:text-zinc-300 border border-slate-200 dark:border-zinc-800 text-xs font-medium transition-colors shadow-xs"
         >
-          <FileText className="w-3.5 h-3.5 text-emerald-500" strokeWidth={1.5} />
+          <FileText className="w-3.5 h-3.5 text-indigo-500" strokeWidth={1.5} />
           <span>Compress PDF</span>
         </button>
 

@@ -1482,10 +1482,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 border border-transparent'
               }`}
             >
-              <FileText className={`w-3.5 h-3.5 flex-shrink-0 ${isActive ? 'text-emerald-400' : 'text-zinc-500'}`} />
+              <FileText className={`w-3.5 h-3.5 flex-shrink-0 ${isActive ? 'text-indigo-400' : 'text-zinc-500'}`} />
               <span className="truncate">{tab.name}</span>
               {tabHasEdits && (
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0 animate-pulse" title="Unsaved edits" />
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0 animate-pulse" title="Unsaved edits" />
               )}
               {tabs.length > 1 && (
                 <button
@@ -1505,10 +1505,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
         {/* Add New Tab Button (+) */}
         <label
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900 border border-dashed border-zinc-800 hover:border-emerald-500/50 cursor-pointer transition-all flex-shrink-0 text-xs font-semibold"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-zinc-400 hover:text-indigo-400 hover:bg-zinc-900 border border-dashed border-zinc-800 hover:border-indigo-500/50 cursor-pointer transition-all flex-shrink-0 text-xs font-semibold"
           title="Open Document in New Tab (PDF, Word, Excel, Images, Text)"
         >
-          <Plus className="w-4 h-4 text-emerald-400" />
+          <Plus className="w-4 h-4 text-indigo-400" />
           <span className="text-[11px] font-medium">New Document</span>
           <input
             type="file"
@@ -1583,14 +1583,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               onClick={toggleAutoSave}
               className={`flex items-center gap-1.5 px-2 py-1.5 sm:px-2.5 sm:py-1 rounded-lg border text-[11px] font-semibold transition-all ${
                 autoSaveEnabled
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                  ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-600 dark:text-indigo-400'
                   : 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 text-zinc-500'
               }`}
               title="Automatically save changes on close or edits"
             >
               <span
                 className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  autoSaveEnabled ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-400'
+                  autoSaveEnabled ? 'bg-indigo-500 animate-pulse' : 'bg-zinc-400'
                 }`}
               />
               <span className="hidden xs:inline">Auto-Save:</span>
@@ -1602,7 +1602,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               onClick={handleSave}
               disabled={isSaving}
               className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white transition-all shadow-sm active:scale-95 ${
-                saveSuccess ? 'bg-emerald-700' : 'bg-emerald-600 hover:bg-emerald-500'
+                saveSuccess ? 'bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-500'
               }`}
               title="Save Edited PDF to Device"
             >
@@ -1689,7 +1689,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           onClick={() => setActiveTool('edit-text')}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
             activeTool === 'edit-text'
-              ? 'bg-emerald-600 text-white shadow-xs'
+              ? 'bg-indigo-600 text-white shadow-xs'
               : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
           }`}
         >
@@ -1701,7 +1701,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           onClick={() => setActiveTool('add-text')}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
             activeTool === 'add-text'
-              ? 'bg-emerald-600 text-white shadow-xs'
+              ? 'bg-indigo-600 text-white shadow-xs'
               : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
           }`}
         >
@@ -1713,7 +1713,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           onClick={() => setActiveTool('add-link')}
           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
             activeTool === 'add-link'
-              ? 'bg-emerald-600 text-white shadow-xs'
+              ? 'bg-indigo-600 text-white shadow-xs'
               : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
           }`}
         >
@@ -1763,10 +1763,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         <button
           onClick={() => handleRunOcrOnCurrentPage(ocrLanguage)}
           disabled={isOcrScanningPage}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 shadow-xs"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100/50 shadow-xs"
           title="Extract text with bounding boxes on current page to make scanned document editable"
         >
-          {isOcrScanningPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-emerald-500" />}
+          {isOcrScanningPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanText className="w-3.5 h-3.5 text-indigo-500" />}
           <span>{isOcrScanningPage ? 'Scanning...' : 'OCR to Edit'}</span>
         </button>
 
@@ -1803,20 +1803,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
       {/* TIER 3: Rich MS Word Font Selection & Styling Bar (When 'Add Text' is Active) */}
       {activeTool === 'add-text' && (
-        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-emerald-50/50 dark:bg-zinc-900 border-b border-emerald-500/20 text-xs z-20 flex-shrink-0 animate-fade-in overflow-x-auto no-scrollbar">
+        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-2 bg-indigo-50/50 dark:bg-zinc-900 border-b border-indigo-500/20 text-xs z-20 flex-shrink-0 animate-fade-in overflow-x-auto no-scrollbar">
           <input
             type="text"
             value={textValue}
             onChange={(e) => setTextValue(e.target.value)}
             placeholder="Type text to place..."
-            className="px-2.5 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs w-36 sm:w-52 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="px-2.5 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs w-36 sm:w-52 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
 
           {/* Full MS Word Fonts Dropdown */}
           <select
             value={fontFamily}
             onChange={(e) => setFontFamily(e.target.value)}
-            className="px-2 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            className="px-2 py-1 rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
           >
             {MS_WORD_FONTS.map((font) => (
               <option key={font} value={font} style={{ fontFamily: font }}>
@@ -1847,7 +1847,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <button
               onClick={() => setIsBold(!isBold)}
               className={`p-1.5 transition-colors ${
-                isBold ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold' : ''
+                isBold ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold' : ''
               }`}
               title="Bold"
             >
@@ -1856,7 +1856,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <button
               onClick={() => setIsItalic(!isItalic)}
               className={`p-1.5 transition-colors ${
-                isItalic ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold' : ''
+                isItalic ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold' : ''
               }`}
               title="Italic"
             >
@@ -1865,7 +1865,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <button
               onClick={() => setIsUnderline(!isUnderline)}
               className={`p-1.5 transition-colors ${
-                isUnderline ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold' : ''
+                isUnderline ? 'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 font-bold' : ''
               }`}
               title="Underline"
             >
@@ -1877,19 +1877,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-md">
             <button
               onClick={() => setAlignment('left')}
-              className={`p-1.5 ${alignment === 'left' ? 'text-emerald-600 bg-emerald-500/15' : ''}`}
+              className={`p-1.5 ${alignment === 'left' ? 'text-indigo-600 bg-indigo-500/15' : ''}`}
             >
               <AlignLeft className="w-3 h-3" />
             </button>
             <button
               onClick={() => setAlignment('center')}
-              className={`p-1.5 ${alignment === 'center' ? 'text-emerald-600 bg-emerald-500/15' : ''}`}
+              className={`p-1.5 ${alignment === 'center' ? 'text-indigo-600 bg-indigo-500/15' : ''}`}
             >
               <AlignCenter className="w-3 h-3" />
             </button>
             <button
               onClick={() => setAlignment('right')}
-              className={`p-1.5 ${alignment === 'right' ? 'text-emerald-600 bg-emerald-500/15' : ''}`}
+              className={`p-1.5 ${alignment === 'right' ? 'text-indigo-600 bg-indigo-500/15' : ''}`}
             >
               <AlignRight className="w-3 h-3" />
             </button>
@@ -1919,7 +1919,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               <span>Pages ({totalPages})</span>
               <button
                 onClick={() => handleInsertBlankPage('end')}
-                className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline"
+                className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline"
               >
                 <Plus className="w-3 h-3" />
                 <span>Add Blank</span>
@@ -1936,7 +1936,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     onClick={() => setCurrentPage(pageNum)}
                     className={`group cursor-pointer rounded-xl p-2 border transition-all flex flex-col items-center gap-1.5 ${
                       isSelected
-                        ? 'border-emerald-500 bg-emerald-500/10 shadow-xs'
+                        ? 'border-indigo-500 bg-indigo-500/10 shadow-xs'
                         : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 bg-zinc-50/50 dark:bg-zinc-800/40'
                     }`}
                   >
@@ -1981,15 +1981,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
             )}
 
-            {/* Scanned Document / Image Detected Banner (1-Click OCR & Make Editable) */}
+            {/* Scanned Document / Image Detected Banner (Professional OCR extraction) */}
             {activeTool === 'edit-text' && detectedTextItems.length === 0 && !isRendering && (
-              <div className="mb-4 max-w-2xl w-full flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs shadow-sm">
+              <div className="mb-4 max-w-2xl w-full flex flex-col sm:flex-row items-center justify-between gap-3 p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-xs shadow-xs">
                 <div className="flex items-center gap-2.5">
-                  <Sparkles className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 animate-pulse" />
+                  <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex-shrink-0">
+                    <ScanText className="w-4 h-4" />
+                  </div>
                   <div>
-                    <div className="font-bold text-zinc-900 dark:text-zinc-100">Scanned Document / Image Detected</div>
-                    <div className="text-[11px] text-zinc-600 dark:text-zinc-400">
-                      No digital text layer found. Run OCR to make all text clickable & editable in-place!
+                    <div className="font-semibold text-zinc-900 dark:text-zinc-100">Scanned Document Detected</div>
+                    <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      No vector text layer found. Run OCR to recognize text and enable in-place editing.
                     </div>
                   </div>
                 </div>
@@ -1997,7 +1999,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   <select
                     value={ocrLanguage}
                     onChange={(e) => setOcrLanguage(e.target.value)}
-                    className="px-2 py-1.5 rounded-lg border border-amber-500/30 bg-white dark:bg-zinc-800 text-[11px] font-semibold text-zinc-800 dark:text-zinc-200"
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-[11px] font-medium text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   >
                     <option value="eng+hin">English + Hindi</option>
                     <option value="eng">English</option>
@@ -2006,10 +2008,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   <button
                     onClick={() => handleRunOcrOnCurrentPage(ocrLanguage)}
                     disabled={isOcrScanningPage}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm active:scale-95 disabled:opacity-50"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs shadow-xs active:scale-95 disabled:opacity-50 transition-colors"
                   >
-                    {isOcrScanningPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                    <span>{isOcrScanningPage ? 'Scanning...' : '⚡ OCR & Make Text Editable'}</span>
+                    {isOcrScanningPage ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ScanText className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isOcrScanningPage ? 'Extracting Text...' : 'Extract Text (OCR)'}</span>
                   </button>
                 </div>
               </div>
@@ -2033,7 +2039,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               {/* OCR Scanning Overlay */}
               {isOcrScanningPage && (
                 <div className="absolute inset-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xs flex flex-col items-center justify-center z-50 rounded space-y-2 p-4 text-center">
-                  <Loader2 className="w-8 h-8 text-emerald-600 animate-spin" />
+                  <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
                   <div className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
                     Optical Character Recognition in Progress
                   </div>
@@ -2477,7 +2483,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   setShowCloseConfirmModal(false);
                   onClose();
                 }}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors"
+                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-semibold transition-colors"
               >
                 Discard & Close
               </button>
@@ -2487,7 +2493,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   setShowCloseConfirmModal(false);
                   onClose();
                 }}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-sm active:scale-95"
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-sm active:scale-95"
               >
                 Save & Close
               </button>
@@ -2501,7 +2507,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         <div className="fixed inset-0 z-[9999999] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in select-none">
           <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-4">
             <div className="flex items-start gap-3">
-              <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">
+              <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 flex-shrink-0">
                 <FileText className="w-6 h-6" />
               </div>
               <div className="space-y-1">
@@ -2535,7 +2541,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     onClose();
                   }
                 }}
-                className="w-full py-2.5 px-4 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-500 text-white transition-colors text-center shadow-xs"
+                className="w-full py-2.5 px-4 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-500 text-white transition-colors text-center shadow-xs"
               >
                 Close All Tabs
               </button>
@@ -2593,7 +2599,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   await handleSave();
                   performCloseTab(id);
                 }}
-                className="px-4 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors shadow-xs"
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-xs"
               >
                 Save & Close
               </button>

@@ -40,9 +40,9 @@ export const FileList: React.FC<FileListProps> = ({
               {item.type === 'image' ? (
                 <img src={item.previewUrl} alt={item.name} className="h-full w-full object-cover" />
               ) : item.type === 'video' ? (
-                <Film className="w-5 h-5 text-emerald-500" />
+                <Film className="w-5 h-5 text-indigo-500" />
               ) : (
-                <FileText className="w-5 h-5 text-teal-500" />
+                <FileText className="w-5 h-5 text-indigo-500" />
               )}
             </div>
 
@@ -55,9 +55,9 @@ export const FileList: React.FC<FileListProps> = ({
                 {item.resultSize && (
                   <>
                     <span>→</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{formatBytes(item.resultSize)}</span>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{formatBytes(item.resultSize)}</span>
                     {item.savedPercentage !== undefined && item.savedPercentage > 0 && (
-                      <span className="px-1.5 py-0.2 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[10px]">
+                      <span className="px-1.5 py-0.2 rounded-md bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-bold text-[10px]">
                         -{item.savedPercentage}%
                       </span>
                     )}
@@ -76,7 +76,7 @@ export const FileList: React.FC<FileListProps> = ({
               </div>
               <div className="h-1.5 bg-slate-100 dark:bg-zinc-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-emerald-500 transition-all duration-200"
+                  className="h-full bg-indigo-600 transition-all duration-200"
                   style={{ width: `${item.progress}%` }}
                 />
               </div>
@@ -92,7 +92,7 @@ export const FileList: React.FC<FileListProps> = ({
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-200 text-xs font-medium border border-slate-200 dark:border-zinc-700 transition-all shadow-xs"
                 title="Unlock PDF / Remove Password (e.g. Aadhaar, PAN)"
               >
-                <Unlock className="w-3.5 h-3.5 text-emerald-500" />
+                <Unlock className="w-3.5 h-3.5 text-indigo-500" />
                 <span>Unlock PDF</span>
               </button>
             )}
@@ -109,7 +109,7 @@ export const FileList: React.FC<FileListProps> = ({
                 </button>
                 <button
                   onClick={() => onProcessItem(item)}
-                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-all shadow-xs active:scale-[0.98]"
+                  className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-all shadow-sm active:scale-[0.98]"
                 >
                   Compress
                 </button>
@@ -119,7 +119,7 @@ export const FileList: React.FC<FileListProps> = ({
             {item.status === 'done' && (
               <button
                 onClick={() => onDownloadItem(item)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-all shadow-xs active:scale-95"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition-all shadow-xs active:scale-95"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Save</span>
