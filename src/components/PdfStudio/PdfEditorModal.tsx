@@ -36,7 +36,17 @@ import {
   FolderOpen,
   FilePlus,
   Sparkles,
-  Eye
+  Eye,
+  Pipette,
+  Palette,
+  Strikethrough,
+  Superscript,
+  Subscript,
+  AlignJustify,
+  Sliders,
+  ChevronDown,
+  ChevronUp,
+  Move
 } from 'lucide-react';
 import {
   PdfStudioEngine,
@@ -62,13 +72,20 @@ import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
 import { PdfUnlocker } from '../../services/pdfUnlocker';
 
 export const MS_WORD_FONTS = [
-  // Microsoft Modern Standard
+  // Wondershare PDFelement & Microsoft Modern Standard
+  'Carlito',
+  'Calibri',
+  'Calibri Light',
   'Aptos',
   'Aptos Display',
   'Aptos Mono',
   'Aptos Serif',
-  'Calibri',
-  'Calibri Light',
+  // Multilingual & Indic (Hindi / Devanagari)
+  'Nirmala UI',
+  'Mangal',
+  'Kokila',
+  'Utsaah',
+  'Aparajita',
   // Classic Sans-Serif
   'Arial',
   'Arial Black',
@@ -278,6 +295,12 @@ const sampleCanvasBgColor = (
 export const resolveCssFontFamily = (family?: string): string => {
   if (!family) return `'Calibri', 'Segoe UI', Arial, sans-serif`;
   const fam = family.toLowerCase();
+  if (fam.includes('nirmala') || fam.includes('mangal') || fam.includes('kokila') || fam.includes('utsaah') || fam.includes('devanagari') || fam.includes('hindi')) {
+    return `'Nirmala UI', 'Mangal', 'Segoe UI', sans-serif`;
+  }
+  if (fam.includes('carlito')) {
+    return `'Carlito', 'Calibri', 'Segoe UI', Arial, sans-serif`;
+  }
   if (fam.includes('times') || fam.includes('roman') || (fam.includes('serif') && !fam.includes('sans'))) {
     return `'Times New Roman', Cambria, Georgia, serif`;
   }
@@ -286,6 +309,31 @@ export const resolveCssFontFamily = (family?: string): string => {
   }
   return `'${family}', Calibri, 'Segoe UI', Arial, sans-serif`;
 };
+
+export const DOCUMENT_PALETTE = [
+  '#000000', '#1f2937', '#374151', '#4b5563', '#6b7280', '#9ca3af', '#d1d5db', '#ffffff',
+  '#1e3a8a', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd', '#bfdbfe', '#0284c7',
+  '#047857', '#059669', '#10b981', '#34d399', '#6ee7b7', '#15803d', '#16a34a', '#84cc16',
+  '#b91c1c', '#dc2626', '#ef4444', '#f87171', '#c2410c', '#ea580c', '#d97706', '#f59e0b',
+  '#6d28d9', '#7c3aed', '#8b5cf6', '#a78bfa', '#be185d', '#db2777', '#f43f5e', '#fb7185',
+];
+
+export function hsvToHex(h: number, s: number, v: number): string {
+  s = s / 100;
+  v = v / 100;
+  const c = v * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - c;
+  let r = 0, g = 0, b = 0;
+  if (h >= 0 && h < 60) { r = c; g = x; b = 0; }
+  else if (h >= 60 && h < 120) { r = x; g = c; b = 0; }
+  else if (h >= 120 && h < 180) { r = 0; g = c; b = x; }
+  else if (h >= 180 && h < 240) { r = 0; g = x; b = c; }
+  else if (h >= 240 && h < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  const toHex = (n: number) => Math.round((n + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
 
 export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile, initialFiles }) => {
   if (!isOpen) return null;
@@ -501,8 +549,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [isBold, setIsBold] = useState<boolean>(false);
   const [isItalic, setIsItalic] = useState<boolean>(false);
   const [isUnderline, setIsUnderline] = useState<boolean>(false);
+  const [isStrikethrough, setIsStrikethrough] = useState<boolean>(false);
+  const [isSuperscript, setIsSuperscript] = useState<boolean>(false);
+  const [isSubscript, setIsSubscript] = useState<boolean>(false);
+  const [lineSpacing, setLineSpacing] = useState<number>(1.15);
+  const [characterSpacing, setCharacterSpacing] = useState<number>(0);
   const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   const [textColor, setTextColor] = useState<string>('#000000');
+
+  // Wondershare PDFelement Properties Panel & Advanced Color System
+  const [showPropertiesPanel, setShowPropertiesPanel] = useState<boolean>(true);
+  const [showColorPickerModal, setShowColorPickerModal] = useState<boolean>(false);
+  const [activeColorStudioTab, setActiveColorStudioTab] = useState<'palette' | 'wheel' | 'sliders'>('palette');
+  const [hexInput, setHexInput] = useState<string>('#000000');
+  const [rgbValues, setRgbValues] = useState<{ r: number; g: number; b: number }>({ r: 0, g: 0, b: 0 });
+  const [recentColors, setRecentColors] = useState<string[]>([
+    '#000000', '#1E40AF', '#DC2626', '#059669', '#D97706', '#7C3AED', '#0891B2', '#4B5563'
+  ]);
+  const [isSamplingColor, setIsSamplingColor] = useState<boolean>(false);
 
   // Update properties on the currently selected or active text item in-place
   const updateActiveTextItemProps = useCallback(
@@ -529,6 +593,44 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     },
     [activeEditingId, selectedTextItemId, detectedTextItems]
   );
+
+  const applyNewColor = useCallback((color: string) => {
+    setTextColor(color);
+    setHexInput(color);
+    updateActiveTextItemProps({ color });
+    setRecentColors((prev) => [color, ...prev.filter((c) => c.toLowerCase() !== color.toLowerCase())].slice(0, 12));
+    // Parse hex to rgb
+    try {
+      const clean = color.replace('#', '');
+      if (clean.length === 6) {
+        setRgbValues({
+          r: parseInt(clean.substring(0, 2), 16),
+          g: parseInt(clean.substring(2, 4), 16),
+          b: parseInt(clean.substring(4, 6), 16),
+        });
+      }
+    } catch {
+      // Ignored
+    }
+  }, [updateActiveTextItemProps]);
+
+  const handleOpenEyedropper = async () => {
+    if (typeof window !== 'undefined' && (window as any).EyeDropper) {
+      try {
+        const eyeDropper = new (window as any).EyeDropper();
+        const res = await eyeDropper.open();
+        if (res && res.sRGBHex) {
+          applyNewColor(res.sRGBHex);
+        }
+      } catch {
+        // User dismissed
+      }
+    } else {
+      // Fallback crosshair on document canvas
+      setIsSamplingColor(true);
+      setShowColorPickerModal(false);
+    }
+  };
 
   // Link tool state
   const [pendingUrl, setPendingUrl] = useState<string>('https://');
@@ -1331,6 +1433,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
 
+    if (isSamplingColor) {
+      const ctx = canvasRef.current.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        const pixelRatio = canvasRef.current.width / rect.width;
+        const p = ctx.getImageData(Math.floor(clickX * pixelRatio), Math.floor(clickY * pixelRatio), 1, 1).data;
+        const hex = `#${((1 << 24) + (p[0] << 16) + (p[1] << 8) + p[2]).toString(16).slice(1)}`;
+        applyNewColor(hex);
+      }
+      setIsSamplingColor(false);
+      return;
+    }
+
     const scaleFactor = zoomScale;
     const pdfX = clickX / scaleFactor;
     const pdfY = (rect.height - clickY) / scaleFactor;
@@ -2060,6 +2174,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           {isPrinting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
           <span>Print</span>
         </button>
+
+        <button
+          onClick={() => setShowPropertiesPanel(!showPropertiesPanel)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all flex-shrink-0 ${
+            showPropertiesPanel
+              ? 'bg-blue-600 text-white shadow-xs font-semibold'
+              : 'text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+          }`}
+          title="Toggle Properties Sidebar"
+        >
+          <Sliders className="w-3.5 h-3.5" />
+          <span>Properties</span>
+        </button>
       </div>
 
       {/* TIER 3: High-Contrast MS Word Formatting Bar (Active for both 'Edit Text' and 'Add Text') */}
@@ -2479,29 +2606,50 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       setActiveEditingId(item.id);
                       setSelectedTextItemId(item.id);
                       setSelectedOverlayId(null);
+                      setShowPropertiesPanel(true);
                       setFontFamily(itemFontFamily);
                       setFontSize(itemFontSize);
                       setIsBold(itemIsBold);
                       setIsItalic(itemIsItalic);
                       setIsUnderline(itemIsUnderline);
+                      setIsStrikethrough(currentItem.isStrikethrough ?? false);
+                      setIsSuperscript(currentItem.isSuperscript ?? false);
+                      setIsSubscript(currentItem.isSubscript ?? false);
+                      setLineSpacing(currentItem.lineSpacing ?? 1.15);
+                      setCharacterSpacing(currentItem.characterSpacing ?? 0);
                       setAlignment(itemAlign);
                       setTextColor(textColor);
+                      setHexInput(textColor);
                     }}
                     style={{
-                      left: `${cssX - 2}px`,
-                      top: `${cssY - 1}px`,
-                      width: `${cssW + 4}px`,
-                      height: `${cssH + 2}px`,
-                      backgroundColor: isItemModified ? sampledBg.hex : 'transparent',
+                      left: `${cssX}px`,
+                      top: `${cssY}px`,
+                      width: `${cssW}px`,
+                      height: `${cssH}px`,
+                      backgroundColor: 'transparent',
                     }}
-                    className={`absolute transition-all cursor-text rounded-xs ${
+                    className={`absolute transition-all cursor-text rounded-none ${
                       isEditing
-                        ? 'border border-indigo-500 ring-2 ring-indigo-500/30 z-40'
+                        ? 'border-[1.5px] border-blue-500 ring-2 ring-blue-500/20 z-40'
                         : isSelected
-                        ? 'border border-indigo-400 ring-1 ring-indigo-400/20 z-30'
-                        : 'border border-transparent hover:border-indigo-400/40 hover:bg-indigo-500/5'
+                        ? 'border-[1.5px] border-blue-500 ring-1 ring-blue-500/10 z-30'
+                        : 'border border-transparent hover:border-blue-400/40'
                     }`}
                   >
+                    {/* 8 Wondershare PDFelement boundary selection handles */}
+                    {(isEditing || isSelected) && (
+                      <>
+                        <span className="absolute -top-1 -left-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute -top-1 -right-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute top-1/2 -translate-y-1/2 -left-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute top-1/2 -translate-y-1/2 -right-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute -bottom-1 -left-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                        <span className="absolute -bottom-1 -right-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
+                      </>
+                    )}
+
                     {isEditing ? (
                       <input
                         type="text"
@@ -2519,6 +2667,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                               isBold: itemIsBold,
                               isItalic: itemIsItalic,
                               isUnderline: itemIsUnderline,
+                              isStrikethrough: currentItem.isStrikethrough ?? false,
+                              isSuperscript: currentItem.isSuperscript ?? false,
+                              isSubscript: currentItem.isSubscript ?? false,
+                              lineSpacing: currentItem.lineSpacing ?? 1.15,
+                              characterSpacing: currentItem.characterSpacing ?? 0,
                               alignment: itemAlign,
                               color: textColor,
                               backgroundColor: sampledBg.rgb,
@@ -2542,13 +2695,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           fontFamily: cssFontFamily,
                           fontWeight: itemIsBold ? 700 : 400,
                           fontStyle: itemIsItalic ? 'italic' : 'normal',
-                          textDecoration: itemIsUnderline ? 'underline' : 'none',
+                          textDecoration: itemIsUnderline
+                            ? 'underline'
+                            : currentItem.isStrikethrough
+                            ? 'line-through'
+                            : 'none',
                           fontSize: `${itemFontSize * scale}px`,
                           color: textColor,
                           textAlign: itemAlign,
-                          caretColor: '#6366f1',
-                          backgroundColor: isItemModified ? sampledBg.hex : 'transparent',
-                          lineHeight: 'normal',
+                          caretColor: '#2563eb',
+                          backgroundColor: 'transparent',
+                          letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
+                          lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
                         }}
                         className="w-full h-full p-0 m-0 border-0 outline-none select-text"
                       />
@@ -2559,12 +2717,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             fontFamily: cssFontFamily,
                             fontWeight: itemIsBold ? 700 : 400,
                             fontStyle: itemIsItalic ? 'italic' : 'normal',
-                            textDecoration: itemIsUnderline ? 'underline' : 'none',
+                            textDecoration: itemIsUnderline
+                              ? 'underline'
+                              : currentItem.isStrikethrough
+                              ? 'line-through'
+                              : 'none',
                             fontSize: `${itemFontSize * scale}px`,
                             color: textColor,
                             textAlign: itemAlign,
-                            backgroundColor: sampledBg.hex,
-                            lineHeight: 'normal',
+                            backgroundColor: 'transparent',
+                            letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
+                            lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
                           }}
                           className="w-full h-full truncate px-0 flex items-center"
                         >
@@ -2736,10 +2899,562 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 </div>
               </div>
             )}
+            </div>
+          </div>
+        </main>
+
+      {/* Wondershare PDFelement Right Properties Sidebar */}
+      {showPropertiesPanel && (
+        <aside className="w-64 sm:w-72 bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xs overflow-y-auto select-none">
+          {/* Panel Header */}
+          <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+            <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">
+              Properties
+            </div>
+            <button
+              onClick={() => setShowPropertiesPanel(false)}
+              className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              title="Close Properties Panel"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="p-3 space-y-4 text-xs">
+            {/* Type Indicator */}
+            <div className="space-y-1">
+              <div className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
+                Type
+              </div>
+              <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 px-2.5 py-1.5 bg-zinc-50 dark:bg-zinc-800/60 rounded-lg border border-zinc-200 dark:border-zinc-700/60">
+                {activeEditingId || selectedTextItemId ? 'Text' : selectedOverlayId ? 'Overlay Element' : 'Document Page'}
+              </div>
+            </div>
+
+            {/* SECTION 1: FONTS */}
+            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
+                ▾ Fonts
+              </div>
+
+              {/* Font Family Dropdown */}
+              <select
+                value={fontFamily}
+                onChange={(e) => {
+                  const newFam = e.target.value;
+                  setFontFamily(newFam);
+                  updateActiveTextItemProps({ fontFamily: newFam });
+                }}
+                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold text-xs shadow-xs focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
+              >
+                {MS_WORD_FONTS.map((font) => (
+                  <option key={font} value={font} style={{ fontFamily: font }}>
+                    {font}
+                  </option>
+                ))}
+              </select>
+
+              {/* Font Size & Color Row */}
+              <div className="flex items-center gap-1.5">
+                <div className="flex-1 flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden">
+                  <input
+                    type="number"
+                    value={fontSize}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      if (!isNaN(val) && val >= 6 && val <= 120) {
+                        setFontSize(val);
+                        updateActiveTextItemProps({ fontSize: val });
+                      }
+                    }}
+                    className="w-full text-center text-xs font-mono font-bold bg-transparent text-zinc-800 dark:text-zinc-200 py-1 focus:outline-none"
+                  />
+                  <span className="text-[10px] text-zinc-500 pr-1.5 font-medium">pt</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newSize = Math.min(120, fontSize + 1);
+                    setFontSize(newSize);
+                    updateActiveTextItemProps({ fontSize: newSize });
+                  }}
+                  className="px-2 py-1 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold transition-colors"
+                  title="Increase Font Size (A^)"
+                >
+                  A<span className="text-[9px] align-super">▲</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const newSize = Math.max(6, fontSize - 1);
+                    setFontSize(newSize);
+                    updateActiveTextItemProps({ fontSize: newSize });
+                  }}
+                  className="px-2 py-1 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold transition-colors"
+                  title="Decrease Font Size (A_)"
+                >
+                  A<span className="text-[9px] align-sub">▼</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowColorPickerModal(true)}
+                  className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700/50 transition-colors"
+                  title="Open Color Wheel & Palette"
+                >
+                  <span
+                    className="w-5 h-5 rounded-md border border-zinc-300 dark:border-zinc-600 shadow-xs block"
+                    style={{ backgroundColor: textColor }}
+                  />
+                  <ChevronDown className="w-3 h-3 text-zinc-500" />
+                </button>
+              </div>
+
+              {/* Styles Row: B, I, U, S, A^, A_ */}
+              <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 gap-0.5 justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isBold;
+                    setIsBold(next);
+                    updateActiveTextItemProps({ isBold: next });
+                  }}
+                  className={`flex-1 py-1 text-center font-bold rounded-md transition-all ${
+                    isBold ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Bold (Ctrl+B)"
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isItalic;
+                    setIsItalic(next);
+                    updateActiveTextItemProps({ isItalic: next });
+                  }}
+                  className={`flex-1 py-1 text-center italic font-serif rounded-md transition-all ${
+                    isItalic ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Italic (Ctrl+I)"
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isUnderline;
+                    setIsUnderline(next);
+                    updateActiveTextItemProps({ isUnderline: next });
+                  }}
+                  className={`flex-1 py-1 text-center underline rounded-md transition-all ${
+                    isUnderline ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Underline (Ctrl+U)"
+                >
+                  U
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isStrikethrough;
+                    setIsStrikethrough(next);
+                    updateActiveTextItemProps({ isStrikethrough: next });
+                  }}
+                  className={`flex-1 py-1 text-center line-through rounded-md transition-all ${
+                    isStrikethrough ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Strikethrough"
+                >
+                  S
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isSuperscript;
+                    setIsSuperscript(next);
+                    if (next) setIsSubscript(false);
+                    updateActiveTextItemProps({ isSuperscript: next, isSubscript: false });
+                  }}
+                  className={`flex-1 py-1 text-center text-[10px] rounded-md transition-all ${
+                    isSuperscript ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Superscript (A^)"
+                >
+                  A²
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !isSubscript;
+                    setIsSubscript(next);
+                    if (next) setIsSuperscript(false);
+                    updateActiveTextItemProps({ isSubscript: next, isSuperscript: false });
+                  }}
+                  className={`flex-1 py-1 text-center text-[10px] rounded-md transition-all ${
+                    isSubscript ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Subscript (A_)"
+                >
+                  A₂
+                </button>
+              </div>
+
+              {/* Alignment Row */}
+              <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 gap-0.5 justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAlignment('left');
+                    updateActiveTextItemProps({ alignment: 'left' });
+                  }}
+                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                    alignment === 'left' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Align Left (Ctrl+L)"
+                >
+                  <AlignLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAlignment('center');
+                    updateActiveTextItemProps({ alignment: 'center' });
+                  }}
+                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                    alignment === 'center' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Align Center (Ctrl+E)"
+                >
+                  <AlignCenter className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAlignment('right');
+                    updateActiveTextItemProps({ alignment: 'right' });
+                  }}
+                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                    alignment === 'right' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Align Right (Ctrl+R)"
+                >
+                  <AlignRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAlignment('justify' as any);
+                    updateActiveTextItemProps({ alignment: 'justify' as any });
+                  }}
+                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                    (alignment as any) === 'justify' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Justify"
+                >
+                  <AlignJustify className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* SECTION 2: SPACING */}
+            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
+                ▾ Spacing
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-500 font-medium">↕ Line Spacing</label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    value={lineSpacing}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (!isNaN(val)) {
+                        setLineSpacing(val);
+                        updateActiveTextItemProps({ lineSpacing: val });
+                      }
+                    }}
+                    className="w-full px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] text-zinc-500 font-medium">↔ Kerning (AV)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={characterSpacing}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (!isNaN(val)) {
+                        setCharacterSpacing(val);
+                        updateActiveTextItemProps({ characterSpacing: val });
+                      }
+                    }}
+                    className="w-full px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 3: APPEARANCE */}
+            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
+                ▾ Appearance
+              </div>
+              {(() => {
+                const targetItem = detectedTextItems.find((t) => t.id === (activeEditingId || selectedTextItemId)) ||
+                  textOverlays.find((t) => t.id === selectedOverlayId);
+                return (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 font-medium">Position X (pt)</label>
+                      <div className="px-2 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300 font-mono">
+                        {targetItem ? targetItem.x.toFixed(1) : '0.0'}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-zinc-500 font-medium">Position Y (pt)</label>
+                      <div className="px-2 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300 font-mono">
+                        {targetItem ? targetItem.y.toFixed(1) : '0.0'}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* SECTION 4: ACTIONS */}
+            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
+                ▾ Actions
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleRotatePage}
+                  className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[11px] font-medium transition-colors"
+                  title="Rotate Page 90° Clockwise"
+                >
+                  <RotateCw className="w-3 h-3" />
+                  <span>Rotate 90°</span>
+                </button>
+                {(activeEditingId || selectedTextItemId || selectedOverlayId) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedOverlayId) {
+                        setTextOverlays((prev) => prev.filter((t) => t.id !== selectedOverlayId));
+                        setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
+                        setHyperlinks((prev) => prev.filter((h) => h.id !== selectedOverlayId));
+                        setSelectedOverlayId(null);
+                      } else if (activeEditingId || selectedTextItemId) {
+                        updateActiveTextItemProps({ currentText: '', isModified: true });
+                      }
+                    }}
+                    className="flex items-center justify-center p-1.5 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/60 text-red-600 dark:text-red-400 transition-colors"
+                    title="Clear or Delete Element"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </aside>
+      )}
+    </div>
+
+    {/* Advanced Color Studio Popover Modal */}
+    {showColorPickerModal && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-fade-in"
+        onClick={() => setShowColorPickerModal(false)}
+      >
+        <div
+          className="w-full max-w-sm bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl p-4 space-y-3"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between pb-2 border-b border-zinc-200 dark:border-zinc-800">
+            <div className="flex items-center gap-2">
+              <Palette className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">Color Studio</span>
+            </div>
+            <button
+              onClick={() => setShowColorPickerModal(false)}
+              className="p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Color Tabs */}
+          <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 p-0.5 rounded-lg text-xs">
+            <button
+              onClick={() => setActiveColorStudioTab('palette')}
+              className={`flex-1 py-1 rounded-md text-center font-medium transition-colors ${
+                activeColorStudioTab === 'palette'
+                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400'
+              }`}
+            >
+              Palette
+            </button>
+            <button
+              onClick={() => setActiveColorStudioTab('wheel')}
+              className={`flex-1 py-1 rounded-md text-center font-medium transition-colors ${
+                activeColorStudioTab === 'wheel'
+                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400'
+              }`}
+            >
+              Wheel
+            </button>
+            <button
+              onClick={() => setActiveColorStudioTab('sliders')}
+              className={`flex-1 py-1 rounded-md text-center font-medium transition-colors ${
+                activeColorStudioTab === 'sliders'
+                  ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 shadow-xs'
+                  : 'text-zinc-600 dark:text-zinc-400'
+              }`}
+            >
+              RGB Sliders
+            </button>
+          </div>
+
+          {/* Tab 1: Preset Swatches */}
+          {activeColorStudioTab === 'palette' && (
+            <div className="space-y-2">
+              <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                Document & Standard Colors
+              </div>
+              <div className="grid grid-cols-8 gap-1.5 py-1">
+                {DOCUMENT_PALETTE.map((swatch) => (
+                  <button
+                    key={swatch}
+                    type="button"
+                    onClick={() => applyNewColor(swatch)}
+                    className="w-6 h-6 rounded-md border border-zinc-200 dark:border-zinc-700 hover:scale-110 transition-transform shadow-xs"
+                    style={{ backgroundColor: swatch }}
+                    title={swatch}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tab 2: Spectrum Wheel */}
+          {activeColorStudioTab === 'wheel' && (
+            <div className="py-2 flex flex-col items-center">
+              <div
+                className="w-36 h-36 rounded-full cursor-crosshair border border-zinc-200 dark:border-zinc-700 shadow-inner relative"
+                style={{
+                  background:
+                    'radial-gradient(circle, #ffffff 0%, rgba(255,255,255,0) 80%), conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
+                }}
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = e.clientX - rect.left - rect.width / 2;
+                  const y = e.clientY - rect.top - rect.height / 2;
+                  const rad = Math.atan2(y, x);
+                  const deg = (rad * 180 / Math.PI + 360) % 360;
+                  const dist = Math.min(1, Math.sqrt(x * x + y * y) / (rect.width / 2));
+                  const hex = hsvToHex(deg, dist * 100, 100);
+                  applyNewColor(hex);
+                }}
+              />
+              <div className="text-[10px] text-zinc-400 mt-2">Click anywhere on spectrum wheel to pick hue</div>
+            </div>
+          )}
+
+          {/* Tab 3: RGB Sliders */}
+          {activeColorStudioTab === 'sliders' && (
+            <div className="space-y-2 py-1">
+              {(['r', 'g', 'b'] as const).map((channel) => (
+                <div key={channel} className="space-y-0.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="uppercase font-bold text-zinc-600 dark:text-zinc-400">{channel}</span>
+                    <span className="font-mono text-zinc-700 dark:text-zinc-300">{rgbValues[channel]}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={255}
+                    value={rgbValues[channel]}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value, 10);
+                      const nextRgb = { ...rgbValues, [channel]: val };
+                      setRgbValues(nextRgb);
+                      const hex = `#${((1 << 24) + (nextRgb.r << 16) + (nextRgb.g << 8) + nextRgb.b).toString(16).slice(1)}`;
+                      applyNewColor(hex);
+                    }}
+                    className="w-full accent-blue-600 cursor-pointer"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Recent Colors */}
+          {recentColors.length > 0 && (
+            <div className="space-y-1 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+              <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                Recent Colors
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {recentColors.map((color, idx) => (
+                  <button
+                    key={`${color}-${idx}`}
+                    type="button"
+                    onClick={() => applyNewColor(color)}
+                    className="w-5 h-5 rounded-md border border-zinc-300 dark:border-zinc-600 hover:scale-110 transition-transform shadow-xs"
+                    style={{ backgroundColor: color }}
+                    title={color}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* HEX Input & Eyedropper Bar */}
+          <div className="flex items-center gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+            <button
+              type="button"
+              onClick={handleOpenEyedropper}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs font-semibold text-zinc-700 dark:text-zinc-300 transition-colors shrink-0"
+              title="Sample Color from Screen or Document"
+            >
+              <Pipette className="w-3.5 h-3.5 text-blue-500" />
+              <span>Eyedropper</span>
+            </button>
+
+            <div className="flex-1 flex items-center bg-zinc-50 dark:bg-zinc-800 rounded-lg border border-zinc-300 dark:border-zinc-700 px-2 py-1">
+              <span className="text-zinc-400 font-mono text-xs select-none pr-1">#</span>
+              <input
+                type="text"
+                maxLength={7}
+                value={hexInput.replace('#', '')}
+                onChange={(e) => {
+                  const val = '#' + e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 6);
+                  setHexInput(val);
+                  if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                    applyNewColor(val);
+                  }
+                }}
+                placeholder="000000"
+                className="w-full text-xs font-mono font-bold bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none uppercase"
+              />
+              <div
+                className="w-4 h-4 rounded-full border border-zinc-300 dark:border-zinc-600 shrink-0 ml-1"
+                style={{ backgroundColor: textColor }}
+              />
+            </div>
           </div>
         </div>
-      </main>
-    </div>
+      </div>
+    )}
 
       {/* FOOTER: Clean Responsive Zoom Bar (NO Squished Text, fully visible above Android navigation bar) */}
       <footer

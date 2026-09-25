@@ -1,10 +1,10 @@
 import React from 'react';
-import { LayoutGrid, Layers, Image as ImageIcon, Film, FileText, KeyRound, RefreshCw, Edit3 } from 'lucide-react';
+import { LayoutGrid, Layers, Image as ImageIcon, Film, FileText, KeyRound, RefreshCw, Edit3, ShieldCheck } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 
 interface NavbarProps {
-  appMode: 'home' | 'compress' | 'convert' | 'pdfstudio';
-  setAppMode: (mode: 'home' | 'compress' | 'convert' | 'pdfstudio') => void;
+  appMode: 'home' | 'compress' | 'convert' | 'pdfstudio' | 'security';
+  setAppMode: (mode: 'home' | 'compress' | 'convert' | 'pdfstudio' | 'security') => void;
   activeTab: 'all' | 'image' | 'video' | 'pdf' | 'unlock';
   setActiveTab: (tab: 'all' | 'image' | 'video' | 'pdf' | 'unlock') => void;
   fileCounts: { all: number; image: number; video: number; pdf: number; unlock: number };
@@ -96,17 +96,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => {
-                setAppMode('compress');
-                setActiveTab('unlock');
+                setAppMode('security');
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium transition-all ${
-                appMode === 'compress' && activeTab === 'unlock'
+                appMode === 'security'
                   ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-xs border border-zinc-200 dark:border-zinc-700 font-semibold'
                   : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
               }`}
             >
-              <KeyRound className="w-3.5 h-3.5" strokeWidth={1.5} />
-              <span>Unlock PDF</span>
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" strokeWidth={1.5} />
+              <span>Security Studio</span>
             </button>
           </div>
 
@@ -172,17 +171,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => {
-                setAppMode('compress');
-                setActiveTab('unlock');
+                setAppMode('security');
               }}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium text-xs whitespace-nowrap transition-all ${
-                appMode === 'compress' && activeTab === 'unlock'
+                appMode === 'security'
                   ? 'bg-indigo-600 text-white shadow-xs font-semibold'
                   : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
               }`}
             >
-              <KeyRound className="w-3.5 h-3.5" strokeWidth={1.5} />
-              <span>Unlock PDF</span>
+              <ShieldCheck className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>Security Studio</span>
             </button>
           </div>
         </div>

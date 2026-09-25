@@ -23,6 +23,11 @@ export interface TextOverlay {
   isItalic?: boolean;
   isUnderline?: boolean;
   alignment?: 'left' | 'center' | 'right';
+  lineSpacing?: number;
+  characterSpacing?: number;
+  isStrikethrough?: boolean;
+  isSuperscript?: boolean;
+  isSubscript?: boolean;
 }
 
 export interface ImageOverlay {
@@ -50,7 +55,12 @@ export interface ExistingTextItem {
   isBold?: boolean;
   isItalic?: boolean;
   isUnderline?: boolean;
+  isStrikethrough?: boolean;
+  isSuperscript?: boolean;
+  isSubscript?: boolean;
   alignment?: 'left' | 'center' | 'right';
+  lineSpacing?: number;
+  characterSpacing?: number;
   color?: string;
   backgroundColor?: { r: number; g: number; b: number };
   isModified?: boolean;
@@ -250,15 +260,14 @@ export class PdfStudioEngine {
           const chosenFont = selectFont(rep.fontFamily, rep.isBold, rep.isItalic);
           const size = rep.fontSize || 12;
 
-          // Erase old text bounding box with sampled background color
-          const padY = Math.max(2, size * 0.22);
-          const eraseY = Math.max(0, rep.y - padY);
-          const eraseHeight = rep.height + padY * 1.5;
-          const eraseWidth = Math.max(rep.width + 6, rep.currentText.length * size * 0.7);
+          // Erase old text bounding box tightly matching exact glyph dimensions
+          const eraseY = Math.max(0, rep.y - 1);
+          const eraseHeight = Math.max(rep.height, size * 1.1);
+          const eraseWidth = rep.width + 2;
 
           const bg = rep.backgroundColor || { r: 1, g: 1, b: 1 };
           page.drawRectangle({
-            x: Math.max(0, rep.x - 2),
+            x: Math.max(0, rep.x - 1),
             y: eraseY,
             width: eraseWidth,
             height: eraseHeight,

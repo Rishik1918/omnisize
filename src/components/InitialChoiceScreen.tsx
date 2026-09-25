@@ -2,12 +2,12 @@ import React from 'react';
 import { Layers, RefreshCw, Edit3, ArrowRight, ShieldCheck, Sparkles, Scissors, ScanText } from 'lucide-react';
 
 interface InitialChoiceScreenProps {
-  onSelectMode: (mode: 'compress' | 'convert' | 'pdfstudio') => void;
+  onSelectMode: (mode: 'compress' | 'convert' | 'pdfstudio' | 'security') => void;
 }
 
 export const InitialChoiceScreen: React.FC<InitialChoiceScreenProps> = ({ onSelectMode }) => {
   return (
-    <div className="max-w-4xl mx-auto py-3 sm:py-6 px-2 sm:px-4 space-y-4 sm:space-y-6 animate-fade-in">
+    <div className="max-w-5xl mx-auto py-3 sm:py-6 px-2 sm:px-4 space-y-4 sm:space-y-6 animate-fade-in">
       {/* Header */}
       <div className="text-center space-y-2 pt-2">
         <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
@@ -18,8 +18,8 @@ export const InitialChoiceScreen: React.FC<InitialChoiceScreenProps> = ({ onSele
         </p>
       </div>
 
-      {/* 3-Card Selection Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 sm:gap-4">
+      {/* 4-Card Selection Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
         {/* Card 1: Compressor */}
         <div
           onClick={() => onSelectMode('compress')}
@@ -40,14 +40,14 @@ export const InitialChoiceScreen: React.FC<InitialChoiceScreenProps> = ({ onSele
                 Compress & Optimize
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                Shrink videos, downsample PDFs to target sizes, resize photos to exact KB limits, and unlock password-protected PDFs.
+                Shrink videos, downsample PDFs to target sizes, and resize photos to exact KB limits.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-1 text-[10px] text-zinc-600 dark:text-zinc-400 pt-1">
               <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Target KB / MB</span>
               <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">PDF Shrink</span>
-              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">PDF Unlock</span>
+              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Video Delogo</span>
             </div>
           </div>
 
@@ -77,7 +77,7 @@ export const InitialChoiceScreen: React.FC<InitialChoiceScreenProps> = ({ onSele
                 Format Converter & ZIP
               </h3>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
-                Convert Word ⇄ PDF, Excel ⇄ CSV, MP4 ⇄ WebM, Images, Audio (MP3, WAV, AAC, FLAC), and archive files to ZIP.
+                Convert Word ⇄ PDF, Excel ⇄ CSV, MP4 ⇄ WebM, Images, Audio, and archive files to ZIP.
               </p>
             </div>
 
@@ -121,12 +121,49 @@ export const InitialChoiceScreen: React.FC<InitialChoiceScreenProps> = ({ onSele
             <div className="flex flex-wrap gap-1 text-[10px] text-zinc-600 dark:text-zinc-400 pt-1">
               <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Combine & Split</span>
               <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Edit Text & Photos</span>
-              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Optical OCR</span>
+              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Multilingual OCR</span>
             </div>
           </div>
 
           <div className="pt-4 flex items-center justify-between text-xs font-medium text-indigo-600 dark:text-indigo-400">
             <span>Open PDF Studio</span>
+            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+          </div>
+        </div>
+
+        {/* Card 4: Security Studio */}
+        <div
+          onClick={() => onSelectMode('security')}
+          className="group cursor-pointer rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 sm:p-5 hover:border-emerald-500/50 hover:shadow-md transition-all duration-200 flex flex-col justify-between active:scale-[0.99]"
+        >
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="h-10 w-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center group-hover:scale-105 group-hover:bg-emerald-600 group-hover:text-white transition-all">
+                <ShieldCheck className="h-5 w-5" />
+              </div>
+              <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md border border-emerald-200/50 dark:border-emerald-800/50">
+                AES-256
+              </span>
+            </div>
+
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                Security & Protection
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 leading-relaxed">
+                Universal offline encryption & decryption for PDF, Word (.docx), Excel (.xlsx), and ZIP archives.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-1 text-[10px] text-zinc-600 dark:text-zinc-400 pt-1">
+              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Auto PDF Unlock</span>
+              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">AES-256 Lock</span>
+              <span className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800/80">Word/Excel/ZIP</span>
+            </div>
+          </div>
+
+          <div className="pt-4 flex items-center justify-between text-xs font-medium text-emerald-600 dark:text-emerald-400">
+            <span>Open Security Studio</span>
             <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
           </div>
         </div>

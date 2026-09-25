@@ -195,10 +195,16 @@ export class OcrEngine {
     // Fallback: If no blocks, but plain text exists, provide paragraph-level items
     if (lines.length === 0 && res?.data?.text) {
       const textLines = res.data.text.split('\n').map((l: string) => l.trim()).filter(Boolean);
-      const estLineH = Math.max(16, pageHeight / Math.max(textLines.length * 1.5, 20));
+      const estLineH = Math.max(14, pageHeight / Math.max(textLines.length * 1.5, 20));
       for (let i = 0; i < textLines.length; i++) {
         const lineText = textLines[i];
         const ptY = pageHeight - (i + 1) * (estLineH * 1.3);
+        const hasDevanagari = /[\u0900-\u097F]/.test(lineText);
+        const detectedFont = hasDevanagari ? 'Nirmala UI' : 'Calibri';
+        const calcFontSize = hasDevanagari
+          ? Math.min(16, Math.max(9, Math.round(estLineH * 0.52)))
+          : Math.min(24, Math.max(9, Math.round(estLineH * 0.72)));
+
         items.push({
           id: `ocr_text_${pageIndex}_${i}_${Math.random().toString(36).substring(2, 6)}`,
           pageIndex,
@@ -208,8 +214,8 @@ export class OcrEngine {
           y: Math.max(20, ptY),
           width: Math.min(pageWidth - 100, lineText.length * 8),
           height: estLineH,
-          fontSize: Math.max(10, Math.round(estLineH * 0.75)),
-          fontFamily: 'Helvetica',
+          fontSize: calcFontSize,
+          fontFamily: detectedFont,
           isModified: false,
         });
       }
@@ -225,6 +231,20 @@ export class OcrEngine {
       const ptW = Math.max(14, (bbox.x1 - bbox.x0) * scaleX);
       const ptH = Math.max(10, (bbox.y1 - bbox.y0) * scaleY);
 
+      // Detect Multilingual / Devanagari script (Hindi, Marathi, Sanskrit, Nepali)
+      const hasDevanagari = /[\u0900-\u097F]/.test(line.text);
+      let detectedFont = 'Calibri';
+      let calcFontSize = 12;
+
+      if (hasDevanagari) {
+        // Devanagari characters require Nirmala UI or Mangal, and height includes upper/lower matras
+        detectedFont = 'Nirmala UI';
+        calcFontSize = Math.min(18, Math.max(9, Math.round(ptH * 0.52)));
+      } else {
+        detectedFont = 'Calibri';
+        calcFontSize = Math.min(28, Math.max(8, Math.round(ptH * 0.70)));
+      }
+
       items.push({
         id: `ocr_text_${pageIndex}_${i}_${Math.random().toString(36).substring(2, 6)}`,
         pageIndex,
@@ -234,8 +254,8 @@ export class OcrEngine {
         y: Math.round(ptY * 100) / 100,
         width: Math.round(ptW * 100) / 100,
         height: Math.round(ptH * 100) / 100,
-        fontSize: Math.max(8, Math.round(ptH * 0.8)),
-        fontFamily: 'Helvetica',
+        fontSize: calcFontSize,
+        fontFamily: detectedFont,
         isModified: false,
       });
     }

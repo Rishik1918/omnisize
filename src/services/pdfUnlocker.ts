@@ -329,4 +329,33 @@ export class PdfUnlocker {
       isEncrypted: true,
     };
   }
+
+  /**
+   * Lock / Encrypt PDF with AES-256 or AES-128 using QPDF WebAssembly
+   */
+  static async lockPdf(
+    file: File | Blob,
+    options: {
+      userPassword: string;
+      ownerPassword?: string;
+      keyLength?: 128 | 256;
+      allowPrinting?: boolean;
+      allowCopying?: boolean;
+      allowModifying?: boolean;
+    }
+  ): Promise<Blob> {
+    const toolkit = await getToolkit();
+    const buffer = await file.arrayBuffer();
+    const lockedBytes = await toolkit.lock(new Uint8Array(buffer), {
+      userPassword: options.userPassword,
+      ownerPassword: options.ownerPassword || options.userPassword,
+      keyLength: options.keyLength || 256,
+      permissions: {
+        print: options.allowPrinting === false ? 'none' : 'full',
+        modify: options.allowModifying === false ? 'none' : 'all',
+        extract: options.allowCopying !== false,
+      },
+    });
+    return new Blob([lockedBytes], { type: 'application/pdf' });
+  }
 }

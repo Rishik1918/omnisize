@@ -12,6 +12,7 @@ import { PdfStudioView } from './components/PdfStudio/PdfStudioView';
 import { PdfEditorModal } from './components/PdfStudio/PdfEditorModal';
 import { InitialChoiceScreen } from './components/InitialChoiceScreen';
 import { PdfPasswordPromptModal } from './components/PdfPasswordPromptModal';
+import { SecurityStudio } from './components/SecurityStudio/SecurityStudio';
 import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOptions, DocumentProcessingOptions } from './types';
 import { ImageEngine } from './services/imageEngine';
 import { VideoEngine } from './services/videoEngine';
@@ -21,7 +22,7 @@ import { ThemeManager } from './services/themeManager';
 import { Play, AlertCircle, KeyRound, Lock, ShieldCheck, Layers, Video, Image as ImageIcon, FileText } from 'lucide-react';
 
 export default function App() {
-  const [appMode, setAppMode] = useState<'home' | 'compress' | 'convert' | 'pdfstudio'>('home');
+  const [appMode, setAppMode] = useState<'home' | 'compress' | 'convert' | 'pdfstudio' | 'security'>('home');
   const [externalEditorPdf, setExternalEditorPdf] = useState<File | null>(null);
   const [showDesktopCloseModal, setShowDesktopCloseModal] = useState<boolean>(false);
 
@@ -299,6 +300,11 @@ export default function App() {
           /* PDF Studio Suite Mode */
           <div className="space-y-4">
             <PdfStudioView />
+          </div>
+        ) : appMode === 'security' ? (
+          /* Security & Protection Studio Mode */
+          <div className="space-y-4">
+            <SecurityStudio />
           </div>
         ) : activeTab === 'unlock' ? (
           /* Dedicated Unlock PDF Workspace View */
