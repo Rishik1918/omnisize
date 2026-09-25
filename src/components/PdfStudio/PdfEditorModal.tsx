@@ -554,11 +554,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [isSubscript, setIsSubscript] = useState<boolean>(false);
   const [lineSpacing, setLineSpacing] = useState<number>(1.15);
   const [characterSpacing, setCharacterSpacing] = useState<number>(0);
+  const [paragraphSpacing, setParagraphSpacing] = useState<number>(0);
   const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   const [textColor, setTextColor] = useState<string>('#000000');
 
   // Wondershare PDFelement Properties Panel & Advanced Color System
-  const [showPropertiesPanel, setShowPropertiesPanel] = useState<boolean>(true);
+  const [showPropertiesPanel, setShowPropertiesPanel] = useState<boolean>(() => {
+    return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
+  });
   const [showColorPickerModal, setShowColorPickerModal] = useState<boolean>(false);
   const [activeColorStudioTab, setActiveColorStudioTab] = useState<'palette' | 'wheel' | 'sliders'>('palette');
   const [hexInput, setHexInput] = useState<string>('#000000');
@@ -572,26 +575,48 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const updateActiveTextItemProps = useCallback(
     (patch: Partial<ExistingTextItem>) => {
       const targetId = activeEditingId || selectedTextItemId;
-      if (!targetId) return;
+      if (targetId) {
+        const originalItem = detectedTextItems.find((t) => t.id === targetId);
+        if (originalItem) {
+          setModifiedTexts((prev) => {
+            const existing = prev[targetId] || { ...originalItem, isModified: true };
+            const updated: ExistingTextItem = {
+              ...existing,
+              ...patch,
+              isModified: true,
+            };
+            return { ...prev, [targetId]: updated };
+          });
 
-      const originalItem = detectedTextItems.find((t) => t.id === targetId);
-      if (!originalItem) return;
+          setDetectedTextItems((prev) =>
+            prev.map((t) => (t.id === targetId ? { ...t, ...patch } : t))
+          );
+        }
+      }
 
-      setModifiedTexts((prev) => {
-        const existing = prev[targetId] || { ...originalItem, isModified: true };
-        const updated: ExistingTextItem = {
-          ...existing,
-          ...patch,
-          isModified: true,
-        };
-        return { ...prev, [targetId]: updated };
-      });
-
-      setDetectedTextItems((prev) =>
-        prev.map((t) => (t.id === targetId ? { ...t, ...patch } : t))
-      );
+      if (selectedOverlayId) {
+        setTextOverlays((prev) =>
+          prev.map((t) => {
+            if (t.id !== selectedOverlayId) return t;
+            return {
+              ...t,
+              ...(patch.fontFamily ? { fontFamily: patch.fontFamily } : {}),
+              ...(patch.fontSize ? { size: patch.fontSize } : {}),
+              ...(patch.color ? { color: patch.color } : {}),
+              ...(patch.isBold !== undefined ? { isBold: patch.isBold } : {}),
+              ...(patch.isItalic !== undefined ? { isItalic: patch.isItalic } : {}),
+              ...(patch.isUnderline !== undefined ? { isUnderline: patch.isUnderline } : {}),
+              ...(patch.alignment ? { alignment: patch.alignment } : {}),
+              ...(patch.lineSpacing !== undefined ? { lineSpacing: patch.lineSpacing } : {}),
+              ...(patch.characterSpacing !== undefined ? { characterSpacing: patch.characterSpacing } : {}),
+              ...(patch.paragraphSpacing !== undefined ? { paragraphSpacing: patch.paragraphSpacing } : {}),
+              ...(patch.rotation !== undefined ? { rotation: patch.rotation } : {}),
+            };
+          })
+        );
+      }
     },
-    [activeEditingId, selectedTextItemId, detectedTextItems]
+    [activeEditingId, selectedTextItemId, selectedOverlayId, detectedTextItems]
   );
 
   const applyNewColor = useCallback((color: string) => {
@@ -1077,6 +1102,30 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           const ctx = targetCanvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(canvas, 0, 0);
+
+            // Inpaint canvas ONLY for items that have been modified by the user
+            const itemsToInpaint = Object.values(modifiedTexts).filter(
+              (t) => t.pageIndex === currentPage - 1 && t.isModified && t.currentText !== t.originalText
+            );
+
+            if (itemsToInpaint && itemsToInpaint.length > 0) {
+              const scaleX = targetCanvas.width / (cssWidth / zoomScale);
+              const scaleY = targetCanvas.height / (cssHeight / zoomScale);
+              for (const item of itemsToInpaint) {
+                const bg = item.backgroundColor || { r: 1, g: 1, b: 1 };
+                const r = Math.round(bg.r * 255);
+                const g = Math.round(bg.g * 255);
+                const b = Math.round(bg.b * 255);
+                ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                const canvasX = item.x * scaleX;
+                const canvasY = targetCanvas.height - (item.y + item.height) * scaleY;
+                const canvasW = item.width * scaleX;
+                const canvasH = item.height * scaleY;
+                const padX = Math.max(1.5, scaleX * 0.4);
+                const padY = Math.max(1.5, scaleY * 0.4);
+                ctx.fillRect(canvasX - padX, canvasY - padY, canvasW + padX * 2, canvasH + padY * 2);
+              }
+            }
           }
           const baseW = cssWidth / zoomScale;
           const baseH = cssHeight / zoomScale;
@@ -1422,6 +1471,39 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     const nextRotations = { ...pageRotations, [pageIndex]: nextDeg };
     setPageRotations(nextRotations);
     pushSnapshot({ pageRotations: nextRotations });
+  };
+
+  // Rotate Selected Element (Text, Image, Signature) or Page
+  const handleRotateCurrentSelectionOrPage = () => {
+    if (selectedOverlayId) {
+      const isText = textOverlays.some((t) => t.id === selectedOverlayId);
+      if (isText) {
+        setTextOverlays((prev) =>
+          prev.map((t) =>
+            t.id === selectedOverlayId ? { ...t, rotation: ((t.rotation || 0) + 90) % 360 } : t
+          )
+        );
+        pushSnapshot({ textOverlays });
+        return;
+      }
+      const isImg = imageOverlays.some((i) => i.id === selectedOverlayId);
+      if (isImg) {
+        setImageOverlays((prev) =>
+          prev.map((i) =>
+            i.id === selectedOverlayId ? { ...i, rotation: ((i.rotation || 0) + 90) % 360 } : i
+          )
+        );
+        pushSnapshot({ imageOverlays });
+        return;
+      }
+    } else if (activeEditingId || selectedTextItemId) {
+      const targetId = activeEditingId || selectedTextItemId;
+      const current = modifiedTexts[targetId!] || detectedTextItems.find((t) => t.id === targetId);
+      const newRot = (((current?.rotation || 0) + 90) % 360);
+      updateActiveTextItemProps({ rotation: newRot, isModified: true });
+      return;
+    }
+    handleRotatePage();
   };
 
   // Click on Canvas to Add Text or Hyperlink
@@ -2372,7 +2454,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </button>
           </div>
 
-          {/* Text Color Picker & Presets */}
+          {/* Text Color Picker, Eyedropper & Studio Trigger */}
           <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-xs">
             <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider select-none">Color</label>
             <input
@@ -2386,7 +2468,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               className="w-5 h-5 rounded cursor-pointer border border-zinc-300 dark:border-zinc-600 bg-transparent p-0"
               title="Pick Custom Text Color"
             />
-            {['#000000', '#1e293b', '#4f46e5', '#dc2626', '#16a34a'].map((c) => (
+            {['#000000', '#1e40af', '#dc2626', '#059669', '#d97706', '#7c3aed', '#0891b2'].map((c) => (
               <button
                 key={c}
                 type="button"
@@ -2399,6 +2481,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 title={c}
               />
             ))}
+            <div className="h-4 w-px bg-zinc-200 dark:bg-zinc-700 mx-0.5" />
+            <button
+              type="button"
+              onClick={handleOpenEyedropper}
+              className="p-1 rounded text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
+              title="Sample Color from Document (Eyedropper)"
+            >
+              <Pipette className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowColorPickerModal(true)}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-blue-200 dark:border-blue-800 transition-colors"
+              title="Open Color Studio (Color Wheel, Eyedropper, Palette, HEX/RGB)"
+            >
+              <Palette className="w-3 h-3" />
+              <span>Studio</span>
+            </button>
           </div>
 
           {/* Clear Text button when text item is selected */}
@@ -2434,7 +2534,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       )}
 
       {/* Main Workspace Body: Sidebar + Scrollable Viewport */}
-      <div className="flex-1 flex min-h-0 overflow-hidden relative">
+      <div className="flex-1 flex flex-col sm:flex-row min-h-0 overflow-hidden relative">
         {/* Left Thumbnail Sidebar */}
         {showSidebar && totalPages > 0 && (
           <aside className="w-44 sm:w-52 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xs">
@@ -2480,7 +2580,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         {/* Central Viewport Area */}
         <main
           ref={containerRef}
-          className="flex-1 overflow-auto bg-slate-200/70 dark:bg-zinc-950 relative"
+          className="flex-1 min-h-[35vh] overflow-auto bg-slate-200/70 dark:bg-zinc-950 relative"
           style={{
             WebkitOverflowScrolling: 'touch',
             touchAction: 'pan-x pan-y',
@@ -2674,7 +2774,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                               characterSpacing: currentItem.characterSpacing ?? 0,
                               alignment: itemAlign,
                               color: textColor,
-                              backgroundColor: sampledBg.rgb,
+                              backgroundColor: item.backgroundColor || sampledBg.rgb,
                               isModified: true,
                             },
                           }));
@@ -2704,37 +2804,38 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           color: textColor,
                           textAlign: itemAlign,
                           caretColor: '#2563eb',
-                          backgroundColor: 'transparent',
+                          backgroundColor: sampledBg.hex,
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
+                          transform: currentItem.rotation ? `rotate(${currentItem.rotation}deg)` : undefined,
                         }}
                         className="w-full h-full p-0 m-0 border-0 outline-none select-text"
                       />
-                    ) : (
-                      isItemModified && (
-                        <div
-                          style={{
-                            fontFamily: cssFontFamily,
-                            fontWeight: itemIsBold ? 700 : 400,
-                            fontStyle: itemIsItalic ? 'italic' : 'normal',
-                            textDecoration: itemIsUnderline
-                              ? 'underline'
-                              : currentItem.isStrikethrough
-                              ? 'line-through'
-                              : 'none',
-                            fontSize: `${itemFontSize * scale}px`,
-                            color: textColor,
-                            textAlign: itemAlign,
-                            backgroundColor: 'transparent',
-                            letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
-                            lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
-                          }}
-                          className="w-full h-full truncate px-0 flex items-center"
-                        >
-                          {currentTextVal}
-                        </div>
-                      )
-                    )}
+                    ) : isItemModified ? (
+                      <div
+                        style={{
+                          fontFamily: cssFontFamily,
+                          fontWeight: itemIsBold ? 700 : 400,
+                          fontStyle: itemIsItalic ? 'italic' : 'normal',
+                          textDecoration: itemIsUnderline
+                            ? 'underline'
+                            : currentItem.isStrikethrough
+                            ? 'line-through'
+                            : 'none',
+                          fontSize: `${itemFontSize * scale}px`,
+                          color: textColor,
+                          textAlign: itemAlign,
+                          backgroundColor: sampledBg.hex,
+                          letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
+                          lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
+                          marginBottom: currentItem.paragraphSpacing ? `${currentItem.paragraphSpacing * scale}px` : undefined,
+                          transform: currentItem.rotation ? `rotate(${currentItem.rotation}deg)` : undefined,
+                        }}
+                        className="w-full h-full truncate px-0 flex items-center select-text"
+                      >
+                        {currentTextVal}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}
@@ -2903,9 +3004,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </div>
         </main>
 
-      {/* Wondershare PDFelement Right Properties Sidebar */}
+      {/* Wondershare PDFelement Right Properties Sidebar / Mobile Bottom Sheet */}
       {showPropertiesPanel && (
-        <aside className="w-64 sm:w-72 bg-white dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xs overflow-y-auto select-none">
+        <aside className="w-full sm:w-72 max-h-[46vh] sm:max-h-none bg-white dark:bg-zinc-900 border-t sm:border-t-0 sm:border-l border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xl sm:shadow-xs overflow-y-auto select-none">
+          {/* Mobile Bottom Sheet Pull Handle */}
+          <div className="w-10 h-1 bg-zinc-300 dark:bg-zinc-700 rounded-full mx-auto my-1.5 sm:hidden shrink-0" />
+
           {/* Panel Header */}
           <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
             <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">
@@ -3197,6 +3301,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   />
                 </div>
               </div>
+              <div className="space-y-1">
+                <label className="text-[10px] text-zinc-500 font-medium">¶ Paragraph Spacing (pt)</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  max="100"
+                  value={paragraphSpacing}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val)) {
+                      setParagraphSpacing(val);
+                      updateActiveTextItemProps({ paragraphSpacing: val });
+                    }
+                  }}
+                  className="w-full px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
+                />
+              </div>
             </div>
 
             {/* SECTION 3: APPEARANCE */}
@@ -3234,12 +3356,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={handleRotatePage}
+                  onClick={handleRotateCurrentSelectionOrPage}
                   className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[11px] font-medium transition-colors"
-                  title="Rotate Page 90° Clockwise"
+                  title={activeEditingId || selectedTextItemId || selectedOverlayId ? 'Rotate Selected Element 90° Clockwise' : 'Rotate Document Page 90° Clockwise'}
                 >
                   <RotateCw className="w-3 h-3" />
-                  <span>Rotate 90°</span>
+                  <span>{activeEditingId || selectedTextItemId || selectedOverlayId ? 'Rotate Element 90°' : 'Rotate Page 90°'}</span>
                 </button>
                 {(activeEditingId || selectedTextItemId || selectedOverlayId) && (
                   <button

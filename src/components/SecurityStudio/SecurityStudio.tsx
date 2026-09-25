@@ -11,7 +11,6 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
-  Sparkles,
   KeyRound,
   FileCheck,
   FileSpreadsheet,
@@ -240,9 +239,6 @@ export const SecurityStudio: React.FC = () => {
             <div>
               <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
                 Security & Protection Studio
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 font-semibold">
-                  AES-256
-                </span>
               </h1>
               <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400">
                 Universal offline encryption & decryption for PDF, Word (.docx), Excel (.xlsx), and ZIP archives.
@@ -385,16 +381,16 @@ export const SecurityStudio: React.FC = () => {
           {/* TAB 1: UNLOCK WORKSTATION */}
           {activeTab === 'unlock' && (
             <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800/80 space-y-4">
-              {/* PDF Smart 1-Click Auto-Unlock */}
+              {/* PDF Automated Permission Unlocker */}
               {fileFormat === 'pdf' && (
-                <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50/50 to-purple-50/50 dark:from-indigo-950/20 dark:to-purple-950/20 border border-indigo-100 dark:border-indigo-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-850 border border-slate-200 dark:border-zinc-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-400">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>1-Click Smart Auto-Unlocker</span>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                      <KeyRound className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Automated Permission Unlocker</span>
                     </div>
                     <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
-                      Automatically cleans metadata permissions, testing empty keys, Aadhaar, and PAN patterns.
+                      Cleans restrictions and tests empty passwords, Aadhaar, and PAN patterns.
                     </p>
                   </div>
                   <button

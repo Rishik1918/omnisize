@@ -83,6 +83,111 @@ export class OcrEngine {
   }
 
   /**
+   * Automatically samples exact foreground text color and surrounding background color
+   * for a bounding box from a canvas element.
+   */
+  static sampleTextColorsFromCanvas(
+    canvas: HTMLCanvasElement,
+    bbox: { x0: number; y0: number; x1: number; y1: number }
+  ): {
+    textColorHex: string;
+    bgRgb: { r: number; g: number; b: number };
+    bgHex: string;
+  } {
+    try {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) {
+        return { textColorHex: '#0f172a', bgRgb: { r: 1, g: 1, b: 1 }, bgHex: '#ffffff' };
+      }
+
+      const x0 = Math.max(0, Math.floor(bbox.x0));
+      const y0 = Math.max(0, Math.floor(bbox.y0));
+      const x1 = Math.min(canvas.width - 1, Math.ceil(bbox.x1));
+      const y1 = Math.min(canvas.height - 1, Math.ceil(bbox.y1));
+      const w = Math.max(1, x1 - x0);
+      const h = Math.max(1, y1 - y0);
+
+      // 1. Sample perimeter border pixels (top, bottom, left, right) to get true background color
+      let bgRSum = 0, bgGSum = 0, bgBSum = 0, bgCount = 0;
+      const sampleBorderPoint = (x: number, y: number) => {
+        if (x >= 0 && x < canvas.width && y >= 0 && y < canvas.height) {
+          const pixel = ctx.getImageData(x, y, 1, 1).data;
+          if (pixel[3] > 30) {
+            bgRSum += pixel[0];
+            bgGSum += pixel[1];
+            bgBSum += pixel[2];
+            bgCount++;
+          }
+        }
+      };
+
+      // Top & Bottom perimeter (1-2px outside bounding box)
+      for (let x = x0; x <= x1; x += Math.max(1, Math.floor(w / 12))) {
+        sampleBorderPoint(x, Math.max(0, y0 - 2));
+        sampleBorderPoint(x, Math.min(canvas.height - 1, y1 + 2));
+      }
+      // Left & Right perimeter
+      for (let y = y0; y <= y1; y += Math.max(1, Math.floor(h / 6))) {
+        sampleBorderPoint(Math.max(0, x0 - 2), y);
+        sampleBorderPoint(Math.min(canvas.width - 1, x1 + 2), y);
+      }
+
+      const bgR = bgCount > 0 ? Math.round(bgRSum / bgCount) : 255;
+      const bgG = bgCount > 0 ? Math.round(bgGSum / bgCount) : 255;
+      const bgB = bgCount > 0 ? Math.round(bgBSum / bgCount) : 255;
+      const bgHex = `#${bgR.toString(16).padStart(2, '0')}${bgG.toString(16).padStart(2, '0')}${bgB.toString(16).padStart(2, '0')}`;
+      const isBgDark = (bgR * 0.299 + bgG * 0.587 + bgB * 0.114) < 128;
+
+      // 2. Sample inside the bounding box to find the glyph stroke pixels
+      const imgData = ctx.getImageData(x0, y0, w, h).data;
+      const strokePixels: { r: number; g: number; b: number; diff: number }[] = [];
+
+      for (let i = 0; i < imgData.length; i += 4) {
+        const a = imgData[i + 3];
+        if (a < 50) continue;
+        const r = imgData[i];
+        const g = imgData[i + 1];
+        const b = imgData[i + 2];
+        const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+        if (diff > 55) {
+          strokePixels.push({ r, g, b, diff });
+        }
+      }
+
+      if (strokePixels.length > 0) {
+        // Sort by contrast distance descending to pick strong core glyph pixels
+        strokePixels.sort((a, b) => b.diff - a.diff);
+        // Take top 50% highest contrast pixels to ignore blurry edges
+        const topCount = Math.max(1, Math.floor(strokePixels.length * 0.5));
+        let tr = 0, tg = 0, tb = 0;
+        for (let i = 0; i < topCount; i++) {
+          tr += strokePixels[i].r;
+          tg += strokePixels[i].g;
+          tb += strokePixels[i].b;
+        }
+        const textR = Math.round(tr / topCount);
+        const textG = Math.round(tg / topCount);
+        const textB = Math.round(tb / topCount);
+        const textColorHex = `#${textR.toString(16).padStart(2, '0')}${textG.toString(16).padStart(2, '0')}${textB.toString(16).padStart(2, '0')}`;
+        return {
+          textColorHex,
+          bgRgb: { r: bgR / 255, g: bgG / 255, b: bgB / 255 },
+          bgHex,
+        };
+      }
+
+      // Default fallback
+      return {
+        textColorHex: isBgDark ? '#f8fafc' : '#0f172a',
+        bgRgb: { r: bgR / 255, g: bgG / 255, b: bgB / 255 },
+        bgHex,
+      };
+    } catch (e) {
+      return { textColorHex: '#0f172a', bgRgb: { r: 1, g: 1, b: 1 }, bgHex: '#ffffff' };
+    }
+  }
+
+  /**
    * Run OCR on a page canvas or image and return structured bounding boxes
    * mapped to PDF points for in-place text editing on scanned documents
    */
@@ -105,13 +210,18 @@ export class OcrEngine {
     fontSize: number;
     fontFamily: string;
     isModified: boolean;
+    color?: string;
+    backgroundColor?: { r: number; g: number; b: number };
+    bgColorHex?: string;
   }[]> {
     // Convert source to safe transferrable image representation
     let imageSource: any = source;
     let canvasW = pageWidth;
     let canvasH = pageHeight;
+    let sourceCanvas: HTMLCanvasElement | null = null;
 
     if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
+      sourceCanvas = source;
       canvasW = source.width || pageWidth;
       canvasH = source.height || pageHeight;
       try {
@@ -119,6 +229,27 @@ export class OcrEngine {
       } catch (e) {
         imageSource = source;
       }
+    } else if (typeof document !== 'undefined' && (source instanceof Blob || source instanceof File)) {
+      try {
+        const img = new Image();
+        const url = URL.createObjectURL(source);
+        await new Promise((res, rej) => {
+          img.onload = res;
+          img.onerror = rej;
+          img.src = url;
+        });
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = img.width;
+        offCanvas.height = img.height;
+        const offCtx = offCanvas.getContext('2d');
+        if (offCtx) {
+          offCtx.drawImage(img, 0, 0);
+          sourceCanvas = offCanvas;
+          canvasW = img.width;
+          canvasH = img.height;
+        }
+        URL.revokeObjectURL(url);
+      } catch (e) {}
     }
 
     const handleLogger = (m: any) => {
@@ -172,6 +303,9 @@ export class OcrEngine {
       fontSize: number;
       fontFamily: string;
       isModified: boolean;
+      color?: string;
+      backgroundColor?: { r: number; g: number; b: number };
+      bgColorHex?: string;
     }[] = [];
 
     // Extract lines from hierarchical blocks -> paragraphs -> lines
@@ -202,8 +336,8 @@ export class OcrEngine {
         const hasDevanagari = /[\u0900-\u097F]/.test(lineText);
         const detectedFont = hasDevanagari ? 'Nirmala UI' : 'Calibri';
         const calcFontSize = hasDevanagari
-          ? Math.min(16, Math.max(9, Math.round(estLineH * 0.52)))
-          : Math.min(24, Math.max(9, Math.round(estLineH * 0.72)));
+          ? Math.min(14, Math.max(9, Math.round(estLineH * 0.42)))
+          : Math.min(24, Math.max(9, Math.round(estLineH * 0.68)));
 
         items.push({
           id: `ocr_text_${pageIndex}_${i}_${Math.random().toString(36).substring(2, 6)}`,
@@ -217,6 +351,9 @@ export class OcrEngine {
           fontSize: calcFontSize,
           fontFamily: detectedFont,
           isModified: false,
+          color: '#0f172a',
+          backgroundColor: { r: 1, g: 1, b: 1 },
+          bgColorHex: '#ffffff',
         });
       }
       return items;
@@ -237,12 +374,18 @@ export class OcrEngine {
       let calcFontSize = 12;
 
       if (hasDevanagari) {
-        // Devanagari characters require Nirmala UI or Mangal, and height includes upper/lower matras
+        // Devanagari characters require Nirmala UI, and bounding box height includes upper/lower matras (~42% core font)
         detectedFont = 'Nirmala UI';
-        calcFontSize = Math.min(18, Math.max(9, Math.round(ptH * 0.52)));
+        calcFontSize = Math.min(15, Math.max(9, Math.round(ptH * 0.42)));
       } else {
         detectedFont = 'Calibri';
-        calcFontSize = Math.min(28, Math.max(8, Math.round(ptH * 0.70)));
+        calcFontSize = Math.min(28, Math.max(8, Math.round(ptH * 0.68)));
+      }
+
+      // Sample exact foreground text color and background color from canvas pixels
+      let colors = { textColorHex: '#0f172a', bgRgb: { r: 1, g: 1, b: 1 }, bgHex: '#ffffff' };
+      if (sourceCanvas) {
+        colors = this.sampleTextColorsFromCanvas(sourceCanvas, bbox);
       }
 
       items.push({
@@ -257,6 +400,9 @@ export class OcrEngine {
         fontSize: calcFontSize,
         fontFamily: detectedFont,
         isModified: false,
+        color: colors.textColorHex,
+        backgroundColor: colors.bgRgb,
+        bgColorHex: colors.bgHex,
       });
     }
 

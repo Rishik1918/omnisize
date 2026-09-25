@@ -25,6 +25,8 @@ export interface TextOverlay {
   alignment?: 'left' | 'center' | 'right';
   lineSpacing?: number;
   characterSpacing?: number;
+  paragraphSpacing?: number;
+  rotation?: number;
   isStrikethrough?: boolean;
   isSuperscript?: boolean;
   isSubscript?: boolean;
@@ -39,6 +41,7 @@ export interface ImageOverlay {
   y: number;
   width: number;
   height: number;
+  rotation?: number;
 }
 
 export interface ExistingTextItem {
@@ -61,6 +64,8 @@ export interface ExistingTextItem {
   alignment?: 'left' | 'center' | 'right';
   lineSpacing?: number;
   characterSpacing?: number;
+  paragraphSpacing?: number;
+  rotation?: number;
   color?: string;
   backgroundColor?: { r: number; g: number; b: number };
   isModified?: boolean;
@@ -290,6 +295,7 @@ export class PdfStudioEngine {
               size,
               font: chosenFont,
               color: textColor,
+              rotate: rep.rotation ? degrees(rep.rotation) : undefined,
             });
 
             // Underline if enabled
@@ -347,6 +353,7 @@ export class PdfStudioEngine {
             y: imgOverlay.y,
             width: imgOverlay.width,
             height: imgOverlay.height,
+            rotate: imgOverlay.rotation ? degrees(imgOverlay.rotation) : undefined,
           });
         }
       }
@@ -374,6 +381,7 @@ export class PdfStudioEngine {
             size,
             font: chosenFont,
             color,
+            rotate: textItem.rotation ? degrees(textItem.rotation) : undefined,
           });
 
           // Underline if enabled
