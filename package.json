@@ -62,7 +62,8 @@
     "win": {
       "icon": "electron/icon.ico",
       "target": [
-        "nsis"
+        "nsis",
+        "portable"
       ]
     },
     "fileAssociations": [
@@ -77,9 +78,7 @@
           "png",
           "jpg",
           "jpeg",
-          "webp",
-          "gif",
-          "bmp"
+          "webp"
         ],
         "name": "Image Document",
         "role": "Viewer",
@@ -87,25 +86,40 @@
       },
       {
         "ext": [
-          "mp4",
-          "webm",
-          "mkv",
-          "avi",
-          "mov"
+          "docx",
+          "doc"
         ],
-        "name": "Video File",
+        "name": "Word Document",
+        "role": "Editor",
+        "icon": "electron/icon.ico"
+      },
+      {
+        "ext": [
+          "xlsx",
+          "xls"
+        ],
+        "name": "Excel Spreadsheet",
+        "role": "Viewer",
+        "icon": "electron/icon.ico"
+      },
+      {
+        "ext": "zip",
+        "name": "ZIP Archive",
         "role": "Viewer",
         "icon": "electron/icon.ico"
       }
     ],
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Omnisize",
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "uninstallDisplayName": "Omnisize"
     }
   }
 }

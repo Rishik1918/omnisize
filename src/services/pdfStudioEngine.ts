@@ -265,14 +265,21 @@ export class PdfStudioEngine {
           const chosenFont = selectFont(rep.fontFamily, rep.isBold, rep.isItalic);
           const size = rep.fontSize || 12;
 
-          // Erase old text bounding box tightly matching exact glyph dimensions
-          const eraseY = Math.max(0, rep.y - 1);
-          const eraseHeight = Math.max(rep.height, size * 1.1);
-          const eraseWidth = rep.width + 2;
+          // Erase old text bounding box covering ascenders and descenders completely!
+          const descenderPt = Math.max(2.5, size * 0.32);
+          const ascenderPt = Math.max(1.5, size * 0.15);
+          const eraseY = Math.max(0, rep.y - descenderPt);
+          const eraseHeight = Math.max(rep.height + descenderPt + ascenderPt, size * 1.35);
+          const eraseWidth = rep.width + 4;
 
-          const bg = rep.backgroundColor || { r: 1, g: 1, b: 1 };
+          const rawBg = rep.backgroundColor || { r: 1, g: 1, b: 1 };
+          // If background is near-white (>= 0.88), snap to pure 1.0 white to prevent muddy gray boxes
+          const bg = (rawBg.r >= 0.88 && rawBg.g >= 0.88 && rawBg.b >= 0.88)
+            ? { r: 1, g: 1, b: 1 }
+            : rawBg;
+
           page.drawRectangle({
-            x: Math.max(0, rep.x - 1),
+            x: Math.max(0, rep.x - 2),
             y: eraseY,
             width: eraseWidth,
             height: eraseHeight,

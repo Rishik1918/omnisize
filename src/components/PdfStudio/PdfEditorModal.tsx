@@ -256,13 +256,24 @@ const sampleCanvasBgColor = (
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
 
-    // Sample pixels outside the text box perimeter to detect true document canvas background
+    // Calculate canvas internal pixel ratio to accurately map from CSS coordinates to canvas pixel buffer
+    const styleW = parseFloat(canvas.style.width) || canvas.clientWidth || 1;
+    const styleH = parseFloat(canvas.style.height) || canvas.clientHeight || 1;
+    const pixelRatioX = canvas.width / styleW;
+    const pixelRatioY = canvas.height / styleH;
+
+    const cx = cssX * pixelRatioX;
+    const cy = cssY * pixelRatioY;
+    const cw = cssW * pixelRatioX;
+    const ch = cssH * pixelRatioY;
+
+    // Sample pixels outside the text box perimeter
     const points = [
-      { x: Math.max(1, cssX - 4), y: Math.max(1, cssY - 4) },
-      { x: Math.max(1, cssX + cssW / 2), y: Math.max(1, cssY - 4) },
-      { x: Math.min(canvas.width - 2, cssX + cssW + 4), y: Math.max(1, cssY - 4) },
-      { x: Math.max(1, cssX - 4), y: Math.min(canvas.height - 2, cssY + cssH + 4) },
-      { x: Math.min(canvas.width - 2, cssX + cssW + 4), y: Math.min(canvas.height - 2, cssY + cssH + 4) },
+      { x: Math.max(2, cx - 6 * pixelRatioX), y: Math.max(2, cy - 4 * pixelRatioY) },
+      { x: Math.max(2, cx + cw / 2), y: Math.max(2, cy - 4 * pixelRatioY) },
+      { x: Math.min(canvas.width - 3, cx + cw + 6 * pixelRatioX), y: Math.max(2, cy - 4 * pixelRatioY) },
+      { x: Math.max(2, cx - 6 * pixelRatioX), y: Math.min(canvas.height - 3, cy + ch + 4 * pixelRatioY) },
+      { x: Math.min(canvas.width - 3, cx + cw + 6 * pixelRatioX), y: Math.min(canvas.height - 3, cy + ch + 4 * pixelRatioY) },
     ];
 
     let rSum = 0, gSum = 0, bSum = 0, valid = 0;
@@ -279,9 +290,17 @@ const sampleCanvasBgColor = (
     }
 
     if (valid > 0) {
-      const r = Math.round(rSum / valid);
-      const g = Math.round(gSum / valid);
-      const b = Math.round(bSum / valid);
+      let r = Math.round(rSum / valid);
+      let g = Math.round(gSum / valid);
+      let b = Math.round(bSum / valid);
+
+      // On standard white/light document papers (RGB >= 215), snap to pure #ffffff to prevent dirty gray boxes!
+      if (r >= 215 && g >= 215 && b >= 215) {
+        r = 255;
+        g = 255;
+        b = 255;
+      }
+
       const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
       const isDark = (r * 0.299 + g * 0.587 + b * 0.114) < 128;
       return { hex, rgb: { r: r / 255, g: g / 255, b: b / 255 }, isDark };
@@ -2694,6 +2713,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssW = Math.max(12, item.width * scale);
                 const cssH = Math.max(10, item.height * scale);
 
+                // Enclose full text line including descenders (g, j, p, q, y, commas) and ascenders
+                // In PDF coordinates, (viewportDims.height - item.y * scale) is the baseline.
+                // Descenders extend ~35% below the baseline, so we expand downwards and upwards to cover 100%
+                const descenderDepth = Math.max(4, Math.round(itemFontSize * scale * 0.35));
+                const ascenderExtra = Math.max(2, Math.round(itemFontSize * scale * 0.15));
+
+                const boxX = Math.max(0, cssX - 2);
+                const boxY = Math.max(0, cssY - ascenderExtra);
+                const boxW = cssW + 6;
+                const boxH = cssH + ascenderExtra + descenderDepth;
+
                 const cssFontFamily = resolveCssFontFamily(itemFontFamily);
                 const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH);
                 const textColor = currentItem.color || item.color || (sampledBg.isDark ? '#f8fafc' : '#0f172a');
@@ -2722,11 +2752,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       setHexInput(textColor);
                     }}
                     style={{
-                      left: `${cssX}px`,
-                      top: `${cssY}px`,
-                      width: `${cssW}px`,
-                      height: `${cssH}px`,
-                      backgroundColor: 'transparent',
+                      left: `${boxX}px`,
+                      top: `${boxY}px`,
+                      width: `${boxW}px`,
+                      height: `${boxH}px`,
+                      backgroundColor: isEditing || isItemModified ? sampledBg.hex : 'transparent',
                     }}
                     className={`absolute transition-all cursor-text rounded-none ${
                       isEditing
