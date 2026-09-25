@@ -226,6 +226,54 @@ interface EditorSnapshot {
   insertedBlankPages: InsertBlankPageSpec[];
 }
 
+const sampleCanvasBgColor = (
+  canvas: HTMLCanvasElement | null,
+  cssX: number,
+  cssY: number,
+  cssW: number,
+  cssH: number
+): { hex: string; rgb: { r: number; g: number; b: number }; isDark: boolean } => {
+  if (!canvas) return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
+
+    // Sample pixels outside the text box perimeter to detect true document canvas background
+    const points = [
+      { x: Math.max(1, cssX - 4), y: Math.max(1, cssY - 4) },
+      { x: Math.max(1, cssX + cssW / 2), y: Math.max(1, cssY - 4) },
+      { x: Math.min(canvas.width - 2, cssX + cssW + 4), y: Math.max(1, cssY - 4) },
+      { x: Math.max(1, cssX - 4), y: Math.min(canvas.height - 2, cssY + cssH + 4) },
+      { x: Math.min(canvas.width - 2, cssX + cssW + 4), y: Math.min(canvas.height - 2, cssY + cssH + 4) },
+    ];
+
+    let rSum = 0, gSum = 0, bSum = 0, valid = 0;
+    for (const pt of points) {
+      if (pt.x >= 0 && pt.x < canvas.width && pt.y >= 0 && pt.y < canvas.height) {
+        const d = ctx.getImageData(Math.round(pt.x), Math.round(pt.y), 1, 1).data;
+        if (d[3] > 30) {
+          rSum += d[0];
+          gSum += d[1];
+          bSum += d[2];
+          valid++;
+        }
+      }
+    }
+
+    if (valid > 0) {
+      const r = Math.round(rSum / valid);
+      const g = Math.round(gSum / valid);
+      const b = Math.round(bSum / valid);
+      const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+      const isDark = (r * 0.299 + g * 0.587 + b * 0.114) < 128;
+      return { hex, rgb: { r: r / 255, g: g / 255, b: b / 255 }, isDark };
+    }
+  } catch (e) {
+    // Canvas context fallback
+  }
+  return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
+};
+
 export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile, initialFiles }) => {
   if (!isOpen) return null;
 
@@ -2068,6 +2116,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   ? 'Courier New, monospace'
                   : 'Arial, Helvetica, sans-serif';
 
+                const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH);
+                const textColor = item.color || (sampledBg.isDark ? '#f8fafc' : '#0f172a');
+
                 return (
                   <div
                     key={item.id}
@@ -2076,17 +2127,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       setActiveEditingId(item.id);
                     }}
                     style={{
-                      left: `${cssX - 2}px`,
-                      top: `${cssY - 2}px`,
-                      width: `${cssW + 4}px`,
-                      height: `${cssH + 4}px`,
+                      left: `${cssX - 1}px`,
+                      top: `${cssY - 1}px`,
+                      width: `${cssW + 2}px`,
+                      height: `${cssH + 2}px`,
+                      backgroundColor: isEditing || isItemModified ? sampledBg.hex : 'transparent',
                     }}
-                    className={`absolute rounded transition-all cursor-text ${
+                    className={`absolute transition-all cursor-text rounded-xs ${
                       isEditing
-                        ? 'ring-2 ring-emerald-500 z-40 bg-white'
+                        ? 'border border-teal-500 dark:border-teal-400 ring-1 ring-teal-500/40 z-40'
                         : isItemModified
-                        ? 'bg-emerald-500/20 border border-emerald-500/50 hover:ring-1 hover:ring-emerald-500'
-                        : 'hover:bg-blue-500/10 hover:border hover:border-blue-400/40'
+                        ? 'border border-dashed border-teal-500/50 hover:border-teal-500'
+                        : 'border border-teal-500/40 hover:border-teal-500/90 hover:bg-teal-500/5'
                     }`}
                   >
                     {isEditing ? (
@@ -2101,6 +2153,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             [item.id]: {
                               ...item,
                               currentText: updatedText,
+                              backgroundColor: sampledBg.rgb,
                               isModified: true,
                             },
                           }));
@@ -2120,10 +2173,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           fontWeight: item.isBold ? 700 : 400,
                           fontStyle: item.isItalic ? 'italic' : 'normal',
                           fontSize: `${item.fontSize * scale}px`,
-                          color: '#000000',
+                          color: textColor,
                           lineHeight: `${cssH}px`,
+                          caretColor: sampledBg.isDark ? '#38bdf8' : '#0d9488',
+                          backgroundColor: 'transparent',
                         }}
-                        className="w-full h-full p-0 m-0 border-0 outline-none bg-white text-zinc-900"
+                        className="w-full h-full p-0 m-0 border-0 outline-none select-text"
                       />
                     ) : (
                       isItemModified && (
@@ -2133,9 +2188,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             fontWeight: item.isBold ? 700 : 400,
                             fontStyle: item.isItalic ? 'italic' : 'normal',
                             fontSize: `${item.fontSize * scale}px`,
+                            color: textColor,
                             lineHeight: `${cssH}px`,
+                            backgroundColor: 'transparent',
                           }}
-                          className="w-full h-full bg-white text-zinc-900 truncate px-0.5"
+                          className="w-full h-full truncate px-0"
                         >
                           {currentTextVal}
                         </div>

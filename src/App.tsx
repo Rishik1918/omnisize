@@ -11,7 +11,6 @@ import { ConverterView } from './components/ConverterView';
 import { PdfStudioView } from './components/PdfStudio/PdfStudioView';
 import { PdfEditorModal } from './components/PdfStudio/PdfEditorModal';
 import { InitialChoiceScreen } from './components/InitialChoiceScreen';
-import { BottomNav } from './components/BottomNav';
 import { PdfPasswordPromptModal } from './components/PdfPasswordPromptModal';
 import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOptions, DocumentProcessingOptions } from './types';
 import { ImageEngine } from './services/imageEngine';
@@ -283,7 +282,7 @@ export default function App() {
         fileCounts={fileCounts}
       />
 
-      <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 pb-24 sm:pb-8">
+      <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 py-4 sm:py-6 pb-6 sm:pb-8">
         {/* Workspace Mode Selection */}
         {appMode === 'home' ? (
           <InitialChoiceScreen
@@ -506,43 +505,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating Bottom Nav on Mobile */}
-      <BottomNav
-        appMode={appMode}
-        setAppMode={setAppMode}
-        activeTab={activeTab}
-        setActiveTab={(tab) => setActiveTab(tab)}
-        onOpenUnlocker={() => {
-          const firstPdf = items.find((i) => i.type === 'pdf');
-          if (firstPdf) {
-            setUnlockModalItem(firstPdf);
-          } else {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = 'application/pdf,.pdf';
-            input.onchange = (e: any) => {
-              if (e.target.files && e.target.files.length > 0) {
-                const file = e.target.files[0];
-                const newItem: ProcessedItem = {
-                  id: Math.random().toString(36).substring(2, 9),
-                  file,
-                  name: file.name,
-                  type: 'pdf',
-                  originalSize: file.size,
-                  previewUrl: URL.createObjectURL(file),
-                  status: 'idle',
-                  progress: 0,
-                };
-                setItems((prev) => [newItem, ...prev]);
-                setUnlockModalItem(newItem);
-              }
-            };
-            input.click();
-          }
-        }}
-      />
-
-      <footer className="border-t border-zinc-200 dark:border-zinc-800/80 py-4 text-center text-xs text-zinc-500 mb-14 sm:mb-0">
+      <footer className="border-t border-zinc-200 dark:border-zinc-800/80 py-4 text-center text-xs text-zinc-500 mb-0">
         <div className="max-w-5xl mx-auto px-4 flex items-center justify-between text-[11px]">
           <span>Omnisize</span>
         </div>

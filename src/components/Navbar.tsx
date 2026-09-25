@@ -116,6 +116,77 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
+        {/* Mobile Horizontally Scrollable Mode Switcher Strip (Shifted to top for Android & Mobile) */}
+        <div className="sm:hidden border-t border-zinc-200/80 dark:border-zinc-800/80 py-2 -mx-3 px-3 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-1.5 w-max">
+            <button
+              onClick={() => setAppMode('home')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium text-xs whitespace-nowrap transition-all ${
+                appMode === 'home'
+                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                  : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              <LayoutGrid className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>Home</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setAppMode('compress');
+                if (activeTab === 'unlock') setActiveTab('all');
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium text-xs whitespace-nowrap transition-all ${
+                appMode === 'compress' && activeTab !== 'unlock'
+                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                  : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              <Layers className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>Compress</span>
+            </button>
+
+            <button
+              onClick={() => setAppMode('convert')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium text-xs whitespace-nowrap transition-all ${
+                appMode === 'convert'
+                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                  : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              <RefreshCw className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>Convert & ZIP</span>
+            </button>
+
+            <button
+              onClick={() => setAppMode('pdfstudio')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium text-xs whitespace-nowrap transition-all ${
+                appMode === 'pdfstudio'
+                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                  : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              <Edit3 className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>PDF Studio</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setAppMode('compress');
+                setActiveTab('unlock');
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-medium text-xs whitespace-nowrap transition-all ${
+                appMode === 'compress' && activeTab === 'unlock'
+                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                  : 'bg-zinc-100 dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200'
+              }`}
+            >
+              <KeyRound className="w-3.5 h-3.5" strokeWidth={1.5} />
+              <span>Unlock PDF</span>
+            </button>
+          </div>
+        </div>
+
         {/* Sub-tabs when in compress mode ONLY IF files are queued */}
         {appMode === 'compress' && activeTab !== 'unlock' && fileCounts.all > 0 && (
           <div className="flex items-center space-x-1.5 pb-2.5 overflow-x-auto no-scrollbar -mx-3 px-3 sm:mx-0 sm:px-0">

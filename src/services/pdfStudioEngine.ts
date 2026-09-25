@@ -50,6 +50,7 @@ export interface ExistingTextItem {
   isBold?: boolean;
   isItalic?: boolean;
   color?: string;
+  backgroundColor?: { r: number; g: number; b: number };
   isModified?: boolean;
 }
 
@@ -251,12 +252,13 @@ export class PdfStudioEngine {
           const eraseHeight = rep.height + padY * 1.5;
           const eraseWidth = Math.max(rep.width + 4, rep.currentText.length * rep.fontSize * 0.7);
 
+          const bg = rep.backgroundColor || { r: 1, g: 1, b: 1 };
           page.drawRectangle({
             x: Math.max(0, rep.x - 2),
             y: eraseY,
             width: eraseWidth,
             height: eraseHeight,
-            color: rgb(1, 1, 1),
+            color: rgb(bg.r, bg.g, bg.b),
           });
 
           // Draw replacement text matching original coordinates, font, size & weight
