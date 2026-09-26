@@ -1,5 +1,7 @@
 import {
   PDFDocument,
+  PDFPage,
+  RGB,
   rgb,
   StandardFonts,
   degrees,
@@ -107,7 +109,10 @@ export type ShapeType =
   | 'pentagon'
   | 'hexagon'
   | 'star'
-  | 'callout';
+  | 'callout'
+  | 'heart'
+  | 'lightning'
+  | 'cloud';
 
 export interface ShapeOverlay {
   id: string;
@@ -592,99 +597,19 @@ export class PdfStudioEngine {
           const rot = shape.rotation ? degrees(shape.rotation) : undefined;
           const op = shape.opacity ?? 1;
 
-          if (shape.type === 'circle') {
-            const rx = shape.width / 2;
-            const ry = shape.height / 2;
-            page.drawEllipse({
-              x: shape.x + rx,
-              y: shape.y + ry,
-              xScale: rx,
-              yScale: ry,
-              borderColor: stroke,
-              borderWidth,
-              color: fill,
-              rotate: rot,
-              opacity: op,
-            });
-          } else if (shape.type === 'line') {
-            page.drawLine({
-              start: { x: shape.x, y: shape.y },
-              end: { x: shape.x + shape.width, y: shape.y + shape.height },
-              color: stroke,
-              thickness: borderWidth,
-              opacity: op,
-            });
-          } else if (shape.type === 'arrow' || shape.type === 'double-arrow') {
-            page.drawLine({
-              start: { x: shape.x, y: shape.y + shape.height / 2 },
-              end: { x: shape.x + shape.width, y: shape.y + shape.height / 2 },
-              color: stroke,
-              thickness: borderWidth,
-              opacity: op,
-            });
-            const headSize = Math.min(12, Math.max(5, shape.height * 0.35));
-            const endX = shape.x + shape.width;
-            const midY = shape.y + shape.height / 2;
-            page.drawLine({
-              start: { x: endX - headSize, y: midY - headSize * 0.6 },
-              end: { x: endX, y: midY },
-              color: stroke,
-              thickness: borderWidth,
-              opacity: op,
-            });
-            page.drawLine({
-              start: { x: endX - headSize, y: midY + headSize * 0.6 },
-              end: { x: endX, y: midY },
-              color: stroke,
-              thickness: borderWidth,
-              opacity: op,
-            });
-            if (shape.type === 'double-arrow') {
-              const startX = shape.x;
-              page.drawLine({
-                start: { x: startX + headSize, y: midY - headSize * 0.6 },
-                end: { x: startX, y: midY },
-                color: stroke,
-                thickness: borderWidth,
-                opacity: op,
-              });
-              page.drawLine({
-                start: { x: startX + headSize, y: midY + headSize * 0.6 },
-                end: { x: startX, y: midY },
-                color: stroke,
-                thickness: borderWidth,
-                opacity: op,
-              });
-            }
-          } else if (shape.type === 'triangle') {
-            const p1 = { x: shape.x + shape.width / 2, y: shape.y + shape.height };
-            const p2 = { x: shape.x, y: shape.y };
-            const p3 = { x: shape.x + shape.width, y: shape.y };
-            page.drawLine({ start: p1, end: p2, color: stroke, thickness: borderWidth });
-            page.drawLine({ start: p2, end: p3, color: stroke, thickness: borderWidth });
-            page.drawLine({ start: p3, end: p1, color: stroke, thickness: borderWidth });
-          } else if (shape.type === 'diamond') {
-            const p1 = { x: shape.x + shape.width / 2, y: shape.y + shape.height };
-            const p2 = { x: shape.x + shape.width, y: shape.y + shape.height / 2 };
-            const p3 = { x: shape.x + shape.width / 2, y: shape.y };
-            const p4 = { x: shape.x, y: shape.y + shape.height / 2 };
-            page.drawLine({ start: p1, end: p2, color: stroke, thickness: borderWidth });
-            page.drawLine({ start: p2, end: p3, color: stroke, thickness: borderWidth });
-            page.drawLine({ start: p3, end: p4, color: stroke, thickness: borderWidth });
-            page.drawLine({ start: p4, end: p1, color: stroke, thickness: borderWidth });
-          } else {
-            page.drawRectangle({
-              x: shape.x,
-              y: shape.y,
-              width: shape.width,
-              height: shape.height,
-              borderColor: stroke,
-              borderWidth,
-              color: fill,
-              rotate: rot,
-              opacity: op,
-            });
-          }
+          this.drawVectorShape(
+            page,
+            shape.type,
+            shape.x,
+            shape.y,
+            shape.width,
+            shape.height,
+            stroke,
+            fill,
+            borderWidth,
+            rot,
+            op
+          );
         }
       }
     }
@@ -776,27 +701,17 @@ export class PdfStudioEngine {
                   const sH = Math.max(2, rowH - sPad * 2);
                   const strokeClr = this.parseHexColor(sData.strokeColor || '#2563eb');
                   const fillClr = sData.fillColor && sData.fillColor !== 'transparent' ? this.parseHexColor(sData.fillColor) : undefined;
-                  if (sData.type === 'circle') {
-                    page.drawEllipse({
-                      x: cellX + sPad + sW / 2,
-                      y: cellY + sPad + sH / 2,
-                      xScale: sW / 2,
-                      yScale: sH / 2,
-                      borderColor: strokeClr,
-                      borderWidth: sData.strokeWidth || 1.5,
-                      color: fillClr,
-                    });
-                  } else {
-                    page.drawRectangle({
-                      x: cellX + sPad,
-                      y: cellY + sPad,
-                      width: sW,
-                      height: sH,
-                      borderColor: strokeClr,
-                      borderWidth: sData.strokeWidth || 1.5,
-                      color: fillClr,
-                    });
-                  }
+                  this.drawVectorShape(
+                    page,
+                    sData.type as ShapeType,
+                    cellX + sPad,
+                    cellY + sPad,
+                    sW,
+                    sH,
+                    strokeClr,
+                    fillClr,
+                    sData.strokeWidth || 1.5
+                  );
                 } catch (_) {}
               }
 
@@ -1402,5 +1317,142 @@ export class PdfStudioEngine {
       return rgb(r, g, b);
     }
     return rgb(0, 0, 0);
+  }
+
+  public static drawVectorShape(
+    page: PDFPage,
+    type: ShapeType,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    stroke: RGB,
+    fill?: RGB,
+    borderWidth: number = 1.5,
+    rot?: any,
+    op: number = 1
+  ) {
+    if (type === 'circle') {
+      const rx = width / 2;
+      const ry = height / 2;
+      page.drawEllipse({
+        x: x + rx,
+        y: y + ry,
+        xScale: rx,
+        yScale: ry,
+        borderColor: stroke,
+        borderWidth,
+        color: fill,
+        rotate: rot,
+        opacity: op,
+      });
+    } else if (type === 'line') {
+      page.drawLine({
+        start: { x, y: y + height / 2 },
+        end: { x: x + width, y: y + height / 2 },
+        color: stroke,
+        thickness: borderWidth,
+        opacity: op,
+      });
+    } else if (type === 'arrow' || type === 'double-arrow') {
+      page.drawLine({
+        start: { x, y: y + height / 2 },
+        end: { x: x + width, y: y + height / 2 },
+        color: stroke,
+        thickness: borderWidth,
+        opacity: op,
+      });
+      const headSize = Math.min(12, Math.max(5, height * 0.35));
+      const endX = x + width;
+      const midY = y + height / 2;
+      page.drawLine({
+        start: { x: endX - headSize, y: midY - headSize * 0.6 },
+        end: { x: endX, y: midY },
+        color: stroke,
+        thickness: borderWidth,
+        opacity: op,
+      });
+      page.drawLine({
+        start: { x: endX - headSize, y: midY + headSize * 0.6 },
+        end: { x: endX, y: midY },
+        color: stroke,
+        thickness: borderWidth,
+        opacity: op,
+      });
+      if (type === 'double-arrow') {
+        const startX = x;
+        page.drawLine({
+          start: { x: startX + headSize, y: midY - headSize * 0.6 },
+          end: { x: startX, y: midY },
+          color: stroke,
+          thickness: borderWidth,
+          opacity: op,
+        });
+        page.drawLine({
+          start: { x: startX + headSize, y: midY + headSize * 0.6 },
+          end: { x: startX, y: midY },
+          color: stroke,
+          thickness: borderWidth,
+          opacity: op,
+        });
+      }
+    } else if (type === 'triangle') {
+      const p1 = { x: x + width / 2, y: y + height };
+      const p2 = { x, y };
+      const p3 = { x: x + width, y };
+      page.drawLine({ start: p1, end: p2, color: stroke, thickness: borderWidth, opacity: op });
+      page.drawLine({ start: p2, end: p3, color: stroke, thickness: borderWidth, opacity: op });
+      page.drawLine({ start: p3, end: p1, color: stroke, thickness: borderWidth, opacity: op });
+    } else if (type === 'diamond') {
+      const p1 = { x: x + width / 2, y: y + height };
+      const p2 = { x: x + width, y: y + height / 2 };
+      const p3 = { x: x + width / 2, y };
+      const p4 = { x, y: y + height / 2 };
+      page.drawLine({ start: p1, end: p2, color: stroke, thickness: borderWidth, opacity: op });
+      page.drawLine({ start: p2, end: p3, color: stroke, thickness: borderWidth, opacity: op });
+      page.drawLine({ start: p3, end: p4, color: stroke, thickness: borderWidth, opacity: op });
+      page.drawLine({ start: p4, end: p1, color: stroke, thickness: borderWidth, opacity: op });
+    } else if (type === 'star') {
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const outerR = Math.min(width, height) / 2 - borderWidth;
+      const innerR = outerR * 0.4;
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < 10; i++) {
+        const r = i % 2 === 0 ? outerR : innerR;
+        const angle = (i * Math.PI) / 5 - Math.PI / 2;
+        pts.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+      }
+      for (let i = 0; i < pts.length; i++) {
+        const next = pts[(i + 1) % pts.length];
+        page.drawLine({ start: pts[i], end: next, color: stroke, thickness: borderWidth, opacity: op });
+      }
+    } else if (type === 'pentagon' || type === 'hexagon') {
+      const sides = type === 'pentagon' ? 5 : 6;
+      const cx = x + width / 2;
+      const cy = y + height / 2;
+      const r = Math.min(width, height) / 2 - borderWidth;
+      const pts: { x: number; y: number }[] = [];
+      for (let i = 0; i < sides; i++) {
+        const angle = (i * 2 * Math.PI) / sides - Math.PI / 2;
+        pts.push({ x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) });
+      }
+      for (let i = 0; i < pts.length; i++) {
+        const next = pts[(i + 1) % pts.length];
+        page.drawLine({ start: pts[i], end: next, color: stroke, thickness: borderWidth, opacity: op });
+      }
+    } else {
+      page.drawRectangle({
+        x,
+        y,
+        width,
+        height,
+        borderColor: stroke,
+        borderWidth,
+        color: fill,
+        rotate: rot,
+        opacity: op,
+      });
+    }
   }
 }

@@ -68,6 +68,44 @@ export class UniversalDocumentLoader {
       }
     }
 
+    // 4.5. PowerPoint Presentations (.pptx)
+    if (ext === 'pptx' || file.type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') {
+      try {
+        const JSZip = (await import('jszip')).default;
+        const zip = await JSZip.loadAsync(await file.arrayBuffer());
+        const slideFiles = Object.keys(zip.files)
+          .filter((f) => f.startsWith('ppt/slides/slide') && f.endsWith('.xml'))
+          .sort((a, b) => {
+            const numA = parseInt(a.replace(/[^0-9]/g, '') || '0', 10);
+            const numB = parseInt(b.replace(/[^0-9]/g, '') || '0', 10);
+            return numA - numB;
+          });
+
+        const pages = [];
+        for (let i = 0; i < slideFiles.length; i++) {
+          const slideXml = await zip.files[slideFiles[i]].async('text');
+          const textMatches = slideXml.match(/<a:t[^>]*>(.*?)<\/a:t>/gs) || [];
+          const slideText = textMatches
+            .map((m) => m.replace(/<[^>]+>/g, '').trim())
+            .filter(Boolean)
+            .join('\n');
+          pages.push({
+            pageNumber: i + 1,
+            text: slideText || `Slide ${i + 1}`,
+            confidence: 100,
+          });
+        }
+        if (pages.length > 0) {
+          const pdfBlob = await OcrEngine.exportToPdf(pages);
+          return new File([pdfBlob], file.name.replace(/\.[^/.]+$/, '') + '.pdf', {
+            type: 'application/pdf',
+          });
+        }
+      } catch (err) {
+        console.warn('PowerPoint presentation parsing warning:', err);
+      }
+    }
+
     // 5. Plain text, Markdown, JSON, Log files
     if (['txt', 'md', 'json', 'log', 'rtf'].includes(ext) || file.type.startsWith('text/')) {
       try {

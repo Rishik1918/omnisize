@@ -735,11 +735,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Page Border Feature State
   const [pageBorders, setPageBorders] = useState<Record<number, PageBorderConfig>>({});
   const [showBorderDropdown, setShowBorderDropdown] = useState<boolean>(false);
-  const [activeBorderScope, setActiveBorderScope] = useState<'current' | 'all'>('all');
+  const [selectedBorderPage, setSelectedBorderPage] = useState<number | null>(null);
+  const [activeBorderScope, setActiveBorderScope] = useState<'current' | 'all' | 'odd' | 'even'>('all');
+  const [isRibbonCollapsed, setIsRibbonCollapsed] = useState<boolean>(false);
+  const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState<boolean>(false);
   const [interactiveBorderHandles, setInteractiveBorderHandles] = useState<boolean>(false);
   const [borderDragState, setBorderDragState] = useState<{
     pageIndex: number;
-    handle: 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+    handle: 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'move';
     startX: number;
     startY: number;
     origBorder: PageBorderConfig;
@@ -825,37 +828,155 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     []
   );
 
-  // Auto-fits text overlays within the active border boundaries without manual intervention
-  const fitTextOverlaysToBorder = useCallback(
+  // Auto-fits all page content (text overlays, tables, shapes, images) within border or margin boundaries
+  const fitAllContentToBounds = useCallback(
     (
       targetPageIndex: number | 'all',
-      newBorder: PageBorderConfig,
+      bounds: { left: number; right: number; top: number; bottom: number },
       pWidth?: number,
       pHeight?: number
     ) => {
+      const pw = pWidth || 595.28;
+      const ph = pHeight || 841.89;
+      const minX = Math.max(0, bounds.left + 5);
+      const maxX = Math.max(minX + 30, pw - bounds.right - 5);
+      const availableW = Math.max(30, maxX - minX);
+
+      const minY = Math.max(0, bounds.bottom + 5);
+      const maxY = Math.max(minY + 30, ph - bounds.top - 5);
+      const availableH = Math.max(30, maxY - minY);
+
+      // 1. Text overlays
       setTextOverlays((prev) =>
         prev.map((t) => {
           if (targetPageIndex !== 'all' && t.pageIndex !== targetPageIndex) return t;
-          const pw = pWidth || 595.28;
-          const ph = pHeight || 841.89;
-          const minX = newBorder.left + 5;
-          const maxX = Math.max(minX + 20, pw - newBorder.right - 10);
-          const minY = newBorder.bottom + 5;
-          const maxY = Math.max(minY + 20, ph - newBorder.top - 15);
-
+          const estW = (t.text?.length || 1) * (t.size || 12) * 0.55;
+          const estH = (t.size || 12) * 1.2;
           let newX = t.x;
           let newY = t.y;
           if (newX < minX) newX = minX;
-          if (newX > maxX) newX = maxX;
+          if (newX + estW > maxX) newX = Math.max(minX, maxX - estW);
           if (newY < minY) newY = minY;
-          if (newY > maxY) newY = maxY;
+          if (newY + estH > maxY) newY = Math.max(minY, maxY - estH);
 
           return { ...t, x: Math.round(newX), y: Math.round(newY) };
+        })
+      );
+
+      // 2. Tables
+      setTables((prev) =>
+        prev.map((tbl) => {
+          if (targetPageIndex !== 'all' && tbl.pageIndex !== targetPageIndex) return tbl;
+          let curW = tbl.width;
+          let curH = tbl.height;
+          let newColWidths = tbl.colWidths ? [...tbl.colWidths] : undefined;
+          let newRowHeights = tbl.rowHeights ? [...tbl.rowHeights] : undefined;
+
+          if (curW > availableW) {
+            const ratio = availableW / curW;
+            curW = availableW;
+            if (newColWidths) {
+              newColWidths = newColWidths.map((w) => Math.max(10, Math.round(w * ratio)));
+            }
+          }
+          if (curH > availableH) {
+            const ratio = availableH / curH;
+            curH = availableH;
+            if (newRowHeights) {
+              newRowHeights = newRowHeights.map((h) => Math.max(8, Math.round(h * ratio)));
+            }
+          }
+
+          let newX = tbl.x;
+          let newY = tbl.y;
+          if (newX < minX) newX = minX;
+          if (newX + curW > maxX) newX = Math.max(minX, maxX - curW);
+          if (newY < minY) newY = minY;
+          if (newY + curH > maxY) newY = Math.max(minY, maxY - curH);
+
+          return {
+            ...tbl,
+            x: Math.round(newX),
+            y: Math.round(newY),
+            width: Math.round(curW),
+            height: Math.round(curH),
+            colWidths: newColWidths,
+            rowHeights: newRowHeights,
+          };
+        })
+      );
+
+      // 3. Shapes
+      setShapes((prev) =>
+        prev.map((shp) => {
+          if (targetPageIndex !== 'all' && shp.pageIndex !== targetPageIndex) return shp;
+          let newW = shp.width;
+          let newH = shp.height;
+          if (newW > availableW) newW = availableW;
+          if (newH > availableH) newH = availableH;
+
+          let newX = shp.x;
+          let newY = shp.y;
+          if (newX < minX) newX = minX;
+          if (newX + newW > maxX) newX = Math.max(minX, maxX - newW);
+          if (newY < minY) newY = minY;
+          if (newY + newH > maxY) newY = Math.max(minY, maxY - newH);
+
+          return {
+            ...shp,
+            x: Math.round(newX),
+            y: Math.round(newY),
+            width: Math.round(newW),
+            height: Math.round(newH),
+          };
+        })
+      );
+
+      // 4. Image overlays
+      setImageOverlays((prev) =>
+        prev.map((img) => {
+          if (targetPageIndex !== 'all' && img.pageIndex !== targetPageIndex) return img;
+          let newW = img.width;
+          let newH = img.height;
+          if (newW > availableW) {
+            const ratio = availableW / newW;
+            newW = availableW;
+            newH = Math.round(newH * ratio);
+          }
+          if (newH > availableH) {
+            const ratio = availableH / newH;
+            newH = availableH;
+            newW = Math.round(newW * ratio);
+          }
+
+          let newX = img.x;
+          let newY = img.y;
+          if (newX < minX) newX = minX;
+          if (newX + newW > maxX) newX = Math.max(minX, maxX - newW);
+          if (newY < minY) newY = minY;
+          if (newY + newH > maxY) newY = Math.max(minY, maxY - newH);
+
+          return {
+            ...img,
+            x: Math.round(newX),
+            y: Math.round(newY),
+            width: Math.round(newW),
+            height: Math.round(newH),
+          };
         })
       );
     },
     []
   );
+
+  const fitTextOverlaysToBorder = (
+    targetPageIndex: number | 'all',
+    newBorder: PageBorderConfig,
+    pWidth?: number,
+    pHeight?: number
+  ) => {
+    fitAllContentToBounds(targetPageIndex, newBorder, pWidth, pHeight);
+  };
 
   // Last clicked cursor position on page canvas for accurate object insertion
   const lastClickedPageInfoRef = useRef<{ pageIndex: number; x: number; y: number } | null>(null);
@@ -2829,7 +2950,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   const updatePageBorderConfig = (
     partial: Partial<PageBorderConfig>,
-    scope: 'current' | 'all' = activeBorderScope
+    scope: 'current' | 'all' | 'odd' | 'even' = activeBorderScope
   ) => {
     const currentIdx = currentPage - 1;
     const baseBorder: PageBorderConfig = pageBorders[currentIdx] || {
@@ -2850,6 +2971,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         for (let i = 0; i < totalPages; i++) {
           next[i] = { ...updated };
         }
+      } else if (scope === 'odd') {
+        for (let i = 0; i < totalPages; i++) {
+          if (i % 2 === 0) next[i] = { ...updated };
+        }
+      } else if (scope === 'even') {
+        for (let i = 0; i < totalPages; i++) {
+          if (i % 2 === 1) next[i] = { ...updated };
+        }
       } else {
         next[currentIdx] = updated;
       }
@@ -2862,13 +2991,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     pushSnapshot({ pageBorders: { ...pageBorders, [currentIdx]: updated } });
   };
 
-  const removePageBorder = (scope: 'current' | 'all' = activeBorderScope) => {
+  const removePageBorder = (scope: 'current' | 'all' | 'odd' | 'even' = activeBorderScope) => {
     const currentIdx = currentPage - 1;
     setPageBorders((prev) => {
       const next = { ...prev };
       if (scope === 'all') {
         for (let i = 0; i < totalPages; i++) {
           if (next[i]) next[i] = { ...next[i], enabled: false };
+        }
+      } else if (scope === 'odd') {
+        for (let i = 0; i < totalPages; i++) {
+          if (i % 2 === 0 && next[i]) next[i] = { ...next[i], enabled: false };
+        }
+      } else if (scope === 'even') {
+        for (let i = 0; i < totalPages; i++) {
+          if (i % 2 === 1 && next[i]) next[i] = { ...next[i], enabled: false };
         }
       } else {
         if (next[currentIdx]) next[currentIdx] = { ...next[currentIdx], enabled: false };
@@ -3194,13 +3331,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (linkModalData.targetTextItemId) {
       const item = detectedTextItems.find((t) => t.id === linkModalData.targetTextItemId);
       if (item) {
+        updateActiveTextItemProps({ color: '#2563eb', isUnderline: true, isModified: true });
         const newLink: HyperlinkOverlay = {
           id: `link_${Date.now()}`,
           pageIndex,
           url: cleanUrl,
           x: item.x,
           y: item.y,
-          width: Math.max(50, item.width),
+          width: Math.max(30, item.width),
           height: Math.max(14, item.height),
         };
         const nextLinks = [...hyperlinks, newLink];
@@ -3213,18 +3351,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (linkModalData.targetOverlayId) {
       const ov = textOverlays.find((t) => t.id === linkModalData.targetOverlayId);
       if (ov) {
+        const updatedOverlays = textOverlays.map((t) => (t.id === ov.id ? { ...t, color: '#2563eb', isUnderline: true } : t));
+        setTextOverlays(updatedOverlays);
         const newLink: HyperlinkOverlay = {
           id: `link_${Date.now()}`,
           pageIndex,
           url: cleanUrl,
           x: ov.x,
           y: ov.y,
-          width: Math.max(50, ov.text.length * (ov.size || 12) * 0.65),
+          width: Math.max(30, ov.text.length * (ov.size || 12) * 0.65),
           height: Math.max(16, (ov.size || 12) * 1.3),
         };
         const nextLinks = [...hyperlinks, newLink];
         setHyperlinks(nextLinks);
-        pushSnapshot({ hyperlinks: nextLinks });
+        pushSnapshot({ textOverlays: updatedOverlays, hyperlinks: nextLinks });
         return;
       }
     }
@@ -3540,6 +3680,61 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           />
         );
       }
+      case 'heart': {
+        return (
+          <path
+            d={`M ${w * 0.5} ${h * 0.85} C ${w * 0.15} ${h * 0.55}, 0 ${h * 0.35}, 0 ${h * 0.2} C 0 ${h * 0.05}, ${w * 0.25} 0, ${w * 0.5} ${h * 0.25} C ${w * 0.75} 0, ${w} ${h * 0.05}, ${w} ${h * 0.2} C ${w} ${h * 0.35}, ${w * 0.85} ${h * 0.55}, ${w * 0.5} ${h * 0.85} Z`}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={sw}
+            strokeDasharray={strokeDash}
+          />
+        );
+      }
+      case 'lightning': {
+        return (
+          <polygon
+            points={`${w * 0.5},0 ${w * 0.15},${h * 0.55} ${w * 0.45},${h * 0.55} ${w * 0.3},${h} ${w * 0.85},${h * 0.4} ${w * 0.55},${h * 0.4}`}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={sw}
+            strokeDasharray={strokeDash}
+          />
+        );
+      }
+      case 'cloud': {
+        return (
+          <path
+            d={`M ${w * 0.25} ${h * 0.8} C ${w * 0.1} ${h * 0.8} 0 ${h * 0.65} 0 ${h * 0.5} C 0 ${h * 0.35} ${w * 0.15} ${h * 0.22} ${w * 0.3} ${h * 0.25} C ${w * 0.38} ${h * 0.08} ${w * 0.62} ${h * 0.08} ${w * 0.7} ${h * 0.25} C ${w * 0.85} ${h * 0.22} ${w} ${h * 0.35} ${w} ${h * 0.5} C ${w} ${h * 0.65} ${w * 0.9} ${h * 0.8} ${w * 0.75} ${h * 0.8} Z`}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={sw}
+            strokeDasharray={strokeDash}
+          />
+        );
+      }
+      case 'pentagon': {
+        const cx = w / 2;
+        const cy = h / 2;
+        const r = Math.min(w, h) / 2 - sw;
+        const pts: string[] = [];
+        for (let i = 0; i < 5; i++) {
+          const angle = (i * 2 * Math.PI) / 5 - Math.PI / 2;
+          pts.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+        }
+        return <polygon points={pts.join(' ')} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      }
+      case 'hexagon': {
+        const cx = w / 2;
+        const cy = h / 2;
+        const r = Math.min(w, h) / 2 - sw;
+        const pts: string[] = [];
+        for (let i = 0; i < 6; i++) {
+          const angle = (i * 2 * Math.PI) / 6 - Math.PI / 2;
+          pts.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+        }
+        return <polygon points={pts.join(' ')} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      }
       default:
         return <rect x={0} y={0} width={w} height={h} fill={fill} stroke={stroke} strokeWidth={sw} />;
     }
@@ -3649,6 +3844,40 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <RotateCw className="w-3 h-3 text-indigo-600" />
           </div>
           <div className="w-0.5 h-2 bg-indigo-500" />
+        </div>
+
+        {/* 4-Direction Move Handle positioned near the rotation point */}
+        <div
+          className="absolute -top-8 left-[calc(50%+24px)] flex items-center justify-center w-6 h-6 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-md cursor-move z-50 pointer-events-auto hover:scale-110 active:scale-95 transition-all"
+          title="Click and drag to move table or element"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setDraggingItem({
+              id,
+              type,
+              startX: e.clientX,
+              startY: e.clientY,
+              origX,
+              origY,
+            });
+          }}
+          onTouchStart={(e) => {
+            e.stopPropagation();
+            if (e.touches.length > 0) {
+              const touch = e.touches[0];
+              setDraggingItem({
+                id,
+                type,
+                startX: touch.clientX,
+                startY: touch.clientY,
+                origX,
+                origY,
+              });
+            }
+          }}
+        >
+          <Move className="w-3.5 h-3.5" />
         </div>
 
         {handles.map((h) => (
@@ -4524,7 +4753,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
       // Delete key handler
       const hasSelectedItem = Boolean(
-        selectedTableCell || selectedOverlayId || selectedTextItemId || selectedShapeId || selectedTableId
+        selectedTableCell || selectedOverlayId || selectedTextItemId || selectedShapeId || selectedTableId || selectedBorderPage !== null
       );
 
       if (e.key === 'Delete' || (e.key === 'Backspace' && hasSelectedItem)) {
@@ -4533,6 +4762,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         const isEditable = tag === 'input' || tag === 'textarea' || (activeEl as HTMLElement)?.isContentEditable;
         if (!isEditable) {
           e.preventDefault();
+
+          // 0. If page border is selected, delete the border immediately without popup
+          if (selectedBorderPage !== null) {
+            let nextBorders: Record<number, PageBorderConfig> = {};
+            setPageBorders((prev) => {
+              const next = { ...prev };
+              delete next[selectedBorderPage];
+              nextBorders = next;
+              return next;
+            });
+            pushSnapshot({ pageBorders: nextBorders });
+            setSelectedBorderPage(null);
+            return;
+          }
 
           // 1. If inside a table cell and cell has element (photo, shape, subtable), delete that element
           if (selectedTableCell) {
@@ -4622,11 +4865,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             return;
           }
 
-          // 6. If nothing is selected and Delete key was pressed, prompt to delete current page!
-          if (e.key === 'Delete') {
-            handleDeleteCurrentPage();
-            return;
-          }
+          // 6. If nothing is selected, do NOT prompt to delete page (only explicit toolbar button triggers page deletion)
         }
       }
 
@@ -4638,6 +4877,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setSelectedShapeId(null);
         setSelectedTableId(null);
         setSelectedTableCell(null);
+        setSelectedBorderPage(null);
         setCropImageId(null);
       }
     };
@@ -4657,6 +4897,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     selectedShapeId,
     selectedTableId,
     selectedTableCell,
+    selectedBorderPage,
     tables,
     shapes,
     imageOverlays,
@@ -4828,6 +5069,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               <span>{autoSaveEnabled ? 'ON' : 'OFF'}</span>
             </button>
 
+            {/* Ribbon Collapse Toggle Button */}
+            <button
+              onClick={() => setIsRibbonCollapsed(!isRibbonCollapsed)}
+              className={`p-1.5 rounded-lg border text-xs flex items-center justify-center transition-colors ${
+                isRibbonCollapsed
+                  ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400'
+                  : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+              }`}
+              title={isRibbonCollapsed ? 'Expand Tools Ribbon (Right-click ribbon also toggles)' : 'Collapse Tools Ribbon (Right-click ribbon also toggles)'}
+            >
+              {isRibbonCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+            </button>
+
             {/* Save Button */}
             <button
               onClick={handleSave}
@@ -4915,7 +5169,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       )}
 
       {/* TIER 2: Classified & Categorized Mobile & Desktop Tools Strip */}
-      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar px-3 py-1.5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 text-xs flex-shrink-0 flex-nowrap whitespace-nowrap min-h-[40px]">
+      {!isRibbonCollapsed && (
+      <div
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setIsRibbonCollapsed((prev) => !prev);
+        }}
+        className="flex items-center gap-2 overflow-x-auto touch-pan-x overscroll-x-contain no-scrollbar px-3 py-1.5 pr-16 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 text-xs flex-shrink-0 flex-nowrap whitespace-nowrap min-h-[40px]"
+      >
         {/* GROUP 1: EDIT */}
         <div className="flex items-center bg-white dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 gap-0.5 shadow-2xs flex-shrink-0">
           <span className="text-[9px] font-extrabold text-zinc-400 dark:text-zinc-500 uppercase px-1.5 select-none tracking-wider">
@@ -5030,7 +5291,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-64 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-64 max-w-[calc(100vw-24px)] max-h-[45vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 px-1">
@@ -5080,6 +5341,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         { type: 'diamond', label: 'Diamond' },
                         { type: 'double-arrow', label: 'Double Arrow' },
                         { type: 'star', label: '5-Pt Star' },
+                        { type: 'heart', label: 'Heart' },
+                        { type: 'lightning', label: 'Lightning' },
+                        { type: 'cloud', label: 'Cloud' },
                         { type: 'callout', label: 'Callout' },
                       ].map((s) => (
                         <button
@@ -5107,6 +5371,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                               <polygon
                                 points="20,4 24,15 36,15 26,23 30,34 20,27 10,34 14,23 4,15 16,15"
                                 strokeWidth="2"
+                              />
+                            )}
+                            {s.type === 'heart' && (
+                              <path
+                                d="M 20 34 C 6 22, 2 14, 2 8 C 2 3, 10 2, 20 10 C 30 2, 38 3, 38 8 C 38 14, 34 22, 20 34 Z"
+                                strokeWidth="2.5"
+                              />
+                            )}
+                            {s.type === 'lightning' && (
+                              <polygon
+                                points="20,2 6,22 18,22 12,38 34,16 22,16"
+                                strokeWidth="2.5"
+                              />
+                            )}
+                            {s.type === 'cloud' && (
+                              <path
+                                d="M 10 32 C 4 32 1 26 2 20 C 1 14 7 9 13 10 C 15 3 25 3 28 10 C 34 9 39 14 38 20 C 39 26 35 32 29 32 Z"
+                                strokeWidth="2.5"
                               />
                             )}
                             {s.type === 'callout' && (
@@ -5151,7 +5433,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-56 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-56 max-w-[calc(100vw-24px)] max-h-[45vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center justify-between">
@@ -5260,7 +5542,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-72 max-h-[80vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[42vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2 px-1">
@@ -5296,7 +5578,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1 px-1 border-t border-zinc-100 dark:border-zinc-800 pt-2">
                       Or Choose MS Word Page Size
                     </div>
-                    <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                    <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
                       {MS_WORD_PAGE_SIZES.filter((s) => s.id !== 'same').map((spec) => (
                         <button
                           key={spec.id}
@@ -5347,7 +5629,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-72 max-h-[80vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[42vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1 px-1 flex items-center justify-between">
@@ -5359,7 +5641,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     <div className="text-[10px] text-zinc-400 mb-2 px-1">
                       Select standard MS Word page size:
                     </div>
-                    <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
+                    <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
                       {MS_WORD_PAGE_SIZES.filter((s) => s.id !== 'same').map((spec) => {
                         const isCurrent =
                           Math.abs(basePageDims.width - spec.width) < 2 &&
@@ -5417,7 +5699,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-80 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-80 max-w-[calc(100vw-24px)] max-h-[42vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center justify-between pb-1.5 border-b border-zinc-100 dark:border-zinc-800 mb-2">
@@ -5435,7 +5717,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       </label>
                     </div>
 
-                    <div className="space-y-1 mb-2.5 max-h-56 overflow-y-auto pr-1">
+                    <div className="space-y-1 mb-2 max-h-36 overflow-y-auto pr-1">
                       {MS_WORD_MARGINS.map((m) => {
                         const isSelected = selectedMarginId === m.id;
                         return (
@@ -5443,7 +5725,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             key={m.id}
                             type="button"
                             onClick={() => {
+                              pushSnapshot({ textOverlays, tables, shapes, imageOverlays });
                               setSelectedMarginId(m.id);
+                              fitAllContentToBounds('all', { left: m.left, right: m.right, top: m.top, bottom: m.bottom });
                               setShowMarginDropdown(false);
                             }}
                             className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
@@ -5480,8 +5764,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             value={Math.round((customMargins.top / 72) * 100) / 100}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
-                              setCustomMargins((prev) => ({ ...prev, top: val * 72 }));
+                              const updated = { ...customMargins, top: val * 72 };
+                              setCustomMargins(updated);
                               setSelectedMarginId('custom');
+                              fitAllContentToBounds('all', updated);
                             }}
                             className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
                           />
@@ -5496,8 +5782,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             value={Math.round((customMargins.bottom / 72) * 100) / 100}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
-                              setCustomMargins((prev) => ({ ...prev, bottom: val * 72 }));
+                              const updated = { ...customMargins, bottom: val * 72 };
+                              setCustomMargins(updated);
                               setSelectedMarginId('custom');
+                              fitAllContentToBounds('all', updated);
                             }}
                             className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
                           />
@@ -5512,8 +5800,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             value={Math.round((customMargins.left / 72) * 100) / 100}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
-                              setCustomMargins((prev) => ({ ...prev, left: val * 72 }));
+                              const updated = { ...customMargins, left: val * 72 };
+                              setCustomMargins(updated);
                               setSelectedMarginId('custom');
+                              fitAllContentToBounds('all', updated);
                             }}
                             className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
                           />
@@ -5528,13 +5818,26 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             value={Math.round((customMargins.right / 72) * 100) / 100}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value) || 0;
-                              setCustomMargins((prev) => ({ ...prev, right: val * 72 }));
+                              const updated = { ...customMargins, right: val * 72 };
+                              setCustomMargins(updated);
                               setSelectedMarginId('custom');
+                              fitAllContentToBounds('all', updated);
                             }}
                             className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
                           />
                         </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          pushSnapshot({ textOverlays, tables, shapes, imageOverlays });
+                          fitAllContentToBounds('all', customMargins);
+                          setShowMarginDropdown(false);
+                        }}
+                        className="w-full mt-2 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold shadow-xs"
+                      >
+                        Apply Margins & Auto-Fit Content
+                      </button>
                     </div>
                   </div>
                 </div>,
@@ -5548,8 +5851,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               ref={borderBtnRef}
               onClick={toggleBorderDropdown}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
-                showBorderDropdown || pageBorders[currentPage - 1]?.enabled
+                showBorderDropdown
                   ? 'bg-indigo-600 text-white shadow-xs'
+                  : pageBorders[currentPage - 1]?.enabled
+                  ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
               title="Page Border Suite (Weights, Colors, Corners, Double, Frame, Resizing)"
@@ -5567,7 +5872,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-84 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-80 max-w-[calc(100vw-24px)] max-h-[45vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header with Enable Switch */}
@@ -5614,6 +5919,28 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           }`}
                         >
                           All Pages ({totalPages})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveBorderScope('odd')}
+                          className={`py-1 px-2 rounded-lg border text-center transition-colors ${
+                            activeBorderScope === 'odd'
+                              ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-700 dark:text-indigo-300 font-bold'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                          }`}
+                        >
+                          Odd Pages Only
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveBorderScope('even')}
+                          className={`py-1 px-2 rounded-lg border text-center transition-colors ${
+                            activeBorderScope === 'even'
+                              ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-700 dark:text-indigo-300 font-bold'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                          }`}
+                        >
+                          Even Pages Only
                         </button>
                       </div>
                     </div>
@@ -5859,7 +6186,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-88 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    className="fixed w-80 max-w-[calc(100vw-24px)] max-h-[45vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header with Enable Switch */}
@@ -6309,6 +6636,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </button>
         </div>
       </div>
+      )}
 
       {/* TIER 3: High-Contrast MS Word Formatting Bar (Active for both 'Edit Text' and 'Add Text') */}
       {(activeTool === 'edit-text' || activeTool === 'add-text') && (
@@ -6946,17 +7274,108 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     const wPx = Math.max(0, pW - leftPx - rightPx);
                     const hPx = Math.max(0, pH - topPx - bottomPx);
                     const strokeW = Math.max(1, Math.round(border.width * zoomScale));
+                    const isBorderSelected = selectedBorderPage === pageNum - 1;
 
                     return (
                       <div
-                        className="absolute pointer-events-none z-15"
+                        className={`absolute z-20 transition-all ${
+                          isBorderSelected ? 'ring-2 ring-indigo-500/80 ring-offset-2' : ''
+                        }`}
                         style={{
                           top: `${topPx}px`,
                           left: `${leftPx}px`,
                           width: `${wPx}px`,
                           height: `${hPx}px`,
+                          pointerEvents: 'none',
                         }}
                       >
+                        {/* Clickable Border Frame Edges to Select Border */}
+                        <div
+                          className="absolute -top-2 left-0 right-0 h-4 cursor-pointer pointer-events-auto"
+                          title="Click to select Page Border (Press Delete to remove)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBorderPage(pageNum - 1);
+                            setSelectedOverlayId(null);
+                            setSelectedShapeId(null);
+                            setSelectedTableId(null);
+                            setSelectedTableCell(null);
+                            setSelectedTextItemId(null);
+                            setShowPropertiesPanel(true);
+                            setIsPropertiesCollapsed(false);
+                          }}
+                        />
+                        <div
+                          className="absolute -bottom-2 left-0 right-0 h-4 cursor-pointer pointer-events-auto"
+                          title="Click to select Page Border (Press Delete to remove)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBorderPage(pageNum - 1);
+                            setSelectedOverlayId(null);
+                            setSelectedShapeId(null);
+                            setSelectedTableId(null);
+                            setSelectedTableCell(null);
+                            setSelectedTextItemId(null);
+                            setShowPropertiesPanel(true);
+                            setIsPropertiesCollapsed(false);
+                          }}
+                        />
+                        <div
+                          className="absolute top-0 -left-2 bottom-0 w-4 cursor-pointer pointer-events-auto"
+                          title="Click to select Page Border (Press Delete to remove)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBorderPage(pageNum - 1);
+                            setSelectedOverlayId(null);
+                            setSelectedShapeId(null);
+                            setSelectedTableId(null);
+                            setSelectedTableCell(null);
+                            setSelectedTextItemId(null);
+                            setShowPropertiesPanel(true);
+                            setIsPropertiesCollapsed(false);
+                          }}
+                        />
+                        <div
+                          className="absolute top-0 -right-2 bottom-0 w-4 cursor-pointer pointer-events-auto"
+                          title="Click to select Page Border (Press Delete to remove)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBorderPage(pageNum - 1);
+                            setSelectedOverlayId(null);
+                            setSelectedShapeId(null);
+                            setSelectedTableId(null);
+                            setSelectedTableCell(null);
+                            setSelectedTextItemId(null);
+                            setShowPropertiesPanel(true);
+                            setIsPropertiesCollapsed(false);
+                          }}
+                        />
+
+                        {/* Top Move Handle when Border is Selected */}
+                        {isBorderSelected && (
+                          <div
+                            className="absolute -top-8 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600 text-white rounded-full shadow-xl text-[11px] font-semibold cursor-move pointer-events-auto z-40 hover:bg-indigo-700 active:scale-95 transition-all select-none whitespace-nowrap"
+                            onPointerDown={(e) => {
+                              e.stopPropagation();
+                              (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                              setBorderDragState({
+                                pageIndex: pageNum - 1,
+                                handle: 'move',
+                                startX: e.clientX,
+                                startY: e.clientY,
+                                origBorder: { ...border },
+                              });
+                            }}
+                            title="Click and drag to move border (Press Delete to remove)"
+                          >
+                            <Move className="w-3.5 h-3.5" />
+                            <span>Move Border</span>
+                            <span className="text-[9px] bg-indigo-800/80 px-1 py-0.5 rounded text-indigo-200 ml-1">
+                              Del to remove
+                            </span>
+                          </div>
+                        )}
+
                         {/* Type Rendering */}
                         {border.type === 'corners' ? (
                           // Only Corners L-brackets
@@ -7039,8 +7458,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           />
                         )}
 
-                        {/* Interactive Resize Handles when Current Page */}
-                        {isCurrentPage && (interactiveBorderHandles || showBorderDropdown) && (
+                        {/* Interactive Resize Handles when Border Selected or Current Page Border Tools Active */}
+                        {(isBorderSelected || (isCurrentPage && (interactiveBorderHandles || showBorderDropdown))) && (
                           <div className="absolute inset-0 pointer-events-auto">
                             {[
                               { handle: 'nw', cursor: 'nwse-resize', style: { top: -5, left: -5 } },
@@ -7076,17 +7495,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                   let nextTop = orig.top;
                                   let nextBottom = orig.bottom;
 
-                                  if (borderDragState.handle.includes('w')) {
-                                    nextLeft = Math.max(0, Math.min((basePageDims.width || 595) / 2 - 20, orig.left + dx));
-                                  }
-                                  if (borderDragState.handle.includes('e')) {
-                                    nextRight = Math.max(0, Math.min((basePageDims.width || 595) / 2 - 20, orig.right - dx));
-                                  }
-                                  if (borderDragState.handle.includes('n')) {
-                                    nextTop = Math.max(0, Math.min((basePageDims.height || 842) / 2 - 20, orig.top + dy));
-                                  }
-                                  if (borderDragState.handle.includes('s')) {
-                                    nextBottom = Math.max(0, Math.min((basePageDims.height || 842) / 2 - 20, orig.bottom - dy));
+                                  if (borderDragState.handle === 'move') {
+                                    const borderW = (basePageDims.width || 595) - orig.left - orig.right;
+                                    const borderH = (basePageDims.height || 842) - orig.top - orig.bottom;
+                                    const maxLeft = (basePageDims.width || 595) - borderW;
+                                    const maxTop = (basePageDims.height || 842) - borderH;
+
+                                    nextLeft = Math.max(0, Math.min(maxLeft, orig.left + dx));
+                                    nextRight = (basePageDims.width || 595) - nextLeft - borderW;
+                                    nextTop = Math.max(0, Math.min(maxTop, orig.top + dy));
+                                    nextBottom = (basePageDims.height || 842) - nextTop - borderH;
+                                  } else {
+                                    if (borderDragState.handle.includes('w')) {
+                                      nextLeft = Math.max(0, Math.min((basePageDims.width || 595) / 2 - 20, orig.left + dx));
+                                    }
+                                    if (borderDragState.handle.includes('e')) {
+                                      nextRight = Math.max(0, Math.min((basePageDims.width || 595) / 2 - 20, orig.right - dx));
+                                    }
+                                    if (borderDragState.handle.includes('n')) {
+                                      nextTop = Math.max(0, Math.min((basePageDims.height || 842) / 2 - 20, orig.top + dy));
+                                    }
+                                    if (borderDragState.handle.includes('s')) {
+                                      nextBottom = Math.max(0, Math.min((basePageDims.height || 842) / 2 - 20, orig.bottom - dy));
+                                    }
                                   }
 
                                   const updatedBorder: PageBorderConfig = {
@@ -7100,7 +7531,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                     ...prev,
                                     [pageNum - 1]: updatedBorder,
                                   }));
-                                  fitTextOverlaysToBorder(pageNum - 1, updatedBorder);
+                                  fitAllContentToBounds(pageNum - 1, updatedBorder);
                                 }}
                                 onPointerUp={(e) => {
                                   if (borderDragState) {
@@ -7535,26 +7966,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       width: `${l.width * scale}px`,
                       height: `${l.height * scale}px`,
                     }}
-                    className={`absolute flex items-center gap-1 px-1 rounded border border-blue-500/70 bg-blue-500/20 hover:bg-blue-500/30 cursor-pointer z-30 group shadow-xs transition-colors ${
-                      isSelected ? 'ring-2 ring-blue-600' : ''
+                    className={`absolute rounded cursor-pointer z-30 group transition-all ${
+                      isSelected
+                        ? 'ring-2 ring-blue-500 bg-blue-500/20 border border-blue-500'
+                        : 'border border-blue-500/30 hover:border-blue-500 hover:bg-blue-500/10'
                     }`}
-                    title={`Click to open link in web browser: ${l.url}`}
+                    title={`Click to open link: ${l.url}`}
                   >
-                    <ExternalLink className="w-3 h-3 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                    <span className="text-[10px] text-blue-700 dark:text-blue-300 font-mono underline truncate">
-                      {l.url}
-                    </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setHyperlinks((prev) => prev.filter((item) => item.id !== l.id));
-                        pushSnapshot({ hyperlinks: hyperlinks.filter((item) => item.id !== l.id) });
-                      }}
-                      className="ml-auto opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-red-500 transition-opacity"
-                      title="Delete Hyperlink"
-                    >
-                      <Trash2 className="w-2.5 h-2.5" />
-                    </button>
+                    {/* Floating Sleek Tooltip with External Link & Delete */}
+                    <div className="absolute -top-7 left-0 hidden group-hover:flex items-center gap-1 px-2 py-0.5 bg-zinc-900/90 text-white rounded text-[11px] shadow-lg pointer-events-auto z-50 whitespace-nowrap">
+                      <ExternalLink className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                      <span className="font-mono underline text-blue-300 max-w-[200px] truncate">{l.url}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setHyperlinks((prev) => prev.filter((item) => item.id !== l.id));
+                          pushSnapshot({ hyperlinks: hyperlinks.filter((item) => item.id !== l.id) });
+                        }}
+                        className="p-0.5 ml-1 text-zinc-400 hover:text-red-400 transition-colors"
+                        title="Delete Hyperlink"
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -8198,19 +8632,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                           boxSizing: 'border-box',
                                         }}
                                       >
-                                        <div
-                                          className="w-full h-full flex items-center justify-center rounded"
-                                          style={{
-                                            backgroundColor: tbl.cellShapes![cellImgKey].fillColor || '#dbeafe',
-                                            borderColor: tbl.cellShapes![cellImgKey].strokeColor || '#2563eb',
-                                            borderWidth: `${tbl.cellShapes![cellImgKey].strokeWidth || 2}px`,
-                                            borderStyle: 'solid',
-                                            borderRadius: tbl.cellShapes![cellImgKey].type === 'circle' ? '9999px' : '4px',
-                                          }}
-                                        >
-                                          <span className="text-[10px] font-bold text-slate-700 capitalize truncate px-1">
-                                            {tbl.cellShapes![cellImgKey].type}
-                                          </span>
+                                        <div className="w-full h-full p-1 flex items-center justify-center overflow-hidden">
+                                          <svg
+                                            width="100%"
+                                            height="100%"
+                                            viewBox={`0 0 ${Math.max(10, colWidths[cIdx] * scale - 8)} ${Math.max(10, rowHeights[rIdx] * scale - 8)}`}
+                                            style={{ overflow: 'visible' }}
+                                          >
+                                            {renderShapeSvg({
+                                              id: cellImgKey,
+                                              pageIndex: tbl.pageIndex,
+                                              type: tbl.cellShapes![cellImgKey].type as ShapeType,
+                                              x: 0,
+                                              y: 0,
+                                              width: Math.max(10, colWidths[cIdx] * scale - 8),
+                                              height: Math.max(10, rowHeights[rIdx] * scale - 8),
+                                              strokeColor: tbl.cellShapes![cellImgKey].strokeColor || '#2563eb',
+                                              fillColor: tbl.cellShapes![cellImgKey].fillColor || '#dbeafe',
+                                              strokeWidth: tbl.cellShapes![cellImgKey].strokeWidth || 2,
+                                              strokeStyle: (tbl.cellShapes![cellImgKey] as any).strokeStyle || 'solid',
+                                            })}
+                                          </svg>
                                         </div>
                                         {isCellSelected && (
                                           <>
@@ -8657,6 +9099,25 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </div>
         </main>
 
+      {/* Persistent Floating Side Tab to Expand / Reopen Properties Anytime without scrolling */}
+      {(!showPropertiesPanel || isPropertiesCollapsed) && (
+        <button
+          type="button"
+          onClick={() => {
+            setShowPropertiesPanel(true);
+            setIsPropertiesCollapsed(false);
+          }}
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-40 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-l-xl py-2.5 px-1.5 shadow-2xl flex flex-col items-center gap-1 transition-all cursor-pointer group border-y border-l border-indigo-500/50"
+          title="Expand Properties Panel"
+        >
+          <ChevronLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+          <Sliders className="w-3.5 h-3.5" />
+          <span className="text-[9px] font-bold uppercase tracking-wider [writing-mode:vertical-lr] rotate-180 select-none py-0.5">
+            Properties
+          </span>
+        </button>
+      )}
+
       {/* Mobile Backdrop for Properties Sheet / Drawer */}
       {showPropertiesPanel && (
         <div
@@ -8667,7 +9128,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
       {/* Wondershare PDFelement Right Properties Sidebar / Mobile Bottom Sheet / Landscape Drawer */}
       {showPropertiesPanel && (
-        <aside className="fixed inset-x-0 bottom-0 z-50 h-[40vh] max-h-[45vh] rounded-t-2xl border-t-2 border-indigo-600 shadow-2xl landscape:inset-y-0 landscape:right-0 landscape:left-auto landscape:bottom-auto landscape:w-80 landscape:max-w-[85vw] landscape:h-full landscape:max-h-none landscape:rounded-none landscape:border-l-2 landscape:border-t-0 landscape:border-indigo-600 md:static md:inset-auto md:w-80 md:h-full md:max-h-none md:rounded-none md:shadow-md md:border-l md:border-t-0 md:border-slate-300 md:dark:border-zinc-800 md:z-30 bg-white dark:bg-zinc-900 flex flex-col flex-shrink-0 animate-fade-in select-none touch-pan-y">
+        <aside className={`fixed inset-x-0 bottom-0 z-50 h-[40vh] max-h-[45vh] rounded-t-2xl border-t-2 border-indigo-600 shadow-2xl landscape:inset-y-0 landscape:right-0 landscape:left-auto landscape:bottom-auto landscape:w-80 landscape:max-w-[85vw] landscape:h-full landscape:max-h-none landscape:rounded-none landscape:border-l-2 landscape:border-t-0 landscape:border-indigo-600 md:static md:inset-auto ${
+          isPropertiesCollapsed ? 'md:w-0 md:overflow-visible' : 'md:w-80'
+        } md:h-full md:max-h-none md:rounded-none md:shadow-md md:border-l md:border-t-0 md:border-slate-300 md:dark:border-zinc-800 md:z-30 bg-white dark:bg-zinc-900 flex flex-col flex-shrink-0 animate-fade-in select-none touch-pan-y relative`}>
+          {/* Vertical Middle Edge Collapse/Expand "Kink" Tab */}
+          <button
+            type="button"
+            onClick={() => setIsPropertiesCollapsed(!isPropertiesCollapsed)}
+            className="hidden md:flex absolute top-1/2 -translate-y-1/2 -left-4 w-4 h-12 bg-white dark:bg-zinc-800 border-y border-l border-slate-300 dark:border-zinc-700 rounded-l-md items-center justify-center cursor-pointer shadow-md hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-300 z-50 transition-colors"
+            title={isPropertiesCollapsed ? "Expand Properties Panel" : "Collapse Properties Panel"}
+          >
+            {isPropertiesCollapsed ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
           {/* Mobile Bottom Sheet Pull Handle with Swipe-Down Gesture (Hidden in Landscape drawer & Desktop) */}
           <div
             className="w-full py-1.5 flex flex-col items-center justify-center cursor-grab active:cursor-grabbing md:hidden landscape:hidden shrink-0 touch-none select-none"
@@ -8716,16 +9188,34 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 Properties
               </span>
             </div>
-            <button
-              onClick={() => setShowPropertiesPanel(false)}
-              className="p-1 rounded-lg text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"
-              title="Close Properties Panel"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPropertiesCollapsed(true);
+                  setShowPropertiesPanel(false);
+                }}
+                className="px-2 py-1 rounded-lg text-slate-600 hover:text-indigo-600 dark:text-zinc-400 dark:hover:text-indigo-400 hover:bg-slate-200 dark:hover:bg-zinc-800 transition-colors flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
+                title="Collapse Properties to side tab"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+                <span>Collapse</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPropertiesPanel(false);
+                  setIsPropertiesCollapsed(true);
+                }}
+                className="p-1 rounded-lg text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-slate-200 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                title="Close Properties Panel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
-          <div className="p-3.5 pb-28 sm:pb-16 space-y-4 text-xs flex-1 min-h-0 overflow-y-auto overscroll-contain">
+          <div className={`p-3.5 pb-28 sm:pb-16 space-y-4 text-xs flex-1 min-h-0 overflow-y-auto overscroll-contain ${isPropertiesCollapsed ? 'hidden md:hidden' : ''}`}>
             {/* Selection Type Indicator */}
             <div className="space-y-1">
               <div className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider">
@@ -8733,7 +9223,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
               <div className="text-xs font-bold text-indigo-950 dark:text-indigo-100 px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between shadow-2xs">
                 <span className="truncate">
-                  {selectedShapeId
+                  {selectedBorderPage !== null
+                    ? `Page ${selectedBorderPage + 1} Border`
+                    : selectedShapeId
                     ? `Shape: ${shapes.find((s) => s.id === selectedShapeId)?.type || 'Custom'}`
                     : selectedTableId
                     ? `Table (${tables.find((t) => t.id === selectedTableId)?.rows} Rows × ${tables.find((t) => t.id === selectedTableId)?.cols} Cols)`
@@ -8747,7 +9239,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       : 'Overlay'
                     : `Page ${currentPage} of ${totalPages || 1}`}
                 </span>
-                {(selectedShapeId || selectedTableId || selectedOverlayId || activeEditingId || selectedTextItemId) && (
+                {(selectedShapeId || selectedTableId || selectedOverlayId || activeEditingId || selectedTextItemId || selectedBorderPage !== null) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -8756,8 +9248,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       setSelectedOverlayId(null);
                       setActiveEditingId(null);
                       setSelectedTextItemId(null);
+                      setSelectedBorderPage(null);
                     }}
-                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 underline ml-2 shrink-0"
+                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 underline ml-2 shrink-0 cursor-pointer"
                   >
                     Deselect
                   </button>
@@ -10442,8 +10935,150 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </>
             )}
 
+            {/* CASE: PAGE BORDER PROPERTIES (Shown when a border is selected) */}
+            {selectedBorderPage !== null && (() => {
+              const border = pageBorders[selectedBorderPage];
+              if (!border) return null;
+              return (
+                <div className="space-y-3.5 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider flex items-center justify-between">
+                    <span>Page {selectedBorderPage + 1} Border</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        let nextBorders: Record<number, PageBorderConfig> = {};
+                        setPageBorders((prev) => {
+                          const next = { ...prev };
+                          delete next[selectedBorderPage];
+                          nextBorders = next;
+                          return next;
+                        });
+                        pushSnapshot({ pageBorders: nextBorders });
+                        setSelectedBorderPage(null);
+                      }}
+                      className="text-[10px] text-red-600 hover:text-red-700 dark:text-red-400 font-bold flex items-center gap-1 hover:underline cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Remove
+                    </button>
+                  </div>
+
+                  {/* Border Style */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">Style</label>
+                    <select
+                      value={border.type}
+                      onChange={(e) => updatePageBorderConfig({ type: e.target.value as PageBorderType }, 'current')}
+                      className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold"
+                    >
+                      <option value="solid">Solid Line</option>
+                      <option value="dashed">Dashed Line</option>
+                      <option value="dotted">Dotted Line</option>
+                      <option value="double">Double Line</option>
+                      <option value="groove">Groove 3D</option>
+                      <option value="ridge">Ridge 3D</option>
+                      <option value="inset">Inset 3D</option>
+                      <option value="outset">Outset 3D</option>
+                      <option value="corners">Only Corners (L-Brackets)</option>
+                      <option value="frame">Decorative Frame</option>
+                    </select>
+                  </div>
+
+                  {/* Border Thickness & Color */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">Weight (pt)</label>
+                      <input
+                        type="number"
+                        min="0.5"
+                        max="24"
+                        step="0.5"
+                        value={border.width}
+                        onChange={(e) => updatePageBorderConfig({ width: Math.max(0.5, parseFloat(e.target.value) || 1) }, 'current')}
+                        className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">Color</label>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="color"
+                          value={border.color}
+                          onChange={(e) => updatePageBorderConfig({ color: e.target.value }, 'current')}
+                          className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0"
+                        />
+                        <span className="text-xs font-mono font-semibold uppercase">{border.color}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Inset / Margins */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">Margins / Insets (pt)</label>
+                    <div className="grid grid-cols-2 gap-1.5 text-xs font-mono">
+                      <div>
+                        <span className="text-[9px] text-zinc-400 block font-sans">Top</span>
+                        <input
+                          type="number"
+                          value={border.top}
+                          onChange={(e) => updatePageBorderConfig({ top: parseInt(e.target.value, 10) || 0 }, 'current')}
+                          className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[9px] text-zinc-400 block font-sans">Bottom</span>
+                        <input
+                          type="number"
+                          value={border.bottom}
+                          onChange={(e) => updatePageBorderConfig({ bottom: parseInt(e.target.value, 10) || 0 }, 'current')}
+                          className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[9px] text-zinc-400 block font-sans">Left</span>
+                        <input
+                          type="number"
+                          value={border.left}
+                          onChange={(e) => updatePageBorderConfig({ left: parseInt(e.target.value, 10) || 0 }, 'current')}
+                          className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[9px] text-zinc-400 block font-sans">Right</span>
+                        <input
+                          type="number"
+                          value={border.right}
+                          onChange={(e) => updatePageBorderConfig({ right: parseInt(e.target.value, 10) || 0 }, 'current')}
+                          className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      let nextBorders: Record<number, PageBorderConfig> = {};
+                      setPageBorders((prev) => {
+                        const next = { ...prev };
+                        delete next[selectedBorderPage];
+                        nextBorders = next;
+                        return next;
+                      });
+                      pushSnapshot({ pageBorders: nextBorders });
+                      setSelectedBorderPage(null);
+                    }}
+                    className="w-full py-2 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Border (or press Delete)</span>
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* CASE 5: DOCUMENT PAGE PROPERTIES (Shown when nothing is selected) */}
-            {!selectedShapeId && !selectedTableId && !selectedOverlayId && !activeEditingId && !selectedTextItemId && (
+            {!selectedShapeId && !selectedTableId && !selectedOverlayId && !activeEditingId && !selectedTextItemId && selectedBorderPage === null && (
               <div className="space-y-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
                 <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
                   ▾ Page Details

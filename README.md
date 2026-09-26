@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.9.5-indigo.svg" alt="Version 2.9.5" />
+  <img src="https://img.shields.io/badge/version-2.9.6-indigo.svg" alt="Version 2.9.6" />
   <img src="https://img.shields.io/badge/privacy-100%25%20Zero--Knowledge-emerald.svg" alt="Privacy" />
   <img src="https://img.shields.io/badge/platforms-Windows%20%7C%20Android%20%7C%20Web-blue.svg" alt="Platforms" />
   <img src="https://img.shields.io/badge/license-MIT-purple.svg" alt="License" />
@@ -120,8 +120,8 @@ npm run dist:installer
 npm run dist:win
 ```
 Binaries are output to the `release/` directory:
-- `Omnisize Setup 2.9.5.exe` (NSIS Installer)
-- `Omnisize 2.9.5.exe` (Portable executable)
+- `Omnisize Setup 2.9.6.exe` (NSIS Installer)
+- `Omnisize 2.9.6.exe` (Portable executable)
 
 ### Android Application
 ```bash
