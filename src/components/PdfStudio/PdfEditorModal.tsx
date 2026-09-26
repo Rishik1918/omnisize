@@ -58,7 +58,9 @@ import {
   FlipHorizontal,
   FlipVertical,
   Settings,
-  Copy
+  Copy,
+  Square,
+  Hash
 } from 'lucide-react';
 import {
   PdfStudioEngine,
@@ -69,7 +71,13 @@ import {
   ShapeType,
   ExistingTextItem,
   HyperlinkOverlay,
-  InsertBlankPageSpec
+  InsertBlankPageSpec,
+  PageBorderConfig,
+  PageBorderType,
+  PageNumberConfig,
+  PageNumberPosition,
+  PageNumberFormat,
+  PageNumberFilter
 } from '../../services/pdfStudioEngine';
 import {
   PdfSignatureEngine,
@@ -344,6 +352,8 @@ export interface EditorTabItem {
   history: EditorSnapshot[];
   historyIndex: number;
   hasUnsavedEdits: boolean;
+  pageBorders?: Record<number, PageBorderConfig>;
+  pageNumberConfig?: PageNumberConfig;
 }
 
 interface EditorSnapshot {
@@ -356,6 +366,8 @@ interface EditorSnapshot {
   pageRotations: Record<number, number>;
   deletedPages: number[];
   insertedBlankPages: InsertBlankPageSpec[];
+  pageBorders?: Record<number, PageBorderConfig>;
+  pageNumberConfig?: PageNumberConfig;
 }
 
 const sampleCanvasBgColor = (
@@ -705,9 +717,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const blankPageBtnRef = useRef<HTMLButtonElement | null>(null);
   const pageSizeBtnRef = useRef<HTMLButtonElement | null>(null);
   const marginBtnRef = useRef<HTMLButtonElement | null>(null);
+  const borderBtnRef = useRef<HTMLButtonElement | null>(null);
+  const pageNumberBtnRef = useRef<HTMLButtonElement | null>(null);
   const [dropdownCoords, setDropdownCoords] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
 
-  // MS Word Margins State
+  // MS Word Margins State - Default guidelines hidden for a clean canvas
   const [selectedMarginId, setSelectedMarginId] = useState<string>('normal');
   const [customMargins, setCustomMargins] = useState<{ top: number; bottom: number; left: number; right: number }>({
     top: 72,
@@ -716,7 +730,132 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     right: 72,
   });
   const [showMarginDropdown, setShowMarginDropdown] = useState<boolean>(false);
-  const [showMarginGuidelines, setShowMarginGuidelines] = useState<boolean>(true);
+  const [showMarginGuidelines, setShowMarginGuidelines] = useState<boolean>(false);
+
+  // Page Border Feature State
+  const [pageBorders, setPageBorders] = useState<Record<number, PageBorderConfig>>({});
+  const [showBorderDropdown, setShowBorderDropdown] = useState<boolean>(false);
+  const [activeBorderScope, setActiveBorderScope] = useState<'current' | 'all'>('all');
+  const [interactiveBorderHandles, setInteractiveBorderHandles] = useState<boolean>(false);
+  const [borderDragState, setBorderDragState] = useState<{
+    pageIndex: number;
+    handle: 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+    startX: number;
+    startY: number;
+    origBorder: PageBorderConfig;
+  } | null>(null);
+
+  // Page Numbering Feature State
+  const [pageNumberConfig, setPageNumberConfig] = useState<PageNumberConfig>({
+    enabled: false,
+    position: 'bottom-center',
+    format: 'number',
+    fontFamily: 'Helvetica',
+    fontSize: 10,
+    fontWeight: 'normal',
+    color: '#000000',
+    filterMode: 'all',
+    startFrom: 1,
+    offsetY: 24,
+  });
+  const [showPageNumberModal, setShowPageNumberModal] = useState<boolean>(false);
+
+  // Formats page number display text based on targeted filter rules
+  const formatPageNumberDisplay = useCallback(
+    (pageIndex: number, totalDocPages: number, config: PageNumberConfig): string | null => {
+      if (!config.enabled) return null;
+      const pageNum = pageIndex + 1;
+
+      // Filter rules
+      if (config.filterMode === 'odd' && pageNum % 2 === 0) return null;
+      if (config.filterMode === 'even' && pageNum % 2 !== 0) return null;
+      if (config.filterMode === 'range') {
+        const s = config.rangeStart || 1;
+        const e = config.rangeEnd || totalDocPages;
+        if (pageNum < s || pageNum > e) return null;
+      }
+      if (config.filterMode === 'specific' && config.specificPages) {
+        const parts = config.specificPages.split(',').map((p) => p.trim());
+        const matched = parts.some((p) => {
+          if (p.includes('-')) {
+            const [a, b] = p.split('-').map(Number);
+            return pageNum >= a && pageNum <= b;
+          }
+          return Number(p) === pageNum;
+        });
+        if (!matched) return null;
+      }
+
+      const startNum = config.startFrom || 1;
+      const displayVal = startNum + pageIndex;
+
+      const toRomanNum = (num: number, upper = true) => {
+        if (num <= 0) return String(num);
+        const romanMap: [number, string][] = [
+          [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+          [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+          [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+        ];
+        let res = '';
+        for (const [v, s] of romanMap) {
+          while (num >= v) {
+            res += s;
+            num -= v;
+          }
+        }
+        return upper ? res : res.toLowerCase();
+      };
+
+      switch (config.format) {
+        case 'page-x':
+          return `Page ${displayVal}`;
+        case 'page-x-of-y':
+          return `Page ${displayVal} of ${totalDocPages}`;
+        case 'dash':
+          return `- ${displayVal} -`;
+        case 'roman-upper':
+          return toRomanNum(displayVal, true);
+        case 'roman-lower':
+          return toRomanNum(displayVal, false);
+        case 'number':
+        default:
+          return `${displayVal}`;
+      }
+    },
+    []
+  );
+
+  // Auto-fits text overlays within the active border boundaries without manual intervention
+  const fitTextOverlaysToBorder = useCallback(
+    (
+      targetPageIndex: number | 'all',
+      newBorder: PageBorderConfig,
+      pWidth?: number,
+      pHeight?: number
+    ) => {
+      setTextOverlays((prev) =>
+        prev.map((t) => {
+          if (targetPageIndex !== 'all' && t.pageIndex !== targetPageIndex) return t;
+          const pw = pWidth || 595.28;
+          const ph = pHeight || 841.89;
+          const minX = newBorder.left + 5;
+          const maxX = Math.max(minX + 20, pw - newBorder.right - 10);
+          const minY = newBorder.bottom + 5;
+          const maxY = Math.max(minY + 20, ph - newBorder.top - 15);
+
+          let newX = t.x;
+          let newY = t.y;
+          if (newX < minX) newX = minX;
+          if (newX > maxX) newX = maxX;
+          if (newY < minY) newY = minY;
+          if (newY > maxY) newY = maxY;
+
+          return { ...t, x: Math.round(newX), y: Math.round(newY) };
+        })
+      );
+    },
+    []
+  );
 
   // Last clicked cursor position on page canvas for accurate object insertion
   const lastClickedPageInfoRef = useRef<{ pageIndex: number; x: number; y: number } | null>(null);
@@ -756,8 +895,28 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
     }
 
-    const clampedX = Math.round(Math.max(20, Math.min(pWidth - w - 20, targetX - w / 2)));
-    const clampedY = Math.round(Math.max(20, Math.min(pHeight - h - 20, targetY - h / 2)));
+    // Automatically constrain within active border or margins
+    const activeBorder = pageBorders[pageIndex];
+    const leftMargin = activeBorder?.enabled
+      ? activeBorder.left
+      : (selectedMarginId === 'custom' ? customMargins.left : (MS_WORD_MARGINS.find((m) => m.id === selectedMarginId)?.left || 20));
+    const rightMargin = activeBorder?.enabled
+      ? activeBorder.right
+      : (selectedMarginId === 'custom' ? customMargins.right : (MS_WORD_MARGINS.find((m) => m.id === selectedMarginId)?.right || 20));
+    const topMargin = activeBorder?.enabled
+      ? activeBorder.top
+      : (selectedMarginId === 'custom' ? customMargins.top : (MS_WORD_MARGINS.find((m) => m.id === selectedMarginId)?.top || 20));
+    const bottomMargin = activeBorder?.enabled
+      ? activeBorder.bottom
+      : (selectedMarginId === 'custom' ? customMargins.bottom : (MS_WORD_MARGINS.find((m) => m.id === selectedMarginId)?.bottom || 20));
+
+    const minX = leftMargin + 5;
+    const maxX = Math.max(minX, pWidth - rightMargin - w - 5);
+    const minY = bottomMargin + 5;
+    const maxY = Math.max(minY, pHeight - topMargin - h - 5);
+
+    const clampedX = Math.round(Math.max(minX, Math.min(maxX, targetX - w / 2)));
+    const clampedY = Math.round(Math.max(minY, Math.min(maxY, targetY - h / 2)));
     return { pageIndex, x: clampedX, y: clampedY };
   };
 
@@ -1349,7 +1508,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     hyperlinks.length > 0 ||
     Object.keys(pageRotations).length > 0 ||
     deletedPages.length > 0 ||
-    insertedBlankPages.length > 0;
+    insertedBlankPages.length > 0 ||
+    Object.values(pageBorders).some((b) => b?.enabled) ||
+    pageNumberConfig.enabled;
 
   // Toggle Auto-Save
   const toggleAutoSave = () => {
@@ -1373,6 +1534,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         pageRotations: newSnapshot.pageRotations ?? pageRotations,
         deletedPages: newSnapshot.deletedPages ?? deletedPages,
         insertedBlankPages: newSnapshot.insertedBlankPages ?? insertedBlankPages,
+        pageBorders: newSnapshot.pageBorders ?? pageBorders,
+        pageNumberConfig: newSnapshot.pageNumberConfig ?? pageNumberConfig,
       };
 
       setHistory((prev) => {
@@ -1393,6 +1556,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       pageRotations,
       deletedPages,
       insertedBlankPages,
+      pageBorders,
+      pageNumberConfig,
     ]
   );
 
@@ -1581,6 +1746,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setPageRotations(targetState.pageRotations);
       setDeletedPages(targetState.deletedPages);
       setInsertedBlankPages(targetState.insertedBlankPages);
+      if (targetState.pageBorders) setPageBorders(targetState.pageBorders);
+      if (targetState.pageNumberConfig) setPageNumberConfig(targetState.pageNumberConfig);
       setHistoryIndex(targetIndex);
     }
   }, [historyIndex, history]);
@@ -1599,6 +1766,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setPageRotations(targetState.pageRotations);
       setDeletedPages(targetState.deletedPages);
       setInsertedBlankPages(targetState.insertedBlankPages);
+      if (targetState.pageBorders) setPageBorders(targetState.pageBorders);
+      if (targetState.pageNumberConfig) setPageNumberConfig(targetState.pageNumberConfig);
       setHistoryIndex(targetIndex);
     }
   }, [historyIndex, history]);
@@ -1907,6 +2076,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         tables,
         textReplacements: Object.values(modifiedTexts),
         hyperlinks,
+        pageBorders,
+        pageNumberConfig,
       });
 
       const baseName = file.name.replace(/\.pdf$/i, '');
@@ -1949,6 +2120,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               modifiedTexts,
               textOverlays,
               imageOverlays,
+              shapes,
+              tables,
               hyperlinks,
               pageRotations,
               deletedPages,
@@ -1958,6 +2131,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               history,
               historyIndex,
               hasUnsavedEdits,
+              pageBorders,
+              pageNumberConfig,
             }
           : t
       )
@@ -1971,6 +2146,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setModifiedTexts(target.modifiedTexts);
     setTextOverlays(target.textOverlays);
     setImageOverlays(target.imageOverlays);
+    setShapes(target.shapes || []);
+    setTables(target.tables || []);
     setHyperlinks(target.hyperlinks);
     setPageRotations(target.pageRotations);
     setDeletedPages(target.deletedPages);
@@ -1979,6 +2156,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setZoomScale(target.zoomScale || 1.0);
     setHistory(target.history);
     setHistoryIndex(target.historyIndex);
+    setPageBorders(target.pageBorders || {});
+    setPageNumberConfig(
+      target.pageNumberConfig || {
+        enabled: false,
+        position: 'bottom-center',
+        format: 'number',
+        fontFamily: 'Helvetica',
+        fontSize: 10,
+        fontWeight: 'normal',
+        color: '#000000',
+        filterMode: 'all',
+        startFrom: 1,
+        offsetY: 24,
+      }
+    );
     setShowInitialPrompt(false);
   };
 
@@ -2587,6 +2779,119 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setShowTableDropdown(false);
     setShowRotationPopover(false);
     setShowBulletsDropdown(false);
+  };
+
+  const toggleBorderDropdown = () => {
+    if (showBorderDropdown) {
+      setShowBorderDropdown(false);
+      return;
+    }
+    const rect = borderBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 340)),
+      });
+    }
+    setShowBorderDropdown(true);
+    setShowMarginDropdown(false);
+    setShowPageSizeDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+    setShowPageNumberModal(false);
+  };
+
+  const togglePageNumberModal = () => {
+    if (showPageNumberModal) {
+      setShowPageNumberModal(false);
+      return;
+    }
+    const rect = pageNumberBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 360)),
+      });
+    }
+    setShowPageNumberModal(true);
+    setShowBorderDropdown(false);
+    setShowMarginDropdown(false);
+    setShowPageSizeDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+  };
+
+  const updatePageBorderConfig = (
+    partial: Partial<PageBorderConfig>,
+    scope: 'current' | 'all' = activeBorderScope
+  ) => {
+    const currentIdx = currentPage - 1;
+    const baseBorder: PageBorderConfig = pageBorders[currentIdx] || {
+      enabled: true,
+      type: 'solid',
+      width: 1,
+      color: '#000000',
+      top: 36,
+      bottom: 36,
+      left: 36,
+      right: 36,
+    };
+    const updated: PageBorderConfig = { ...baseBorder, ...partial };
+
+    setPageBorders((prev) => {
+      const next = { ...prev };
+      if (scope === 'all') {
+        for (let i = 0; i < totalPages; i++) {
+          next[i] = { ...updated };
+        }
+      } else {
+        next[currentIdx] = updated;
+      }
+      return next;
+    });
+
+    if (updated.enabled) {
+      fitTextOverlaysToBorder(scope === 'all' ? 'all' : currentIdx, updated);
+    }
+    pushSnapshot({ pageBorders: { ...pageBorders, [currentIdx]: updated } });
+  };
+
+  const removePageBorder = (scope: 'current' | 'all' = activeBorderScope) => {
+    const currentIdx = currentPage - 1;
+    setPageBorders((prev) => {
+      const next = { ...prev };
+      if (scope === 'all') {
+        for (let i = 0; i < totalPages; i++) {
+          if (next[i]) next[i] = { ...next[i], enabled: false };
+        }
+      } else {
+        if (next[currentIdx]) next[currentIdx] = { ...next[currentIdx], enabled: false };
+      }
+      return next;
+    });
+    pushSnapshot({ pageBorders });
+  };
+
+  const updatePageNumberConfig = (partial: Partial<PageNumberConfig>) => {
+    setPageNumberConfig((prev) => {
+      const next = { ...prev, ...partial };
+      pushSnapshot({ pageNumberConfig: next });
+      return next;
+    });
+  };
+
+  const removePageNumbers = () => {
+    setPageNumberConfig((prev) => {
+      const next = { ...prev, enabled: false };
+      pushSnapshot({ pageNumberConfig: next });
+      return next;
+    });
   };
 
   // Set Rotation for the currently selected Element (Text, Shape, Image, Table) or Document Page
@@ -5237,6 +5542,606 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               )}
           </div>
 
+          {/* Page Border Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={borderBtnRef}
+              onClick={toggleBorderDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showBorderDropdown || pageBorders[currentPage - 1]?.enabled
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Page Border Suite (Weights, Colors, Corners, Double, Frame, Resizing)"
+            >
+              <Square className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Borders</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showBorderDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowBorderDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-84 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Header with Enable Switch */}
+                    <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800 mb-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <Square className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-xs font-bold uppercase tracking-wider">Page Border</span>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-xs font-semibold cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={pageBorders[currentPage - 1]?.enabled ?? false}
+                          onChange={(e) => updatePageBorderConfig({ enabled: e.target.checked })}
+                          className="w-3.5 h-3.5 text-indigo-600 rounded"
+                        />
+                        <span className={pageBorders[currentPage - 1]?.enabled ? 'text-indigo-600 dark:text-indigo-400 font-bold' : 'text-zinc-500'}>
+                          {pageBorders[currentPage - 1]?.enabled ? 'Active' : 'Disabled'}
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* Scope Selector: Current vs All */}
+                    <div className="mb-2.5">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Apply To</div>
+                      <div className="grid grid-cols-2 gap-1.5 text-xs font-medium">
+                        <button
+                          type="button"
+                          onClick={() => setActiveBorderScope('current')}
+                          className={`py-1 px-2 rounded-lg border text-center transition-colors ${
+                            activeBorderScope === 'current'
+                              ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-700 dark:text-indigo-300 font-bold'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                          }`}
+                        >
+                          Page {currentPage} Only
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveBorderScope('all')}
+                          className={`py-1 px-2 rounded-lg border text-center transition-colors ${
+                            activeBorderScope === 'all'
+                              ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-500 text-indigo-700 dark:text-indigo-300 font-bold'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                          }`}
+                        >
+                          All Pages ({totalPages})
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Border Style / Type */}
+                    <div className="mb-2.5">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Border Type</div>
+                      <div className="grid grid-cols-2 gap-1 text-xs">
+                        {[
+                          { id: 'solid', label: 'Solid Line' },
+                          { id: 'dashed', label: 'Dashed' },
+                          { id: 'dotted', label: 'Dotted' },
+                          { id: 'double', label: 'Double Line' },
+                          { id: 'corners', label: 'Only Corners' },
+                          { id: 'frame', label: 'Decorative Frame' },
+                          { id: 'groove', label: 'Groove 3D' },
+                          { id: 'ridge', label: 'Ridge 3D' },
+                          { id: 'inset', label: 'Inset' },
+                          { id: 'outset', label: 'Outset' },
+                        ].map((t) => {
+                          const currentType = pageBorders[currentPage - 1]?.type || 'solid';
+                          const isSel = currentType === t.id;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => updatePageBorderConfig({ enabled: true, type: t.id as PageBorderType })}
+                              className={`flex items-center justify-between px-2 py-1.5 rounded-lg border text-left text-[11px] transition-colors ${
+                                isSel
+                                  ? 'bg-indigo-600 text-white font-semibold border-indigo-600'
+                                  : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                              }`}
+                            >
+                              <span>{t.label}</span>
+                              {isSel && <Check className="w-3 h-3 text-white flex-shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Weight / Thickness */}
+                    <div className="mb-2.5">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
+                        <span>Border Thickness</span>
+                        <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                          {pageBorders[currentPage - 1]?.width || 1} pt
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+                        {[0.5, 1, 1.5, 2, 3, 4, 6, 8].map((w) => {
+                          const currentW = pageBorders[currentPage - 1]?.width || 1;
+                          const isSel = Math.abs(currentW - w) < 0.1;
+                          return (
+                            <button
+                              key={w}
+                              type="button"
+                              onClick={() => updatePageBorderConfig({ enabled: true, width: w })}
+                              className={`px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+                                isSel
+                                  ? 'bg-indigo-600 text-white border-indigo-600'
+                                  : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                              }`}
+                            >
+                              {w} pt
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="12"
+                        step="0.5"
+                        value={pageBorders[currentPage - 1]?.width || 1}
+                        onChange={(e) => updatePageBorderConfig({ enabled: true, width: parseFloat(e.target.value) })}
+                        className="w-full accent-indigo-600"
+                      />
+                    </div>
+
+                    {/* Border Color */}
+                    <div className="mb-2.5">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
+                        <span>Border Color</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-[10px]">{pageBorders[currentPage - 1]?.color || '#000000'}</span>
+                          <input
+                            type="color"
+                            value={pageBorders[currentPage - 1]?.color || '#000000'}
+                            onChange={(e) => updatePageBorderConfig({ enabled: true, color: e.target.value })}
+                            className="w-4 h-4 rounded cursor-pointer border-0 p-0"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {['#000000', '#1e3a8a', '#475569', '#dc2626', '#d97706', '#15803d', '#7e22ce', '#0891b2'].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => updatePageBorderConfig({ enabled: true, color: c })}
+                            className="w-5 h-5 rounded-full border border-white dark:border-zinc-700 shadow-xs hover:scale-110 transition-transform"
+                            style={{ backgroundColor: c }}
+                            title={c}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Border Insets / Margins */}
+                    <div className="mb-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
+                        <span>Border Margins (pt)</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => updatePageBorderConfig({ enabled: true, top: 18, bottom: 18, left: 18, right: 18 })}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-semibold border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                          >
+                            18pt
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updatePageBorderConfig({ enabled: true, top: 36, bottom: 36, left: 36, right: 36 })}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-semibold border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                          >
+                            36pt
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updatePageBorderConfig({ enabled: true, top: 72, bottom: 72, left: 72, right: 72 })}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-semibold border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                          >
+                            72pt
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1 text-xs font-mono">
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Top</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="200"
+                            value={pageBorders[currentPage - 1]?.top ?? 36}
+                            onChange={(e) => updatePageBorderConfig({ enabled: true, top: parseInt(e.target.value, 10) || 0 })}
+                            className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Bottom</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="200"
+                            value={pageBorders[currentPage - 1]?.bottom ?? 36}
+                            onChange={(e) => updatePageBorderConfig({ enabled: true, bottom: parseInt(e.target.value, 10) || 0 })}
+                            className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Left</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="200"
+                            value={pageBorders[currentPage - 1]?.left ?? 36}
+                            onChange={(e) => updatePageBorderConfig({ enabled: true, left: parseInt(e.target.value, 10) || 0 })}
+                            className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Right</label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="200"
+                            value={pageBorders[currentPage - 1]?.right ?? 36}
+                            onChange={(e) => updatePageBorderConfig({ enabled: true, right: parseInt(e.target.value, 10) || 0 })}
+                            className="w-full px-1.5 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Interactive Drag Handles Checkbox */}
+                    <div className="mb-3 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+                      <label className="flex items-center gap-2 text-xs font-medium cursor-pointer text-zinc-700 dark:text-zinc-300">
+                        <input
+                          type="checkbox"
+                          checked={interactiveBorderHandles}
+                          onChange={(e) => setInteractiveBorderHandles(e.target.checked)}
+                          className="w-3.5 h-3.5 text-indigo-600 rounded"
+                        />
+                        <span>Enable Interactive Drag Handles on Canvas</span>
+                      </label>
+                    </div>
+
+                    {/* Remove Border Button */}
+                    <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => removePageBorder('current')}
+                        className="px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 rounded-lg text-xs font-semibold transition-colors"
+                      >
+                        Remove from Page {currentPage}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removePageBorder('all')}
+                        className="px-2.5 py-1.5 bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-colors"
+                      >
+                        Remove from All
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+
+          {/* Page Number Adder & Remover Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={pageNumberBtnRef}
+              onClick={togglePageNumberModal}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showPageNumberModal || pageNumberConfig.enabled
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Page Number Suite (Top/Bottom, Odds/Evens, Start Number, Custom Range)"
+            >
+              <Hash className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Page #</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showPageNumberModal &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowPageNumberModal(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-88 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {/* Header with Enable Switch */}
+                    <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800 mb-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <Hash className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-xs font-bold uppercase tracking-wider">Page Numbers</span>
+                      </div>
+                      <label className="flex items-center gap-1.5 text-xs font-semibold cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={pageNumberConfig.enabled}
+                          onChange={(e) => updatePageNumberConfig({ enabled: e.target.checked })}
+                          className="w-3.5 h-3.5 text-indigo-600 rounded"
+                        />
+                        <span className={pageNumberConfig.enabled ? 'text-indigo-600 dark:text-indigo-400 font-bold' : 'text-zinc-500'}>
+                          {pageNumberConfig.enabled ? 'Active' : 'Disabled'}
+                        </span>
+                      </label>
+                    </div>
+
+                    {/* Position Selector */}
+                    <div className="mb-2.5">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Position</div>
+                      <div className="space-y-1 text-xs">
+                        <div className="text-[10px] text-zinc-400 font-semibold">Top of Page</div>
+                        <div className="grid grid-cols-3 gap-1">
+                          {[
+                            { pos: 'top-left', label: 'Top Left' },
+                            { pos: 'top-center', label: 'Top Center' },
+                            { pos: 'top-right', label: 'Top Right' },
+                          ].map((p) => {
+                            const isSel = pageNumberConfig.position === p.pos;
+                            return (
+                              <button
+                                key={p.pos}
+                                type="button"
+                                onClick={() => updatePageNumberConfig({ enabled: true, position: p.pos as PageNumberPosition })}
+                                className={`py-1 px-1.5 rounded-lg border text-center text-[10px] font-semibold transition-colors ${
+                                  isSel
+                                    ? 'bg-indigo-600 text-white border-indigo-600'
+                                    : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
+                              >
+                                {p.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="text-[10px] text-zinc-400 font-semibold pt-1">Bottom of Page</div>
+                        <div className="grid grid-cols-3 gap-1">
+                          {[
+                            { pos: 'bottom-left', label: 'Bottom Left' },
+                            { pos: 'bottom-center', label: 'Bottom Center' },
+                            { pos: 'bottom-right', label: 'Bottom Right' },
+                          ].map((p) => {
+                            const isSel = pageNumberConfig.position === p.pos;
+                            return (
+                              <button
+                                key={p.pos}
+                                type="button"
+                                onClick={() => updatePageNumberConfig({ enabled: true, position: p.pos as PageNumberPosition })}
+                                className={`py-1 px-1.5 rounded-lg border text-center text-[10px] font-semibold transition-colors ${
+                                  isSel
+                                    ? 'bg-indigo-600 text-white border-indigo-600'
+                                    : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                                }`}
+                              >
+                                {p.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Number Format */}
+                    <div className="mb-2.5">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1">Number Format</div>
+                      <div className="grid grid-cols-2 gap-1 text-xs">
+                        {[
+                          { id: 'number', label: '1, 2, 3...' },
+                          { id: 'page-x', label: 'Page 1, Page 2...' },
+                          { id: 'page-x-of-y', label: 'Page 1 of 10...' },
+                          { id: 'dash', label: '- 1 -, - 2 -...' },
+                          { id: 'roman-upper', label: 'I, II, III...' },
+                          { id: 'roman-lower', label: 'i, ii, iii...' },
+                        ].map((fmt) => {
+                          const isSel = pageNumberConfig.format === fmt.id;
+                          return (
+                            <button
+                              key={fmt.id}
+                              type="button"
+                              onClick={() => updatePageNumberConfig({ enabled: true, format: fmt.id as PageNumberFormat })}
+                              className={`flex items-center justify-between px-2 py-1 rounded-lg border text-left text-[11px] transition-colors ${
+                                isSel
+                                  ? 'bg-indigo-600 text-white font-semibold border-indigo-600'
+                                  : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                              }`}
+                            >
+                              <span>{fmt.label}</span>
+                              {isSel && <Check className="w-3 h-3 text-white flex-shrink-0" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Typography: Font Family, Size, Weight, Color */}
+                    <div className="mb-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5">Typography & Style</div>
+                      <div className="grid grid-cols-2 gap-2 text-xs mb-1.5">
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Font Family</label>
+                          <select
+                            value={pageNumberConfig.fontFamily}
+                            onChange={(e) => updatePageNumberConfig({ enabled: true, fontFamily: e.target.value })}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          >
+                            <option value="Helvetica">Helvetica / Arial</option>
+                            <option value="TimesRoman">Times New Roman</option>
+                            <option value="Courier">Courier Monospace</option>
+                            <option value="Calibri">Calibri</option>
+                            <option value="Georgia">Georgia</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Font Weight</label>
+                          <select
+                            value={pageNumberConfig.fontWeight}
+                            onChange={(e) => updatePageNumberConfig({ enabled: true, fontWeight: e.target.value as any })}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          >
+                            <option value="normal">Regular</option>
+                            <option value="medium">Medium</option>
+                            <option value="bold">Bold</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Size (pt)</label>
+                          <input
+                            type="number"
+                            min="6"
+                            max="24"
+                            value={pageNumberConfig.fontSize}
+                            onChange={(e) => updatePageNumberConfig({ enabled: true, fontSize: parseInt(e.target.value, 10) || 10 })}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Color</label>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="color"
+                              value={pageNumberConfig.color}
+                              onChange={(e) => updatePageNumberConfig({ enabled: true, color: e.target.value })}
+                              className="w-7 h-6 rounded cursor-pointer border-0 p-0"
+                            />
+                            <span className="font-mono text-[10px] text-zinc-500">{pageNumberConfig.color}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Filter Mode & Page Scope */}
+                    <div className="mb-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5">Target Pages & Scope</div>
+                      <div className="grid grid-cols-2 gap-1 text-[11px] mb-2">
+                        {[
+                          { id: 'all', label: 'All Pages' },
+                          { id: 'odd', label: 'Odd Pages Only' },
+                          { id: 'even', label: 'Even Pages Only' },
+                          { id: 'range', label: 'Page Range' },
+                          { id: 'specific', label: 'Specific Pages' },
+                        ].map((f) => {
+                          const isSel = pageNumberConfig.filterMode === f.id;
+                          return (
+                            <button
+                              key={f.id}
+                              type="button"
+                              onClick={() => updatePageNumberConfig({ enabled: true, filterMode: f.id as PageNumberFilter })}
+                              className={`py-1 px-1.5 rounded-lg border text-center transition-colors font-medium ${
+                                isSel
+                                  ? 'bg-indigo-600 text-white font-semibold border-indigo-600'
+                                  : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300'
+                              }`}
+                            >
+                              {f.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* If Page Range selected */}
+                      {pageNumberConfig.filterMode === 'range' && (
+                        <div className="grid grid-cols-2 gap-2 text-xs mb-2 p-2 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700">
+                          <div>
+                            <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Start Page</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max={totalPages}
+                              value={pageNumberConfig.rangeStart ?? 1}
+                              onChange={(e) => updatePageNumberConfig({ enabled: true, rangeStart: parseInt(e.target.value, 10) || 1 })}
+                              className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">End Page</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max={totalPages}
+                              value={pageNumberConfig.rangeEnd ?? totalPages}
+                              onChange={(e) => updatePageNumberConfig({ enabled: true, rangeEnd: parseInt(e.target.value, 10) || totalPages })}
+                              className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* If Specific Pages selected */}
+                      {pageNumberConfig.filterMode === 'specific' && (
+                        <div className="mb-2 p-2 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700 text-xs">
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Comma-Separated Pages (e.g. 1, 3, 5-8)</label>
+                          <input
+                            type="text"
+                            placeholder="1, 3, 5-8"
+                            value={pageNumberConfig.specificPages ?? ''}
+                            onChange={(e) => updatePageNumberConfig({ enabled: true, specificPages: e.target.value })}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                      )}
+
+                      {/* Start Numbering From */}
+                      <div className="grid grid-cols-2 gap-2 text-xs items-center">
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Start Number From</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="9999"
+                            value={pageNumberConfig.startFrom ?? 1}
+                            onChange={(e) => updatePageNumberConfig({ enabled: true, startFrom: parseInt(e.target.value, 10) || 1 })}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Margin from Edge (pt)</label>
+                          <input
+                            type="number"
+                            min="10"
+                            max="100"
+                            value={pageNumberConfig.offsetY ?? 24}
+                            onChange={(e) => updatePageNumberConfig({ enabled: true, offsetY: parseInt(e.target.value, 10) || 24 })}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Page Number Remover */}
+                    <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
+                      <span className="text-[10px] text-zinc-400">Remove from document</span>
+                      <button
+                        type="button"
+                        onClick={removePageNumbers}
+                        className="px-3 py-1.5 bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 text-red-600 dark:text-red-400 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>Remove Page Numbers</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+
           {/* Page Rotation Dropdown */}
           <div className="flex-shrink-0">
             <div className="flex items-center rounded-md overflow-hidden">
@@ -6027,6 +6932,237 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     );
                   })()}
 
+                  {/* Page Border Rendering & Interactive Per-Page Resizers */}
+                  {(() => {
+                    const border = pageBorders[pageNum - 1];
+                    if (!border || !border.enabled) return null;
+
+                    const pW = (basePageDims.width || 595) * zoomScale;
+                    const pH = (basePageDims.height || 842) * zoomScale;
+                    const topPx = border.top * zoomScale;
+                    const bottomPx = border.bottom * zoomScale;
+                    const leftPx = border.left * zoomScale;
+                    const rightPx = border.right * zoomScale;
+                    const wPx = Math.max(0, pW - leftPx - rightPx);
+                    const hPx = Math.max(0, pH - topPx - bottomPx);
+                    const strokeW = Math.max(1, Math.round(border.width * zoomScale));
+
+                    return (
+                      <div
+                        className="absolute pointer-events-none z-15"
+                        style={{
+                          top: `${topPx}px`,
+                          left: `${leftPx}px`,
+                          width: `${wPx}px`,
+                          height: `${hPx}px`,
+                        }}
+                      >
+                        {/* Type Rendering */}
+                        {border.type === 'corners' ? (
+                          // Only Corners L-brackets
+                          (() => {
+                            const cLen = Math.min(Math.min(wPx, hPx) * 0.25, Math.max(20, strokeW * 8));
+                            return (
+                              <>
+                                <div
+                                  className="absolute top-0 left-0"
+                                  style={{
+                                    width: `${cLen}px`,
+                                    height: `${cLen}px`,
+                                    borderTop: `${strokeW}px solid ${border.color}`,
+                                    borderLeft: `${strokeW}px solid ${border.color}`,
+                                  }}
+                                />
+                                <div
+                                  className="absolute top-0 right-0"
+                                  style={{
+                                    width: `${cLen}px`,
+                                    height: `${cLen}px`,
+                                    borderTop: `${strokeW}px solid ${border.color}`,
+                                    borderRight: `${strokeW}px solid ${border.color}`,
+                                  }}
+                                />
+                                <div
+                                  className="absolute bottom-0 left-0"
+                                  style={{
+                                    width: `${cLen}px`,
+                                    height: `${cLen}px`,
+                                    borderBottom: `${strokeW}px solid ${border.color}`,
+                                    borderLeft: `${strokeW}px solid ${border.color}`,
+                                  }}
+                                />
+                                <div
+                                  className="absolute bottom-0 right-0"
+                                  style={{
+                                    width: `${cLen}px`,
+                                    height: `${cLen}px`,
+                                    borderBottom: `${strokeW}px solid ${border.color}`,
+                                    borderRight: `${strokeW}px solid ${border.color}`,
+                                  }}
+                                />
+                              </>
+                            );
+                          })()
+                        ) : border.type === 'frame' ? (
+                          // Decorative Frame with inner line and corner accents
+                          (() => {
+                            const frameInset = Math.max(4, strokeW * 2);
+                            return (
+                              <div
+                                className="w-full h-full relative"
+                                style={{
+                                  border: `${strokeW}px solid ${border.color}`,
+                                }}
+                              >
+                                <div
+                                  className="absolute"
+                                  style={{
+                                    top: `${frameInset}px`,
+                                    left: `${frameInset}px`,
+                                    right: `${frameInset}px`,
+                                    bottom: `${frameInset}px`,
+                                    border: `${Math.max(1, Math.round(strokeW * 0.5))}px solid ${border.color}`,
+                                  }}
+                                />
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          // Solid, Dashed, Dotted, Double, Groove, Ridge, Inset, Outset
+                          <div
+                            className="w-full h-full"
+                            style={{
+                              borderStyle: border.type,
+                              borderWidth: border.type === 'double' ? `${Math.max(3, strokeW * 2)}px` : `${strokeW}px`,
+                              borderColor: border.color,
+                            }}
+                          />
+                        )}
+
+                        {/* Interactive Resize Handles when Current Page */}
+                        {isCurrentPage && (interactiveBorderHandles || showBorderDropdown) && (
+                          <div className="absolute inset-0 pointer-events-auto">
+                            {[
+                              { handle: 'nw', cursor: 'nwse-resize', style: { top: -5, left: -5 } },
+                              { handle: 'n', cursor: 'ns-resize', style: { top: -5, left: '50%', transform: 'translateX(-50%)' } },
+                              { handle: 'ne', cursor: 'nesw-resize', style: { top: -5, right: -5 } },
+                              { handle: 'e', cursor: 'ew-resize', style: { top: '50%', right: -5, transform: 'translateY(-50%)' } },
+                              { handle: 'se', cursor: 'nwse-resize', style: { bottom: -5, right: -5 } },
+                              { handle: 's', cursor: 'ns-resize', style: { bottom: -5, left: '50%', transform: 'translateX(-50%)' } },
+                              { handle: 'sw', cursor: 'nesw-resize', style: { bottom: -5, left: -5 } },
+                              { handle: 'w', cursor: 'ew-resize', style: { top: '50%', left: -5, transform: 'translateY(-50%)' } },
+                            ].map((h) => (
+                              <div
+                                key={h.handle}
+                                onPointerDown={(e) => {
+                                  e.stopPropagation();
+                                  (e.target as HTMLElement).setPointerCapture(e.pointerId);
+                                  setBorderDragState({
+                                    pageIndex: pageNum - 1,
+                                    handle: h.handle as any,
+                                    startX: e.clientX,
+                                    startY: e.clientY,
+                                    origBorder: { ...border },
+                                  });
+                                }}
+                                onPointerMove={(e) => {
+                                  if (!borderDragState || borderDragState.pageIndex !== pageNum - 1) return;
+                                  e.stopPropagation();
+                                  const dx = (e.clientX - borderDragState.startX) / zoomScale;
+                                  const dy = (e.clientY - borderDragState.startY) / zoomScale;
+                                  const orig = borderDragState.origBorder;
+                                  let nextLeft = orig.left;
+                                  let nextRight = orig.right;
+                                  let nextTop = orig.top;
+                                  let nextBottom = orig.bottom;
+
+                                  if (borderDragState.handle.includes('w')) {
+                                    nextLeft = Math.max(0, Math.min((basePageDims.width || 595) / 2 - 20, orig.left + dx));
+                                  }
+                                  if (borderDragState.handle.includes('e')) {
+                                    nextRight = Math.max(0, Math.min((basePageDims.width || 595) / 2 - 20, orig.right - dx));
+                                  }
+                                  if (borderDragState.handle.includes('n')) {
+                                    nextTop = Math.max(0, Math.min((basePageDims.height || 842) / 2 - 20, orig.top + dy));
+                                  }
+                                  if (borderDragState.handle.includes('s')) {
+                                    nextBottom = Math.max(0, Math.min((basePageDims.height || 842) / 2 - 20, orig.bottom - dy));
+                                  }
+
+                                  const updatedBorder: PageBorderConfig = {
+                                    ...orig,
+                                    left: Math.round(nextLeft),
+                                    right: Math.round(nextRight),
+                                    top: Math.round(nextTop),
+                                    bottom: Math.round(nextBottom),
+                                  };
+                                  setPageBorders((prev) => ({
+                                    ...prev,
+                                    [pageNum - 1]: updatedBorder,
+                                  }));
+                                  fitTextOverlaysToBorder(pageNum - 1, updatedBorder);
+                                }}
+                                onPointerUp={(e) => {
+                                  if (borderDragState) {
+                                    pushSnapshot({ pageBorders });
+                                    setBorderDragState(null);
+                                  }
+                                }}
+                                className="absolute w-2.5 h-2.5 bg-indigo-600 border border-white rounded-full shadow-md z-30 hover:scale-125 transition-transform"
+                                style={{ ...h.style, cursor: h.cursor }}
+                                title={`Resize Page ${pageNum} Border (${h.handle})`}
+                              />
+                            ))}
+
+                            {/* Margin Badge while Dragging */}
+                            {borderDragState && borderDragState.pageIndex === pageNum - 1 && (
+                              <div className="absolute top-2 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-zinc-900/90 text-white rounded text-[10px] font-mono shadow-md z-40 whitespace-nowrap pointer-events-none">
+                                L: {border.left}pt | R: {border.right}pt | T: {border.top}pt | B: {border.bottom}pt
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Page Number Rendering */}
+                  {(() => {
+                    const text = formatPageNumberDisplay(pageNum - 1, totalPages, pageNumberConfig);
+                    if (!text) return null;
+
+                    const pos = pageNumberConfig.position;
+                    const isTop = pos.startsWith('top');
+                    const isCenter = pos.endsWith('center');
+                    const isRight = pos.endsWith('right');
+                    const offsetY = (pageNumberConfig.offsetY || 24) * zoomScale;
+                    const scale = zoomScale;
+
+                    return (
+                      <div
+                        className="absolute pointer-events-none select-none z-15 flex items-center"
+                        style={{
+                          top: isTop ? `${offsetY}px` : undefined,
+                          bottom: !isTop ? `${offsetY}px` : undefined,
+                          left: isCenter ? '50%' : (!isRight ? `${36 * scale}px` : undefined),
+                          right: isRight ? `${36 * scale}px` : undefined,
+                          transform: isCenter ? 'translateX(-50%)' : undefined,
+                          fontFamily: pageNumberConfig.fontFamily || 'Helvetica, sans-serif',
+                          fontSize: `${(pageNumberConfig.fontSize || 10) * scale}px`,
+                          fontWeight:
+                            pageNumberConfig.fontWeight === 'bold'
+                              ? 700
+                              : pageNumberConfig.fontWeight === 'medium'
+                              ? 500
+                              : 400,
+                          color: pageNumberConfig.color || '#000000',
+                        }}
+                      >
+                        <span>{text}</span>
+                      </div>
+                    );
+                  })()}
+
                   {/* OCR Scanning Overlay */}
                   {isCurrentPage && isOcrScanningPage && (
                     <div className="absolute inset-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xs flex flex-col items-center justify-center z-50 rounded space-y-2 p-4 text-center">
@@ -6247,7 +7383,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         minWidth: '150px',
                         transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
                       }}
-                      className="absolute z-40 bg-white/95 dark:bg-zinc-900/95 border-2 border-emerald-500 rounded shadow-xl p-2 select-text"
+                      className="absolute z-40 bg-white border-2 border-emerald-500 rounded-lg shadow-2xl p-2.5 select-text"
                     >
                       <textarea
                         autoFocus
@@ -6286,12 +7422,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           fontWeight: t.isBold ? 700 : 400,
                           fontStyle: t.isItalic ? 'italic' : 'normal',
                           textDecoration: t.isUnderline ? 'underline' : 'none',
-                          color: t.color || '#000000',
+                          color: (t.color && t.color.toLowerCase() !== '#ffffff') ? t.color : '#000000',
                           textAlign: t.alignment || 'left',
                         }}
-                        className="w-full bg-transparent border-none outline-none resize-both min-h-[36px] p-0 font-medium"
+                        className="w-full bg-white text-zinc-900 border-none outline-none resize-both min-h-[38px] p-0 font-medium placeholder-zinc-400"
                       />
-                      <div className="flex items-center justify-between pt-1 border-t border-emerald-200 dark:border-emerald-800 text-[10px] text-emerald-700 dark:text-emerald-400 font-bold select-none">
+                      <div className="flex items-center justify-between pt-1 border-t border-emerald-200 text-[10px] text-emerald-700 font-bold select-none">
                         <span>Press Enter to save</span>
                         <button
                           type="button"
@@ -6305,7 +7441,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             setEditingOverlayId(null);
                             pushSnapshot({ textOverlays });
                           }}
-                          className="px-2 py-0.5 bg-emerald-600 text-white rounded text-[10px] font-bold hover:bg-emerald-700"
+                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold shadow-xs cursor-pointer active:scale-95 transition-all"
                         >
                           Done ✓
                         </button>
@@ -10519,7 +11655,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               left: `${Math.min(window.innerWidth - 220, pageThumbnailContextMenu.x)}px`,
             }}
             onClick={(e) => e.stopPropagation()}
-            className="fixed z-[100000] w-52 bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200 divide-y divide-zinc-100 dark:divide-zinc-800 animate-in fade-in zoom-in-95 duration-100"
+            className="fixed z-[100000] w-56 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200 divide-y divide-zinc-100 dark:divide-zinc-800 animate-in fade-in zoom-in-95 duration-100"
           >
             <div className="px-3 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
               Page {pageThumbnailContextMenu.pageNum} Options
@@ -10562,6 +11698,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               >
                 <RotateCw className="w-3.5 h-3.5 text-amber-500" />
                 <span>Rotate 90° Clockwise</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const pIdx = pageThumbnailContextMenu.pageNum - 1;
+                  setPageThumbnailContextMenu(null);
+                  const isCurActive = pageBorders[pIdx]?.enabled;
+                  updatePageBorderConfig({ enabled: !isCurActive }, 'current');
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-700 dark:text-zinc-200"
+              >
+                <Square className="w-3.5 h-3.5 text-indigo-500" />
+                <span>{pageBorders[pageThumbnailContextMenu.pageNum - 1]?.enabled ? 'Remove Page Border' : 'Add Page Border'}</span>
               </button>
             </div>
             <div className="py-1">

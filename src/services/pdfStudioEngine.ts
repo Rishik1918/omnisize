@@ -182,6 +182,68 @@ export interface InsertBlankPageSpec {
   height?: number;
 }
 
+export type PageBorderType =
+  | 'solid'
+  | 'dashed'
+  | 'dotted'
+  | 'double'
+  | 'groove'
+  | 'ridge'
+  | 'corners'
+  | 'frame'
+  | 'inset'
+  | 'outset';
+
+export interface PageBorderConfig {
+  enabled: boolean;
+  type: PageBorderType;
+  width: number;
+  color: string;
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+export type PageNumberPosition =
+  | 'top-left'
+  | 'top-center'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-center'
+  | 'bottom-right';
+
+export type PageNumberFormat =
+  | 'number'
+  | 'page-x'
+  | 'page-x-of-y'
+  | 'dash'
+  | 'roman-upper'
+  | 'roman-lower';
+
+export type PageNumberFilter =
+  | 'all'
+  | 'odd'
+  | 'even'
+  | 'range'
+  | 'specific';
+
+export interface PageNumberConfig {
+  enabled: boolean;
+  position: PageNumberPosition;
+  format: PageNumberFormat;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: 'normal' | 'medium' | 'bold';
+  color: string;
+  filterMode: PageNumberFilter;
+  startFrom: number;
+  rangeStart?: number;
+  rangeEnd?: number;
+  specificPages?: string;
+  offsetY?: number;
+}
+
 export interface PdfEditPayload {
   rotations?: Record<number, number>; // pageIndex -> degrees (90, 180, 270)
   deletedPages?: number[]; // list of 0-indexed page numbers to remove
@@ -192,6 +254,8 @@ export interface PdfEditPayload {
   tables?: TableOverlay[];
   textReplacements?: ExistingTextItem[];
   hyperlinks?: HyperlinkOverlay[];
+  pageBorders?: Record<number, PageBorderConfig>;
+  pageNumberConfig?: PageNumberConfig;
 }
 
 export class PdfStudioEngine {
@@ -819,7 +883,147 @@ export class PdfStudioEngine {
       }
     }
 
-    // 6. Delete Pages (must be deleted from highest index to lowest)
+    // 6. Apply Page Borders
+    if (payload.pageBorders) {
+      for (let pIdx = 0; pIdx < doc.getPageCount(); pIdx++) {
+        const border = payload.pageBorders[pIdx];
+        if (!border || !border.enabled) continue;
+
+        const page = doc.getPage(pIdx);
+        const w = page.getWidth();
+        const h = page.getHeight();
+        const x1 = border.left;
+        const y1 = border.bottom;
+        const x2 = w - border.right;
+        const y2 = h - border.top;
+        const bw = Math.max(1, x2 - x1);
+        const bh = Math.max(1, y2 - y1);
+        const borderWidth = Math.max(0.5, border.width || 1);
+        const strokeColor = this.parseHexColor(border.color || '#000000');
+
+        switch (border.type) {
+          case 'dashed':
+            page.drawRectangle({
+              x: x1,
+              y: y1,
+              width: bw,
+              height: bh,
+              borderColor: strokeColor,
+              borderWidth,
+              borderDashArray: [borderWidth * 4, borderWidth * 2],
+            });
+            break;
+
+          case 'dotted':
+            page.drawRectangle({
+              x: x1,
+              y: y1,
+              width: bw,
+              height: bh,
+              borderColor: strokeColor,
+              borderWidth,
+              borderDashArray: [borderWidth, borderWidth * 1.5],
+            });
+            break;
+
+          case 'double': {
+            const innerInset = Math.max(2, borderWidth * 1.5);
+            const lineThick = Math.max(0.6, borderWidth * 0.45);
+            page.drawRectangle({
+              x: x1,
+              y: y1,
+              width: bw,
+              height: bh,
+              borderColor: strokeColor,
+              borderWidth: lineThick,
+            });
+            if (bw > innerInset * 2 && bh > innerInset * 2) {
+              page.drawRectangle({
+                x: x1 + innerInset,
+                y: y1 + innerInset,
+                width: bw - innerInset * 2,
+                height: bh - innerInset * 2,
+                borderColor: strokeColor,
+                borderWidth: lineThick,
+              });
+            }
+            break;
+          }
+
+          case 'corners': {
+            const cornerLen = Math.min(Math.min(bw, bh) * 0.25, Math.max(20, borderWidth * 8));
+            // Top-Left corner: (x1, y2)
+            page.drawLine({ start: { x: x1, y: y2 }, end: { x: x1 + cornerLen, y: y2 }, color: strokeColor, thickness: borderWidth });
+            page.drawLine({ start: { x: x1, y: y2 }, end: { x: x1, y: y2 - cornerLen }, color: strokeColor, thickness: borderWidth });
+            // Top-Right corner: (x2, y2)
+            page.drawLine({ start: { x: x2, y: y2 }, end: { x: x2 - cornerLen, y: y2 }, color: strokeColor, thickness: borderWidth });
+            page.drawLine({ start: { x: x2, y: y2 }, end: { x: x2, y: y2 - cornerLen }, color: strokeColor, thickness: borderWidth });
+            // Bottom-Left corner: (x1, y1)
+            page.drawLine({ start: { x: x1, y: y1 }, end: { x: x1 + cornerLen, y: y1 }, color: strokeColor, thickness: borderWidth });
+            page.drawLine({ start: { x: x1, y: y1 }, end: { x: x1, y: y1 + cornerLen }, color: strokeColor, thickness: borderWidth });
+            // Bottom-Right corner: (x2, y1)
+            page.drawLine({ start: { x: x2, y: y1 }, end: { x: x2 - cornerLen, y: y1 }, color: strokeColor, thickness: borderWidth });
+            page.drawLine({ start: { x: x2, y: y1 }, end: { x: x2, y: y1 + cornerLen }, color: strokeColor, thickness: borderWidth });
+            break;
+          }
+
+          case 'frame': {
+            const frameInset = Math.max(3, borderWidth * 1.8);
+            page.drawRectangle({
+              x: x1,
+              y: y1,
+              width: bw,
+              height: bh,
+              borderColor: strokeColor,
+              borderWidth,
+            });
+            if (bw > frameInset * 2 && bh > frameInset * 2) {
+              page.drawRectangle({
+                x: x1 + frameInset,
+                y: y1 + frameInset,
+                width: bw - frameInset * 2,
+                height: bh - frameInset * 2,
+                borderColor: strokeColor,
+                borderWidth: Math.max(0.6, borderWidth * 0.4),
+              });
+              const sqSize = Math.max(3, borderWidth * 1.2);
+              const drawCornerSq = (cx: number, cy: number) => {
+                page.drawRectangle({
+                  x: cx - sqSize / 2,
+                  y: cy - sqSize / 2,
+                  width: sqSize,
+                  height: sqSize,
+                  color: strokeColor,
+                });
+              };
+              drawCornerSq(x1 + frameInset / 2, y2 - frameInset / 2);
+              drawCornerSq(x2 - frameInset / 2, y2 - frameInset / 2);
+              drawCornerSq(x1 + frameInset / 2, y1 + frameInset / 2);
+              drawCornerSq(x2 - frameInset / 2, y1 + frameInset / 2);
+            }
+            break;
+          }
+
+          case 'groove':
+          case 'ridge':
+          case 'inset':
+          case 'outset':
+          case 'solid':
+          default:
+            page.drawRectangle({
+              x: x1,
+              y: y1,
+              width: bw,
+              height: bh,
+              borderColor: strokeColor,
+              borderWidth,
+            });
+            break;
+        }
+      }
+    }
+
+    // 7. Delete Pages (must be deleted from highest index to lowest)
     if (payload.deletedPages && payload.deletedPages.length > 0) {
       const sortedToDelete = [...payload.deletedPages]
         .filter((idx) => idx >= 0 && idx < doc.getPageCount())
@@ -832,11 +1036,107 @@ export class PdfStudioEngine {
       }
     }
 
+    // 8. Apply Page Numbers
+    if (payload.pageNumberConfig && payload.pageNumberConfig.enabled) {
+      const cfg = payload.pageNumberConfig;
+      const totalPages = doc.getPageCount();
+      const chosenFont = selectFont(cfg.fontFamily, cfg.fontWeight === 'bold', false);
+      const fontSize = cfg.fontSize || 10;
+      const fontColor = this.parseHexColor(cfg.color || '#000000');
+      const offsetY = cfg.offsetY || 24;
+
+      for (let i = 0; i < totalPages; i++) {
+        const pageNum = i + 1;
+
+        // Filter check
+        if (cfg.filterMode === 'odd' && pageNum % 2 === 0) continue;
+        if (cfg.filterMode === 'even' && pageNum % 2 !== 0) continue;
+        if (cfg.filterMode === 'range') {
+          const s = cfg.rangeStart || 1;
+          const e = cfg.rangeEnd || totalPages;
+          if (pageNum < s || pageNum > e) continue;
+        }
+        if (cfg.filterMode === 'specific' && cfg.specificPages) {
+          const parts = cfg.specificPages.split(',').map((p) => p.trim());
+          const matched = parts.some((p) => {
+            if (p.includes('-')) {
+              const [a, b] = p.split('-').map(Number);
+              return pageNum >= a && pageNum <= b;
+            }
+            return Number(p) === pageNum;
+          });
+          if (!matched) continue;
+        }
+
+        // Format number
+        const startNum = cfg.startFrom || 1;
+        const displayVal = startNum + i;
+        let text = `${displayVal}`;
+        if (cfg.format === 'page-x') {
+          text = `Page ${displayVal}`;
+        } else if (cfg.format === 'page-x-of-y') {
+          text = `Page ${displayVal} of ${totalPages}`;
+        } else if (cfg.format === 'dash') {
+          text = `- ${displayVal} -`;
+        } else if (cfg.format === 'roman-upper') {
+          text = PdfStudioEngine.toRoman(displayVal, true);
+        } else if (cfg.format === 'roman-lower') {
+          text = PdfStudioEngine.toRoman(displayVal, false);
+        }
+
+        const page = doc.getPage(i);
+        const pWidth = page.getWidth();
+        const pHeight = page.getHeight();
+        const textWidth = chosenFont.widthOfTextAtSize(text, fontSize);
+
+        let posX = 36;
+        if (cfg.position.endsWith('left')) {
+          posX = 36;
+        } else if (cfg.position.endsWith('center')) {
+          posX = (pWidth - textWidth) / 2;
+        } else if (cfg.position.endsWith('right')) {
+          posX = pWidth - 36 - textWidth;
+        }
+
+        let posY = offsetY;
+        if (cfg.position.startsWith('top')) {
+          posY = pHeight - offsetY - fontSize;
+        } else {
+          posY = offsetY;
+        }
+
+        page.drawText(text, {
+          x: posX,
+          y: posY,
+          size: fontSize,
+          font: chosenFont,
+          color: fontColor,
+        });
+      }
+    }
+
     onProgress?.(85);
     const pdfBytes = await doc.save();
     onProgress?.(100);
     const array = new Uint8Array(pdfBytes);
     return new Blob([array], { type: 'application/pdf' });
+  }
+
+  private static toRoman(num: number, upper = true): string {
+    if (num <= 0) return String(num);
+    const romanMap: [number, string][] = [
+      [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+      [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+      [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']
+    ];
+    let res = '';
+    for (const [v, s] of romanMap) {
+      while (num >= v) {
+        res += s;
+        num -= v;
+      }
+    }
+    return upper ? res : res.toLowerCase();
   }
 
   /**
