@@ -613,35 +613,30 @@ export default function App() {
 
       {/* Desktop App Close Confirmation Modal */}
       {showDesktopCloseModal && (
-        <div className="fixed inset-0 z-[9999999] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 select-none">
-          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-5">
-            <div className="flex items-start gap-3.5">
-              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex-shrink-0">
-                <AlertCircle className="w-6 h-6" />
-              </div>
-              <div className="space-y-1.5 flex-1">
-                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
-                  Save Changes Before Closing?
-                </h3>
-                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                  Do you want to save any changes before exiting Omnisize? Any unsaved edits or in-progress operations will be lost if you exit without saving.
-                </p>
-              </div>
+        <div className="fixed inset-0 z-[9999999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 select-none">
+          <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+                Unsaved Changes
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                You have documents with unsaved changes. Exiting now will discard all unsaved modifications made during this session.
+              </p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-2.5 pt-2 sm:justify-end">
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-zinc-100 dark:border-zinc-800">
               <button
                 onClick={() => setShowDesktopCloseModal(false)}
-                className="px-4 py-2.5 text-xs font-semibold rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors"
+                className="px-3.5 py-2 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 transition-colors"
               >
-                Cancel / Keep Working
+                Keep Working
               </button>
               <button
                 onClick={() => {
                   setShowDesktopCloseModal(false);
                   (window as any).electronAPI?.confirmAppClose?.();
                 }}
-                className="px-4 py-2.5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-500 text-white transition-colors shadow-sm"
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors shadow-xs"
               >
                 Exit Without Saving
               </button>

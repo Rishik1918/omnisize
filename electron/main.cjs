@@ -138,7 +138,7 @@ function createWindow() {
       mainWindow.destroy();
       mainWindow = null;
     }
-    app.quit();
+    app.exit(0);
   });
 
   mainWindow.on('closed', () => {
@@ -167,7 +167,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    app.quit();
+    app.exit(0);
   }
 });
 

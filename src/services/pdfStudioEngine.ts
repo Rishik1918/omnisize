@@ -42,6 +42,20 @@ export interface ImageOverlay {
   width: number;
   height: number;
   rotation?: number;
+  borderWidth?: number;
+  borderColor?: string;
+  borderStyle?: 'solid' | 'dashed' | 'dotted' | 'double' | 'groove' | 'ridge';
+  borderRadius?: number;
+  brightness?: number; // percentage, e.g. 100
+  contrast?: number; // percentage, e.g. 100
+  saturation?: number; // percentage, e.g. 100
+  hue?: number; // degrees, -180 to 180
+  temperature?: number; // -100 to 100
+  grayscale?: boolean;
+  invert?: boolean;
+  flipH?: boolean;
+  flipV?: boolean;
+  opacity?: number;
 }
 
 export interface ExistingTextItem {
@@ -81,6 +95,87 @@ export interface HyperlinkOverlay {
   height: number;
 }
 
+export type ShapeType =
+  | 'rectangle'
+  | 'rounded-rectangle'
+  | 'circle'
+  | 'line'
+  | 'arrow'
+  | 'double-arrow'
+  | 'triangle'
+  | 'diamond'
+  | 'pentagon'
+  | 'hexagon'
+  | 'star'
+  | 'callout';
+
+export interface ShapeOverlay {
+  id: string;
+  pageIndex: number;
+  type: ShapeType;
+  x: number; // PDF points
+  y: number; // PDF points
+  width: number;
+  height: number;
+  strokeColor: string; // hex
+  fillColor: string; // hex or 'transparent'
+  strokeWidth: number;
+  strokeStyle?: 'solid' | 'dashed' | 'dotted';
+  opacity?: number;
+  rotation?: number; // 0 to 360
+}
+
+export interface TableOverlay {
+  id: string;
+  pageIndex: number;
+  x: number; // PDF points
+  y: number; // PDF points
+  width: number; // PDF points
+  height: number; // PDF points
+  rows: number;
+  cols: number;
+  cells: string[][]; // [row][col]
+  colWidths?: number[];
+  rowHeights?: number[];
+  headerRow?: boolean;
+  borderColor?: string;
+  headerBgColor?: string;
+  cellBgColor?: string;
+  textColor?: string;
+  fontSize?: number;
+  fontFamily?: string;
+  borderWidth?: number;
+  borderStyle?: 'solid' | 'dashed' | 'dotted' | 'double';
+  cellImages?: Record<string, string>; // `${row}_${col}` -> dataURL
+  cellImageProps?: Record<string, {
+    brightness?: number;
+    contrast?: number;
+    saturation?: number;
+    hue?: number;
+    temperature?: number;
+    grayscale?: boolean;
+    invert?: boolean;
+    flipH?: boolean;
+    flipV?: boolean;
+    borderRadius?: number;
+    borderWidth?: number;
+    borderColor?: string;
+    borderStyle?: string;
+  }>;
+  cellShapes?: Record<string, {
+    type: ShapeType;
+    strokeColor?: string;
+    fillColor?: string;
+    strokeWidth?: number;
+  }>;
+  cellSubtables?: Record<string, {
+    rows: number;
+    cols: number;
+    cells: string[][];
+  }>;
+  rotation?: number;
+}
+
 export interface InsertBlankPageSpec {
   insertAfterIndex: number; // -1 for beginning, pageIndex for after that page
   width?: number;
@@ -93,6 +188,8 @@ export interface PdfEditPayload {
   insertedBlankPages?: InsertBlankPageSpec[];
   textOverlays?: TextOverlay[];
   imageOverlays?: ImageOverlay[];
+  shapes?: ShapeOverlay[];
+  tables?: TableOverlay[];
   textReplacements?: ExistingTextItem[];
   hyperlinks?: HyperlinkOverlay[];
 }
@@ -362,6 +459,20 @@ export class PdfStudioEngine {
             height: imgOverlay.height,
             rotate: imgOverlay.rotation ? degrees(imgOverlay.rotation) : undefined,
           });
+
+          if (imgOverlay.borderWidth && imgOverlay.borderWidth > 0 && imgOverlay.borderColor) {
+            try {
+              page.drawRectangle({
+                x: imgOverlay.x,
+                y: imgOverlay.y,
+                width: imgOverlay.width,
+                height: imgOverlay.height,
+                borderWidth: imgOverlay.borderWidth,
+                borderColor: this.parseHexColor(imgOverlay.borderColor),
+                rotate: imgOverlay.rotation ? degrees(imgOverlay.rotation) : undefined,
+              });
+            } catch (_) {}
+          }
         }
       }
     }
@@ -400,6 +511,282 @@ export class PdfStudioEngine {
               thickness: Math.max(0.75, size * 0.06),
               color,
             });
+          }
+        }
+      }
+    }
+
+    // 4.5. Insert Basic & Word Shapes
+    if (payload.shapes && payload.shapes.length > 0) {
+      for (const shape of payload.shapes) {
+        if (shape.pageIndex >= 0 && shape.pageIndex < doc.getPageCount()) {
+          const page = doc.getPage(shape.pageIndex);
+          const stroke = this.parseHexColor(shape.strokeColor || '#000000');
+          const hasFill = shape.fillColor && shape.fillColor !== 'transparent' && shape.fillColor !== 'none';
+          const fill = hasFill ? this.parseHexColor(shape.fillColor) : undefined;
+          const borderWidth = shape.strokeWidth || 1;
+          const rot = shape.rotation ? degrees(shape.rotation) : undefined;
+          const op = shape.opacity ?? 1;
+
+          if (shape.type === 'circle') {
+            const rx = shape.width / 2;
+            const ry = shape.height / 2;
+            page.drawEllipse({
+              x: shape.x + rx,
+              y: shape.y + ry,
+              xScale: rx,
+              yScale: ry,
+              borderColor: stroke,
+              borderWidth,
+              color: fill,
+              rotate: rot,
+              opacity: op,
+            });
+          } else if (shape.type === 'line') {
+            page.drawLine({
+              start: { x: shape.x, y: shape.y },
+              end: { x: shape.x + shape.width, y: shape.y + shape.height },
+              color: stroke,
+              thickness: borderWidth,
+              opacity: op,
+            });
+          } else if (shape.type === 'arrow' || shape.type === 'double-arrow') {
+            page.drawLine({
+              start: { x: shape.x, y: shape.y + shape.height / 2 },
+              end: { x: shape.x + shape.width, y: shape.y + shape.height / 2 },
+              color: stroke,
+              thickness: borderWidth,
+              opacity: op,
+            });
+            const headSize = Math.min(12, Math.max(5, shape.height * 0.35));
+            const endX = shape.x + shape.width;
+            const midY = shape.y + shape.height / 2;
+            page.drawLine({
+              start: { x: endX - headSize, y: midY - headSize * 0.6 },
+              end: { x: endX, y: midY },
+              color: stroke,
+              thickness: borderWidth,
+              opacity: op,
+            });
+            page.drawLine({
+              start: { x: endX - headSize, y: midY + headSize * 0.6 },
+              end: { x: endX, y: midY },
+              color: stroke,
+              thickness: borderWidth,
+              opacity: op,
+            });
+            if (shape.type === 'double-arrow') {
+              const startX = shape.x;
+              page.drawLine({
+                start: { x: startX + headSize, y: midY - headSize * 0.6 },
+                end: { x: startX, y: midY },
+                color: stroke,
+                thickness: borderWidth,
+                opacity: op,
+              });
+              page.drawLine({
+                start: { x: startX + headSize, y: midY + headSize * 0.6 },
+                end: { x: startX, y: midY },
+                color: stroke,
+                thickness: borderWidth,
+                opacity: op,
+              });
+            }
+          } else if (shape.type === 'triangle') {
+            const p1 = { x: shape.x + shape.width / 2, y: shape.y + shape.height };
+            const p2 = { x: shape.x, y: shape.y };
+            const p3 = { x: shape.x + shape.width, y: shape.y };
+            page.drawLine({ start: p1, end: p2, color: stroke, thickness: borderWidth });
+            page.drawLine({ start: p2, end: p3, color: stroke, thickness: borderWidth });
+            page.drawLine({ start: p3, end: p1, color: stroke, thickness: borderWidth });
+          } else if (shape.type === 'diamond') {
+            const p1 = { x: shape.x + shape.width / 2, y: shape.y + shape.height };
+            const p2 = { x: shape.x + shape.width, y: shape.y + shape.height / 2 };
+            const p3 = { x: shape.x + shape.width / 2, y: shape.y };
+            const p4 = { x: shape.x, y: shape.y + shape.height / 2 };
+            page.drawLine({ start: p1, end: p2, color: stroke, thickness: borderWidth });
+            page.drawLine({ start: p2, end: p3, color: stroke, thickness: borderWidth });
+            page.drawLine({ start: p3, end: p4, color: stroke, thickness: borderWidth });
+            page.drawLine({ start: p4, end: p1, color: stroke, thickness: borderWidth });
+          } else {
+            page.drawRectangle({
+              x: shape.x,
+              y: shape.y,
+              width: shape.width,
+              height: shape.height,
+              borderColor: stroke,
+              borderWidth,
+              color: fill,
+              rotate: rot,
+              opacity: op,
+            });
+          }
+        }
+      }
+    }
+
+    // 4.6. Insert Vector Tables
+    if (payload.tables && payload.tables.length > 0) {
+      for (const table of payload.tables) {
+        if (table.pageIndex >= 0 && table.pageIndex < doc.getPageCount()) {
+          const page = doc.getPage(table.pageIndex);
+          const cols = Math.max(1, table.cols);
+          const rows = Math.max(1, table.rows);
+
+          const colWidths =
+            table.colWidths && table.colWidths.length === cols
+              ? table.colWidths
+              : Array(cols).fill(table.width / cols);
+          const rowHeights =
+            table.rowHeights && table.rowHeights.length === rows
+              ? table.rowHeights
+              : Array(rows).fill(table.height / rows);
+
+          const borderClr = this.parseHexColor(table.borderColor || '#000000');
+          const borderW = table.borderWidth || 1;
+          const headerBg = table.headerRow
+            ? table.headerBgColor
+              ? this.parseHexColor(table.headerBgColor)
+              : rgb(0.93, 0.95, 0.98)
+            : undefined;
+          const defaultCellBg = table.cellBgColor ? this.parseHexColor(table.cellBgColor) : undefined;
+          const txtColor = this.parseHexColor(table.textColor || '#000000');
+          const cellFontSize = table.fontSize || 10;
+
+          const totalH = rowHeights.reduce((a, b) => a + b, 0);
+
+          let currentTop = table.y + totalH;
+          for (let r = 0; r < rows; r++) {
+            const rowH = rowHeights[r];
+            const cellY = currentTop - rowH;
+            currentTop -= rowH;
+            const isHeader = r === 0 && table.headerRow;
+            const bg = isHeader ? headerBg : defaultCellBg;
+
+            let cellX = table.x;
+            for (let c = 0; c < cols; c++) {
+              const cellW = colWidths[c];
+
+              page.drawRectangle({
+                x: cellX,
+                y: cellY,
+                width: cellW,
+                height: rowH,
+                borderColor: borderClr,
+                borderWidth: borderW,
+                color: bg,
+              });
+
+              const cellImgKey = `${r}_${c}`;
+              if (table.cellImages && table.cellImages[cellImgKey]) {
+                try {
+                  const raw = table.cellImages[cellImgKey];
+                  const parts = raw.split(',');
+                  if (parts.length === 2) {
+                    const mime = parts[0].includes('image/png') ? 'png' : 'jpeg';
+                    const binary = atob(parts[1]);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let bi = 0; bi < binary.length; bi++) {
+                      bytes[bi] = binary.charCodeAt(bi);
+                    }
+                    const emb = mime === 'png' ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+                    const pad = 2;
+                    page.drawImage(emb, {
+                      x: cellX + pad,
+                      y: cellY + pad,
+                      width: Math.max(1, cellW - pad * 2),
+                      height: Math.max(1, rowH - pad * 2),
+                    });
+                  }
+                } catch (imgErr) {
+                  console.error('Failed to embed cell image in PDF:', imgErr);
+                }
+              }
+
+              // Cell Shape
+              if (table.cellShapes && table.cellShapes[cellImgKey]) {
+                try {
+                  const sData = table.cellShapes[cellImgKey];
+                  const sPad = 2;
+                  const sW = Math.max(2, cellW - sPad * 2);
+                  const sH = Math.max(2, rowH - sPad * 2);
+                  const strokeClr = this.parseHexColor(sData.strokeColor || '#2563eb');
+                  const fillClr = sData.fillColor && sData.fillColor !== 'transparent' ? this.parseHexColor(sData.fillColor) : undefined;
+                  if (sData.type === 'circle') {
+                    page.drawEllipse({
+                      x: cellX + sPad + sW / 2,
+                      y: cellY + sPad + sH / 2,
+                      xScale: sW / 2,
+                      yScale: sH / 2,
+                      borderColor: strokeClr,
+                      borderWidth: sData.strokeWidth || 1.5,
+                      color: fillClr,
+                    });
+                  } else {
+                    page.drawRectangle({
+                      x: cellX + sPad,
+                      y: cellY + sPad,
+                      width: sW,
+                      height: sH,
+                      borderColor: strokeClr,
+                      borderWidth: sData.strokeWidth || 1.5,
+                      color: fillClr,
+                    });
+                  }
+                } catch (_) {}
+              }
+
+              // Cell Subtable
+              if (table.cellSubtables && table.cellSubtables[cellImgKey]) {
+                try {
+                  const sub = table.cellSubtables[cellImgKey];
+                  const subColW = cellW / sub.cols;
+                  const subRowH = rowH / sub.rows;
+                  for (let sr = 0; sr < sub.rows; sr++) {
+                    for (let sc = 0; sc < sub.cols; sc++) {
+                      const sx = cellX + sc * subColW;
+                      const sy = cellY + (sub.rows - 1 - sr) * subRowH;
+                      page.drawRectangle({
+                        x: sx,
+                        y: sy,
+                        width: subColW,
+                        height: subRowH,
+                        borderColor: rgb(0.65, 0.65, 0.65),
+                        borderWidth: 0.5,
+                      });
+                      const stxt = sub.cells?.[sr]?.[sc] || '';
+                      if (stxt.trim()) {
+                        page.drawText(stxt.trim(), {
+                          x: sx + 2,
+                          y: sy + (subRowH - 7) / 2 + 1,
+                          size: 7,
+                          font: fontHelvetica,
+                          color: txtColor,
+                          maxWidth: Math.max(5, subColW - 4),
+                        });
+                      }
+                    }
+                  }
+                } catch (_) {}
+              }
+
+              const cellText = table.cells?.[r]?.[c] || '';
+              if (cellText && cellText.trim()) {
+                const textY = cellY + (rowH - cellFontSize) / 2 + 1;
+                const textX = cellX + 4;
+                try {
+                  page.drawText(cellText.trim(), {
+                    x: textX,
+                    y: textY,
+                    size: cellFontSize,
+                    font: isHeader ? fontHelveticaBold : fontHelvetica,
+                    color: txtColor,
+                    maxWidth: Math.max(10, cellW - 8),
+                  });
+                } catch (_) {}
+              }
+              cellX += cellW;
+            }
           }
         }
       }
@@ -459,30 +846,35 @@ export class PdfStudioEngine {
     pdfBufferOrProxy: ArrayBuffer | any,
     pageNumber: number, // 1-indexed
     scale: number = 1.25,
-    dpr: number = typeof window !== 'undefined' ? Math.max(window.devicePixelRatio || 1, 2) : 2
+    rotation: number = 0,
+    dpr?: number
   ): Promise<{ canvas: HTMLCanvasElement; width: number; height: number; cssWidth: number; cssHeight: number }> {
     const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
       ? pdfBufferOrProxy
       : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
 
     const page = await proxy.getPage(pageNumber);
-    // Base viewport at the requested display zoom scale
-    const viewport = page.getViewport({ scale });
+    const rawRotation = ((page.rotate || 0) + (rotation || 0)) % 360;
+    // PDF.js PageViewport strictly enforces that rotation must be a multiple of 90 degrees (0, 90, 180, 270)
+    const effectiveRotation = ((Math.round(rawRotation / 90) * 90) % 360 + 360) % 360;
+    // Base viewport at the requested display zoom scale with rotation
+    const viewport = page.getViewport({ scale: Math.max(0.1, scale), rotation: effectiveRotation });
 
     // Safety clamp: Ensure supersampled canvas never exceeds browser/GPU max texture dimension (4096px)
     // or total pixel area, which would cause Chrome/WebView to fail allocation and render blank white!
     const MAX_CANVAS_DIM = 4096;
-    let effectiveDpr = dpr;
+    const defaultDpr = typeof window !== 'undefined' ? Math.max(window.devicePixelRatio || 1, 2) : 2;
+    let effectiveDpr = (typeof dpr === 'number' && dpr > 0.1) ? dpr : defaultDpr;
     if (viewport.width * effectiveDpr > MAX_CANVAS_DIM || viewport.height * effectiveDpr > MAX_CANVAS_DIM) {
-      effectiveDpr = Math.min(MAX_CANVAS_DIM / viewport.width, MAX_CANVAS_DIM / viewport.height);
+      effectiveDpr = Math.max(0.5, Math.min(MAX_CANVAS_DIM / Math.max(1, viewport.width), MAX_CANVAS_DIM / Math.max(1, viewport.height)));
     }
-    const supersampledViewport = page.getViewport({ scale: scale * effectiveDpr });
+    const supersampledViewport = page.getViewport({ scale: Math.max(0.1, scale * effectiveDpr), rotation: effectiveRotation });
 
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(supersampledViewport.width);
-    canvas.height = Math.round(supersampledViewport.height);
-    canvas.style.width = `${Math.round(viewport.width)}px`;
-    canvas.style.height = `${Math.round(viewport.height)}px`;
+    canvas.width = Math.max(1, Math.round(supersampledViewport.width));
+    canvas.height = Math.max(1, Math.round(supersampledViewport.height));
+    canvas.style.width = `${Math.max(1, Math.round(viewport.width))}px`;
+    canvas.style.height = `${Math.max(1, Math.round(viewport.height))}px`;
 
     const ctx = canvas.getContext('2d')!;
     ctx.fillStyle = '#ffffff';
@@ -689,8 +1081,20 @@ export class PdfStudioEngine {
   }
 
   private static parseHexColor(hex: string) {
-    if (!hex || !hex.startsWith('#')) return rgb(0, 0, 0);
+    if (!hex) return rgb(0, 0, 0);
+    if (hex.startsWith('rgb')) {
+      const m = hex.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+      if (m) {
+        return rgb(parseInt(m[1], 10) / 255, parseInt(m[2], 10) / 255, parseInt(m[3], 10) / 255);
+      }
+    }
     const clean = hex.replace('#', '');
+    if (clean.length === 3) {
+      const r = parseInt(clean[0] + clean[0], 16) / 255;
+      const g = parseInt(clean[1] + clean[1], 16) / 255;
+      const b = parseInt(clean[2] + clean[2], 16) / 255;
+      return rgb(r, g, b);
+    }
     if (clean.length === 6) {
       const r = parseInt(clean.substring(0, 2), 16) / 255;
       const g = parseInt(clean.substring(2, 4), 16) / 255;

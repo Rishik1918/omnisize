@@ -27,6 +27,7 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  LayoutGrid,
   PanelLeftClose,
   PanelLeft,
   ExternalLink,
@@ -46,12 +47,26 @@ import {
   Sliders,
   ChevronDown,
   ChevronUp,
-  Move
+  Move,
+  Shapes,
+  Table as TableIcon,
+  Crop,
+  List,
+  ListOrdered,
+  CornerRightDown,
+  RotateCcw,
+  FlipHorizontal,
+  FlipVertical,
+  Settings,
+  Copy
 } from 'lucide-react';
 import {
   PdfStudioEngine,
   TextOverlay,
   ImageOverlay,
+  ShapeOverlay,
+  TableOverlay,
+  ShapeType,
   ExistingTextItem,
   HyperlinkOverlay,
   InsertBlankPageSpec
@@ -70,6 +85,11 @@ import { PdfOcrModal } from './PdfOcrModal';
 import { SignatureCertificateModal } from './SignatureCertificateModal';
 import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
 import { PdfUnlocker } from '../../services/pdfUnlocker';
+import {
+  saveActivePdfSession,
+  loadActivePdfSession,
+  clearActivePdfSession,
+} from '../../utils/pdfSessionPersistence';
 
 export const MS_WORD_FONTS = [
   // Wondershare PDFelement & Microsoft Modern Standard
@@ -209,6 +229,96 @@ export const MS_WORD_FONTS = [
   'Symbol'
 ];
 
+export interface PageSizeSpec {
+  id: string;
+  name: string;
+  width: number; // in pt (1 inch = 72 pt)
+  height: number; // in pt
+  description: string;
+}
+
+export const MS_WORD_PAGE_SIZES: PageSizeSpec[] = [
+  { id: 'same', name: 'Same as Document', width: 0, height: 0, description: 'Match current document size' },
+  { id: 'letter', name: 'Letter', width: 612, height: 792, description: '8.5" × 11" (215.9 × 279.4 mm)' },
+  { id: 'a4', name: 'A4', width: 595.28, height: 841.89, description: '8.27" × 11.69" (210 × 297 mm)' },
+  { id: 'legal', name: 'Legal', width: 612, height: 1008, description: '8.5" × 14" (215.9 × 355.6 mm)' },
+  { id: 'tabloid', name: 'Tabloid', width: 792, height: 1224, description: '11" × 17" (279.4 × 431.8 mm)' },
+  { id: 'executive', name: 'Executive', width: 522, height: 756, description: '7.25" × 10.5" (184.1 × 266.7 mm)' },
+  { id: 'a3', name: 'A3', width: 841.89, height: 1190.55, description: '11.69" × 16.54" (297 × 420 mm)' },
+  { id: 'a5', name: 'A5', width: 419.53, height: 595.28, description: '5.83" × 8.27" (148 × 210 mm)' },
+  { id: 'b4-jis', name: 'B4 (JIS)', width: 728.50, height: 1031.81, description: '10.12" × 14.33" (257 × 364 mm)' },
+  { id: 'b5-jis', name: 'B5 (JIS)', width: 515.91, height: 728.50, description: '7.17" × 10.12" (182 × 257 mm)' },
+  { id: 'statement', name: 'Statement', width: 396, height: 612, description: '5.5" × 8.5" (139.7 × 215.9 mm)' },
+  { id: 'folio', name: 'Folio', width: 612, height: 936, description: '8.5" × 13" (215.9 × 330.2 mm)' },
+];
+
+export interface MarginPreset {
+  id: string;
+  name: string;
+  top: number; // in pt (72 pt = 1 inch)
+  bottom: number;
+  left: number;
+  right: number;
+  description: string;
+}
+
+export const MS_WORD_MARGINS: MarginPreset[] = [
+  {
+    id: 'normal',
+    name: 'Normal',
+    top: 72,
+    bottom: 72,
+    left: 72,
+    right: 72,
+    description: 'Top: 1", Bottom: 1", Left: 1", Right: 1" (2.54 cm)',
+  },
+  {
+    id: 'narrow',
+    name: 'Narrow',
+    top: 36,
+    bottom: 36,
+    left: 36,
+    right: 36,
+    description: 'Top: 0.5", Bottom: 0.5", Left: 0.5", Right: 0.5" (1.27 cm)',
+  },
+  {
+    id: 'moderate',
+    name: 'Moderate',
+    top: 72,
+    bottom: 72,
+    left: 54,
+    right: 54,
+    description: 'Top: 1", Bottom: 1", Left: 0.75", Right: 0.75"',
+  },
+  {
+    id: 'wide',
+    name: 'Wide',
+    top: 72,
+    bottom: 72,
+    left: 144,
+    right: 144,
+    description: 'Top: 1", Bottom: 1", Left: 2", Right: 2" (5.08 cm)',
+  },
+  {
+    id: 'mirrored',
+    name: 'Mirrored',
+    top: 72,
+    bottom: 72,
+    left: 90,
+    right: 72,
+    description: 'Top: 1", Bottom: 1", Inside: 1.25", Outside: 1"',
+  },
+  {
+    id: 'office2003',
+    name: 'Office 2003 Default',
+    top: 72,
+    bottom: 72,
+    left: 90,
+    right: 90,
+    description: 'Top: 1", Bottom: 1", Left: 1.25", Right: 1.25"',
+  },
+];
+
 interface PdfEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -223,6 +333,8 @@ export interface EditorTabItem {
   modifiedTexts: Record<string, ExistingTextItem>;
   textOverlays: TextOverlay[];
   imageOverlays: ImageOverlay[];
+  shapes: ShapeOverlay[];
+  tables: TableOverlay[];
   hyperlinks: HyperlinkOverlay[];
   pageRotations: Record<number, number>;
   deletedPages: number[];
@@ -238,6 +350,8 @@ interface EditorSnapshot {
   modifiedTexts: Record<string, ExistingTextItem>;
   textOverlays: TextOverlay[];
   imageOverlays: ImageOverlay[];
+  shapes: ShapeOverlay[];
+  tables: TableOverlay[];
   hyperlinks: HyperlinkOverlay[];
   pageRotations: Record<number, number>;
   deletedPages: number[];
@@ -311,6 +425,125 @@ const sampleCanvasBgColor = (
   return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
 };
 
+// Accurately sample the original text ink foreground color from high-DPI canvas
+export const sampleCanvasTextColor = (
+  canvas: HTMLCanvasElement | null,
+  cssX: number,
+  cssY: number,
+  cssW: number,
+  cssH: number,
+  bgRgb: { r: number; g: number; b: number }
+): string => {
+  if (!canvas) return '#0f172a';
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return '#0f172a';
+
+    const styleW = parseFloat(canvas.style.width) || canvas.clientWidth || 1;
+    const styleH = parseFloat(canvas.style.height) || canvas.clientHeight || 1;
+    const pixelRatioX = canvas.width / styleW;
+    const pixelRatioY = canvas.height / styleH;
+
+    const startX = Math.max(0, Math.floor(cssX * pixelRatioX));
+    const startY = Math.max(0, Math.floor(cssY * pixelRatioY));
+    const width = Math.min(canvas.width - startX, Math.max(1, Math.ceil(cssW * pixelRatioX)));
+    const height = Math.min(canvas.height - startY, Math.max(1, Math.ceil(cssH * pixelRatioY)));
+
+    const imgData = ctx.getImageData(startX, startY, width, height).data;
+    const bgR = Math.round(bgRgb.r * 255);
+    const bgG = Math.round(bgRgb.g * 255);
+    const bgB = Math.round(bgRgb.b * 255);
+
+    const candidates: { r: number; g: number; b: number; diff: number }[] = [];
+    for (let i = 0; i < imgData.length; i += 4) {
+      const a = imgData[i + 3];
+      if (a < 50) continue;
+      const r = imgData[i];
+      const g = imgData[i + 1];
+      const b = imgData[i + 2];
+      const diff = Math.abs(r - bgR) + Math.abs(g - bgG) + Math.abs(b - bgB);
+      if (diff > 45) {
+        candidates.push({ r, g, b, diff });
+      }
+    }
+
+    if (candidates.length > 0) {
+      // Sort by contrast distance descending to pick strong core glyph pixels
+      candidates.sort((a, b) => b.diff - a.diff);
+      const topCount = Math.max(1, Math.floor(candidates.length * 0.4));
+      let sumR = 0, sumG = 0, sumB = 0;
+      for (let i = 0; i < topCount; i++) {
+        sumR += candidates[i].r;
+        sumG += candidates[i].g;
+        sumB += candidates[i].b;
+      }
+      const finR = Math.round(sumR / topCount);
+      const finG = Math.round(sumG / topCount);
+      const finB = Math.round(sumB / topCount);
+      return `#${finR.toString(16).padStart(2, '0')}${finG.toString(16).padStart(2, '0')}${finB.toString(16).padStart(2, '0')}`;
+    }
+  } catch (e) {
+    console.error('sampleCanvasTextColor error:', e);
+  }
+  const isDark = (bgRgb.r * 0.299 + bgRgb.g * 0.587 + bgRgb.b * 0.114) < 0.5;
+  return isDark ? '#f8fafc' : '#0f172a';
+};
+
+export const BULLET_STYLES = [
+  { id: 'disc', label: 'Solid Circle (•)', bullet: '• ' },
+  { id: 'circle', label: 'Hollow Circle (◦)', bullet: '◦ ' },
+  { id: 'square', label: 'Square (■)', bullet: '■ ' },
+  { id: 'diamond', label: 'Diamond (◆)', bullet: '◆ ' },
+  { id: 'arrow', label: 'Arrow (➢)', bullet: '➢ ' },
+  { id: 'check', label: 'Checkmark (✓)', bullet: '✓ ' },
+  { id: 'number', label: '1, 2, 3...', type: 'number' },
+  { id: 'alpha-upper', label: 'A, B, C...', type: 'alpha-upper' },
+  { id: 'alpha-lower', label: 'a, b, c...', type: 'alpha-lower' },
+  { id: 'roman', label: 'I, II, III...', type: 'roman' },
+];
+
+export const applyBulletToText = (text: string, bulletType: string): string => {
+  const lines = text.split('\n');
+  const bulletChars: Record<string, string> = {
+    disc: '• ',
+    circle: '◦ ',
+    square: '■ ',
+    diamond: '◆ ',
+    arrow: '➢ ',
+    check: '✓ ',
+  };
+
+  const stripBullet = (line: string): string => {
+    return line.replace(/^([•◦■◆➢✓\-\*]\s*|\d+[\.\)]\s*|[a-zA-Z][\.\)]\s*|[ivxlcdmIVXLCDM]+[\.\)]\s*)/, '');
+  };
+
+  if (bulletType === 'none') {
+    return lines.map(stripBullet).join('\n');
+  }
+
+  return lines.map((line, idx) => {
+    const raw = stripBullet(line.trim());
+    if (!raw && lines.length > 1) return line;
+
+    if (bulletType === 'number') {
+      return `${idx + 1}. ${raw}`;
+    } else if (bulletType === 'alpha-upper') {
+      const letter = String.fromCharCode(65 + (idx % 26));
+      return `${letter}. ${raw}`;
+    } else if (bulletType === 'alpha-lower') {
+      const letter = String.fromCharCode(97 + (idx % 26));
+      return `${letter}. ${raw}`;
+    } else if (bulletType === 'roman') {
+      const romanNumerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+      const r = romanNumerals[idx % romanNumerals.length];
+      return `${r}. ${raw}`;
+    } else {
+      const symbol = bulletChars[bulletType] || '• ';
+      return `${symbol}${raw}`;
+    }
+  }).join('\n');
+};
+
 export const resolveCssFontFamily = (family?: string): string => {
   if (!family) return `'Calibri', 'Segoe UI', Arial, sans-serif`;
   const fam = family.toLowerCase();
@@ -367,6 +600,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         modifiedTexts: {},
         textOverlays: [],
         imageOverlays: [],
+        shapes: [],
+        tables: [],
         hyperlinks: [],
         pageRotations: {},
         deletedPages: [],
@@ -377,6 +612,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
+          shapes: [],
+          tables: [],
           hyperlinks: [],
           pageRotations: {},
           deletedPages: [],
@@ -394,6 +631,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         modifiedTexts: {},
         textOverlays: [],
         imageOverlays: [],
+        shapes: [],
+        tables: [],
         hyperlinks: [],
         pageRotations: {},
         deletedPages: [],
@@ -404,6 +643,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
+          shapes: [],
+          tables: [],
           hyperlinks: [],
           pageRotations: {},
           deletedPages: [],
@@ -432,8 +673,211 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [currentPage, setCurrentPage] = useState<number>(1); // 1-indexed
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [activeTool, setActiveTool] = useState<
-    'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image'
+    'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image' | 'add-shape' | 'add-table'
   >('view');
+
+  // Shapes & Tables State
+  const [shapes, setShapes] = useState<ShapeOverlay[]>([]);
+  const [tables, setTables] = useState<TableOverlay[]>([]);
+  const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
+  const [selectedTableCell, setSelectedTableCell] = useState<{ row: number; col: number; tableId?: string } | null>(null);
+
+  // Rotation tool & popover states
+  const [showRotationPopover, setShowRotationPopover] = useState<boolean>(false);
+  const [customRotationInput, setCustomRotationInput] = useState<number>(0);
+
+  // Shapes & Tables dropdown menus
+  const [showShapesDropdown, setShowShapesDropdown] = useState<boolean>(false);
+  const [showTableDropdown, setShowTableDropdown] = useState<boolean>(false);
+  const [showBulletsDropdown, setShowBulletsDropdown] = useState<boolean>(false);
+  const [showBlankPageDropdown, setShowBlankPageDropdown] = useState<boolean>(false);
+  const [showPageSizeDropdown, setShowPageSizeDropdown] = useState<boolean>(false);
+  const [tableGridHover, setTableGridHover] = useState<{ rows: number; cols: number }>({ rows: 3, cols: 3 });
+  const [customTableRows, setCustomTableRows] = useState<number>(3);
+  const [customTableCols, setCustomTableCols] = useState<number>(3);
+
+  // Trigger refs for portaled dropdown positioning (prevents overflow-x-auto clipping)
+  const shapesBtnRef = useRef<HTMLButtonElement | null>(null);
+  const tableBtnRef = useRef<HTMLButtonElement | null>(null);
+  const rotationBtnRef = useRef<HTMLButtonElement | null>(null);
+  const bulletsBtnRef = useRef<HTMLButtonElement | null>(null);
+  const blankPageBtnRef = useRef<HTMLButtonElement | null>(null);
+  const pageSizeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const marginBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [dropdownCoords, setDropdownCoords] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+
+  // MS Word Margins State
+  const [selectedMarginId, setSelectedMarginId] = useState<string>('normal');
+  const [customMargins, setCustomMargins] = useState<{ top: number; bottom: number; left: number; right: number }>({
+    top: 72,
+    bottom: 72,
+    left: 72,
+    right: 72,
+  });
+  const [showMarginDropdown, setShowMarginDropdown] = useState<boolean>(false);
+  const [showMarginGuidelines, setShowMarginGuidelines] = useState<boolean>(true);
+
+  // Last clicked cursor position on page canvas for accurate object insertion
+  const lastClickedPageInfoRef = useRef<{ pageIndex: number; x: number; y: number } | null>(null);
+
+  const updateLastClickedCoords = (
+    e: React.PointerEvent<HTMLDivElement> | React.MouseEvent<HTMLDivElement>,
+    pageIndex: number
+  ) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = (e.clientX - rect.left) / zoomScale;
+    const clickY = (rect.height - (e.clientY - rect.top)) / zoomScale;
+    lastClickedPageInfoRef.current = {
+      pageIndex,
+      x: Math.max(10, Math.min((basePageDims.width || 595) - 20, clickX)),
+      y: Math.max(10, Math.min((basePageDims.height || 842) - 20, clickY)),
+    };
+  };
+
+  const getInsertionCoords = (w: number, h: number) => {
+    const pageIndex = lastClickedPageInfoRef.current?.pageIndex ?? (currentPage - 1);
+    const pWidth = basePageDims.width || 595;
+    const pHeight = basePageDims.height || 842;
+    let targetX = pWidth / 2;
+    let targetY = pHeight / 2;
+
+    if (lastClickedPageInfoRef.current) {
+      targetX = lastClickedPageInfoRef.current.x;
+      targetY = lastClickedPageInfoRef.current.y;
+    } else if (containerRef.current) {
+      const pageEl = document.getElementById(`pdf-page-frame-${pageIndex + 1}`);
+      if (pageEl) {
+        const pRect = pageEl.getBoundingClientRect();
+        const cRect = containerRef.current.getBoundingClientRect();
+        const visibleMidClientY = Math.max(pRect.top, cRect.top) / 2 + Math.min(pRect.bottom, cRect.bottom) / 2;
+        const offsetFromPageTop = (visibleMidClientY - pRect.top) / zoomScale;
+        targetY = pHeight - offsetFromPageTop;
+      }
+    }
+
+    const clampedX = Math.round(Math.max(20, Math.min(pWidth - w - 20, targetX - w / 2)));
+    const clampedY = Math.round(Math.max(20, Math.min(pHeight - h - 20, targetY - h / 2)));
+    return { pageIndex, x: clampedX, y: clampedY };
+  };
+
+  const handleContainerScroll = () => {
+    if (!containerRef.current) return;
+    const container = containerRef.current;
+    const containerMid = container.scrollTop + container.clientHeight / 2;
+    let closestPage = currentPage;
+    let minDiff = Infinity;
+    for (let p = 1; p <= totalPages; p++) {
+      const el = document.getElementById(`pdf-page-frame-${p}`);
+      if (el) {
+        const pageMid = el.offsetTop + el.offsetHeight / 2;
+        const diff = Math.abs(containerMid - pageMid);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestPage = p;
+        }
+      }
+    }
+    if (closestPage !== currentPage) {
+      setCurrentPage(closestPage);
+    }
+  };
+
+  // Image manipulation & Crop state
+  const [cropImageId, setCropImageId] = useState<string | null>(null);
+  const [cropBox, setCropBox] = useState<{ xPct: number; yPct: number; wPct: number; hPct: number }>({
+    xPct: 0.05,
+    yPct: 0.05,
+    wPct: 0.9,
+    hPct: 0.9,
+  });
+
+  // Dragging & Resizing Canvas State
+  const [draggingItem, setDraggingItem] = useState<{
+    id: string;
+    type: 'overlay' | 'image' | 'shape' | 'table';
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+  } | null>(null);
+
+  const [resizingItem, setResizingItem] = useState<{
+    id: string;
+    type: 'overlay' | 'image' | 'shape' | 'table';
+    handle: string;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    origW: number;
+    origH: number;
+    aspectRatio?: number;
+    initialColWidths?: number[];
+    initialRowHeights?: number[];
+  } | null>(null);
+
+  // Interactive On-Canvas Rotation Pointer State (MS Word Style)
+  const [rotatingItem, setRotatingItem] = useState<{
+    id: string;
+    type: 'overlay' | 'image' | 'shape' | 'table';
+    centerX: number;
+    centerY: number;
+    startAngle: number;
+    initialRot: number;
+  } | null>(null);
+
+  // Table / Shape / Picture Right-Click Context Menu State
+  const [tableContextMenu, setTableContextMenu] = useState<{
+    x: number;
+    y: number;
+    tableId: string;
+    row: number;
+    col: number;
+  } | null>(null);
+
+  const [elementContextMenu, setElementContextMenu] = useState<{
+    x: number;
+    y: number;
+    type: 'shape' | 'image' | 'table';
+    id: string;
+    tableRow?: number;
+    tableCol?: number;
+  } | null>(null);
+
+  const clipboardRef = useRef<{
+    type: 'shape' | 'table' | 'image' | 'text';
+    data: any;
+  } | null>(null);
+
+  // Page Deletion & Reordering States
+  const [pageToDelete, setPageToDelete] = useState<number | null>(null);
+  const [pageThumbnailContextMenu, setPageThumbnailContextMenu] = useState<{
+    x: number;
+    y: number;
+    pageNum: number;
+  } | null>(null);
+  const [draggingPageNum, setDraggingPageNum] = useState<number | null>(null);
+  const [dragOverPageNum, setDragOverPageNum] = useState<number | null>(null);
+
+  // Interactive Table Column & Row Resizing State
+  const [resizingCol, setResizingCol] = useState<{
+    tableId: string;
+    colIdx: number;
+    startX: number;
+    initialWidth: number;
+    initialColWidths: number[];
+  } | null>(null);
+
+  const [resizingRow, setResizingRow] = useState<{
+    tableId: string;
+    rowIdx: number;
+    startY: number;
+    initialHeight: number;
+    initialRowHeights: number[];
+    initialTableY: number;
+    initialTotalHeight: number;
+  } | null>(null);
 
   // Digital Signature & Certificate State
   const [signatures, setSignatures] = useState<PdfSignatureInfo[]>([]);
@@ -456,13 +900,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Sync initialFile or initialFiles prop changes
   useEffect(() => {
     if (initialFiles && initialFiles.length > 0) {
-      const newTabs = initialFiles.map((f, i) => ({
+      const newTabs: EditorTabItem[] = initialFiles.map((f, i) => ({
         id: `tab_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 5)}`,
         name: f.name,
         file: f,
         modifiedTexts: {},
         textOverlays: [],
         imageOverlays: [],
+        shapes: [],
+        tables: [],
         hyperlinks: [],
         pageRotations: {},
         deletedPages: [],
@@ -473,6 +919,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
+          shapes: [],
+          tables: [],
           hyperlinks: [],
           pageRotations: {},
           deletedPages: [],
@@ -497,34 +945,36 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setActiveTabId(newId);
         setFile(initialFile);
         setShowInitialPrompt(false);
-        return [
-          ...prev,
-          {
-            id: newId,
-            name: initialFile.name,
-            file: initialFile,
+        const newTab: EditorTabItem = {
+          id: newId,
+          name: initialFile.name,
+          file: initialFile,
+          modifiedTexts: {},
+          textOverlays: [],
+          imageOverlays: [],
+          shapes: [],
+          tables: [],
+          hyperlinks: [],
+          pageRotations: {},
+          deletedPages: [],
+          insertedBlankPages: [],
+          currentPage: 1,
+          zoomScale: 1.0,
+          history: [{
             modifiedTexts: {},
             textOverlays: [],
             imageOverlays: [],
+            shapes: [],
+            tables: [],
             hyperlinks: [],
             pageRotations: {},
             deletedPages: [],
             insertedBlankPages: [],
-            currentPage: 1,
-            zoomScale: 1.0,
-            history: [{
-              modifiedTexts: {},
-              textOverlays: [],
-              imageOverlays: [],
-              hyperlinks: [],
-              pageRotations: {},
-              deletedPages: [],
-              insertedBlankPages: [],
-            }],
-            historyIndex: 0,
-            hasUnsavedEdits: false,
-          },
-        ];
+          }],
+          historyIndex: 0,
+          hasUnsavedEdits: false,
+        };
+        return [...prev, newTab];
       });
     }
   }, [initialFile, initialFiles]);
@@ -577,11 +1027,158 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   const [textColor, setTextColor] = useState<string>('#000000');
 
+  // Multi-selection, in-place text editing, and Link modal states
+  const [editingOverlayId, setEditingOverlayId] = useState<string | null>(null);
+  const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
+  const [showLinkModal, setShowLinkModal] = useState<boolean>(false);
+  const [linkModalData, setLinkModalData] = useState<{
+    text: string;
+    url: string;
+    targetTextItemId?: string | null;
+    targetOverlayId?: string | null;
+  }>({ text: '', url: 'https://' });
+  const cellImageInputRef = useRef<HTMLInputElement>(null);
+  const [activeTableImgCell, setActiveTableImgCell] = useState<string | null>(null);
+  const [imageBorderRadius, setImageBorderRadius] = useState<number>(0);
+  const [imageBrightness, setImageBrightness] = useState<number>(100);
+  const [imageContrast, setImageContrast] = useState<number>(100);
+
+  // Auto-restore active session if re-opening app after Android discarded WebView
+  useEffect(() => {
+    if (!initialFile && (!initialFiles || initialFiles.length === 0)) {
+      loadActivePdfSession().then((session) => {
+        if (session && session.fileBuffer) {
+          try {
+            const restoredFile = new File([session.fileBuffer], session.fileName, { type: session.fileType });
+            setFile(restoredFile);
+            setArrayBuffer(session.fileBuffer);
+            setCurrentPage(session.currentPage || 1);
+            setPageRotations(session.pageRotations || {});
+            setDeletedPages(session.deletedPages || []);
+            setInsertedBlankPages(session.insertedBlankPages || []);
+            setTextOverlays(session.textOverlays || []);
+            setImageOverlays(session.imageOverlays || []);
+            setShapes(session.shapes || []);
+            setTables(session.tables || []);
+            setHyperlinks(session.hyperlinks || []);
+            const modMap: Record<string, ExistingTextItem> = {};
+            (session.modifiedTexts || []).forEach((item: ExistingTextItem) => {
+              modMap[item.id] = item;
+            });
+            setModifiedTexts(modMap);
+            setShowInitialPrompt(false);
+          } catch (e) {
+            console.warn('Could not restore session:', e);
+          }
+        }
+      });
+    }
+  }, []);
+
+  // Save session when switching apps (visibilitychange / pagehide) without draining battery
+  useEffect(() => {
+    const handleSaveSession = () => {
+      const isDirty =
+        Object.keys(modifiedTexts).length > 0 ||
+        textOverlays.length > 0 ||
+        imageOverlays.length > 0 ||
+        shapes.length > 0 ||
+        tables.length > 0 ||
+        hyperlinks.length > 0 ||
+        Object.keys(pageRotations).length > 0 ||
+        deletedPages.length > 0 ||
+        insertedBlankPages.length > 0;
+
+      if (isDirty && file && arrayBuffer) {
+        saveActivePdfSession({
+          fileName: file.name,
+          fileType: file.type || 'application/pdf',
+          fileBuffer: arrayBuffer,
+          currentPage,
+          pageRotations,
+          deletedPages,
+          insertedBlankPages,
+          textOverlays,
+          imageOverlays,
+          shapes,
+          tables,
+          modifiedTexts: Object.values(modifiedTexts),
+          hyperlinks,
+          updatedAt: Date.now(),
+        });
+      } else if (!isDirty) {
+        clearActivePdfSession();
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        handleSaveSession();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handleSaveSession);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handleSaveSession);
+    };
+  }, [file, arrayBuffer, currentPage, pageRotations, deletedPages, insertedBlankPages, textOverlays, imageOverlays, shapes, tables, modifiedTexts, hyperlinks]);
+
+  const handleItemSelect = (
+    id: string,
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text',
+    e?: React.MouseEvent | React.TouchEvent
+  ) => {
+    const isCtrl = e && 'ctrlKey' in e && (e.ctrlKey || e.metaKey);
+    if (isCtrl) {
+      setMultiSelectedIds((prev) =>
+        prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+      );
+    } else {
+      setMultiSelectedIds([id]);
+    }
+
+    if (type === 'overlay' || type === 'image') {
+      setSelectedOverlayId(id);
+      setSelectedShapeId(null);
+      setSelectedTableId(null);
+      setSelectedTableCell(null);
+      setSelectedTextItemId(null);
+    } else if (type === 'shape') {
+      setSelectedShapeId(id);
+      setSelectedOverlayId(null);
+      setSelectedTableId(null);
+      setSelectedTableCell(null);
+      setSelectedTextItemId(null);
+    } else if (type === 'table') {
+      setSelectedTableId(id);
+      setSelectedTableCell(null);
+      setSelectedOverlayId(null);
+      setSelectedShapeId(null);
+      setSelectedTextItemId(null);
+    } else if (type === 'text') {
+      setSelectedTextItemId(id);
+      setSelectedOverlayId(null);
+      setSelectedShapeId(null);
+      setSelectedTableId(null);
+      setSelectedTableCell(null);
+    }
+
+    if (!/android/i.test(navigator.userAgent)) {
+      setShowPropertiesPanel(true);
+    }
+  };
+
   // Wondershare PDFelement Properties Panel & Advanced Color System
-  const [showPropertiesPanel, setShowPropertiesPanel] = useState<boolean>(() => {
-    return typeof window !== 'undefined' ? window.innerWidth >= 768 : true;
-  });
+  // On Android app, properties panel does not auto-open (user opens manually); Desktop defaults open
+  const [showPropertiesPanel, setShowPropertiesPanel] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth >= 768 && !/android/i.test(navigator.userAgent)
+  );
+  const [propertiesTouchStartY, setPropertiesTouchStartY] = useState<number | null>(null);
   const [showColorPickerModal, setShowColorPickerModal] = useState<boolean>(false);
+  const [colorTarget, setColorTarget] = useState<'text' | 'image-border' | 'table-border' | 'table-fill' | 'shape-stroke' | 'shape-fill'>('text');
+  const lastPageSwitchRef = useRef<number>(0);
   const [activeColorStudioTab, setActiveColorStudioTab] = useState<'palette' | 'wheel' | 'sliders'>('palette');
   const [hexInput, setHexInput] = useState<string>('#000000');
   const [rgbValues, setRgbValues] = useState<{ r: number; g: number; b: number }>({ r: 0, g: 0, b: 0 });
@@ -639,11 +1236,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   );
 
   const applyNewColor = useCallback((color: string) => {
-    setTextColor(color);
     setHexInput(color);
-    updateActiveTextItemProps({ color });
     setRecentColors((prev) => [color, ...prev.filter((c) => c.toLowerCase() !== color.toLowerCase())].slice(0, 12));
-    // Parse hex to rgb
     try {
       const clean = color.replace('#', '');
       if (clean.length === 6) {
@@ -653,10 +1247,33 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           b: parseInt(clean.substring(4, 6), 16),
         });
       }
-    } catch {
-      // Ignored
+    } catch {}
+
+    if (colorTarget === 'image-border' && selectedOverlayId) {
+      setImageOverlays((prev) =>
+        prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderColor: color } : i))
+      );
+    } else if (colorTarget === 'table-border' && selectedTableId) {
+      setTables((prev) =>
+        prev.map((t) => (t.id === selectedTableId ? { ...t, borderColor: color } : t))
+      );
+    } else if (colorTarget === 'table-fill' && selectedTableId) {
+      setTables((prev) =>
+        prev.map((t) => (t.id === selectedTableId ? { ...t, cellBgColor: color } : t))
+      );
+    } else if (colorTarget === 'shape-stroke' && selectedShapeId) {
+      setShapes((prev) =>
+        prev.map((s) => (s.id === selectedShapeId ? { ...s, strokeColor: color } : s))
+      );
+    } else if (colorTarget === 'shape-fill' && selectedShapeId) {
+      setShapes((prev) =>
+        prev.map((s) => (s.id === selectedShapeId ? { ...s, fillColor: color } : s))
+      );
+    } else {
+      setTextColor(color);
+      updateActiveTextItemProps({ color });
     }
-  }, [updateActiveTextItemProps]);
+  }, [colorTarget, selectedOverlayId, selectedTableId, selectedShapeId, updateActiveTextItemProps]);
 
   const handleOpenEyedropper = async () => {
     if (typeof window !== 'undefined' && (window as any).EyeDropper) {
@@ -685,6 +1302,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       modifiedTexts: {},
       textOverlays: [],
       imageOverlays: [],
+      shapes: [],
+      tables: [],
       hyperlinks: [],
       pageRotations: {},
       deletedPages: [],
@@ -702,6 +1321,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [error, setError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pageCanvasesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pdfProxyRef = useRef<any>(null);
   const filePickerRef = useRef<HTMLInputElement | null>(null);
@@ -724,6 +1344,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     Object.keys(modifiedTexts).length > 0 ||
     textOverlays.length > 0 ||
     imageOverlays.length > 0 ||
+    shapes.length > 0 ||
+    tables.length > 0 ||
     hyperlinks.length > 0 ||
     Object.keys(pageRotations).length > 0 ||
     deletedPages.length > 0 ||
@@ -745,6 +1367,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         modifiedTexts: newSnapshot.modifiedTexts ?? modifiedTexts,
         textOverlays: newSnapshot.textOverlays ?? textOverlays,
         imageOverlays: newSnapshot.imageOverlays ?? imageOverlays,
+        shapes: newSnapshot.shapes ?? shapes,
+        tables: newSnapshot.tables ?? tables,
         hyperlinks: newSnapshot.hyperlinks ?? hyperlinks,
         pageRotations: newSnapshot.pageRotations ?? pageRotations,
         deletedPages: newSnapshot.deletedPages ?? deletedPages,
@@ -763,6 +1387,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       modifiedTexts,
       textOverlays,
       imageOverlays,
+      shapes,
+      tables,
       hyperlinks,
       pageRotations,
       deletedPages,
@@ -782,6 +1408,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
+          shapes: [],
+          tables: [],
           hyperlinks: [],
           pageRotations: {},
           deletedPages: [],
@@ -792,6 +1420,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             modifiedTexts: {},
             textOverlays: [],
             imageOverlays: [],
+            shapes: [],
+            tables: [],
             hyperlinks: [],
             pageRotations: {},
             deletedPages: [],
@@ -850,6 +1480,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       modifiedTexts: {},
       textOverlays: [],
       imageOverlays: [],
+      shapes: [],
+      tables: [],
       hyperlinks: [],
       pageRotations: {},
       deletedPages: [],
@@ -860,6 +1492,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         modifiedTexts: {},
         textOverlays: [],
         imageOverlays: [],
+        shapes: [],
+        tables: [],
         hyperlinks: [],
         pageRotations: {},
         deletedPages: [],
@@ -885,6 +1519,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         modifiedTexts: {},
         textOverlays: [],
         imageOverlays: [],
+        shapes: [],
+        tables: [],
         hyperlinks: [],
         pageRotations: {},
         deletedPages: [],
@@ -895,6 +1531,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
+          shapes: [],
+          tables: [],
           hyperlinks: [],
           pageRotations: {},
           deletedPages: [],
@@ -937,6 +1575,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setModifiedTexts(targetState.modifiedTexts);
       setTextOverlays(targetState.textOverlays);
       setImageOverlays(targetState.imageOverlays);
+      setShapes(targetState.shapes || []);
+      setTables(targetState.tables || []);
       setHyperlinks(targetState.hyperlinks);
       setPageRotations(targetState.pageRotations);
       setDeletedPages(targetState.deletedPages);
@@ -953,6 +1593,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setModifiedTexts(targetState.modifiedTexts);
       setTextOverlays(targetState.textOverlays);
       setImageOverlays(targetState.imageOverlays);
+      setShapes(targetState.shapes || []);
+      setTables(targetState.tables || []);
       setHyperlinks(targetState.hyperlinks);
       setPageRotations(targetState.pageRotations);
       setDeletedPages(targetState.deletedPages);
@@ -1039,6 +1681,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setModifiedTexts({});
         setTextOverlays([]);
         setImageOverlays([]);
+        setShapes([]);
+        setTables([]);
         setHyperlinks([]);
         setPageRotations({});
         setDeletedPages([]);
@@ -1048,6 +1692,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             modifiedTexts: {},
             textOverlays: [],
             imageOverlays: [],
+            shapes: [],
+            tables: [],
             hyperlinks: [],
             pageRotations: {},
             deletedPages: [],
@@ -1108,11 +1754,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       clearTimeout(zoomDebounceRef.current);
     }
 
-    const executeRender = () => {
-      PdfStudioEngine.renderPageToCanvas(proxyOrBuf, currentPage, zoomScale)
-        .then(async ({ canvas, cssWidth, cssHeight }) => {
-          if (!isMounted || !canvasRef.current) return;
-          const targetCanvas = canvasRef.current;
+    const renderPageCanvas = async (p: number) => {
+      const targetCanvas = pageCanvasesRef.current.get(p) || (p === currentPage ? canvasRef.current : null);
+      if (!targetCanvas) return;
+      try {
+        const { canvas, cssWidth, cssHeight } = await PdfStudioEngine.renderPageToCanvas(
+          proxyOrBuf,
+          p,
+          zoomScale,
+          pageRotations[p - 1] || 0
+        );
+        if (!isMounted) return;
+        if (canvas.width > 0 && canvas.height > 0) {
           targetCanvas.width = canvas.width;
           targetCanvas.height = canvas.height;
           targetCanvas.style.width = `${Math.round(cssWidth)}px`;
@@ -1124,7 +1777,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             // Inpaint canvas ONLY for items that have been modified by the user
             const itemsToInpaint = Object.values(modifiedTexts).filter(
-              (t) => t.pageIndex === currentPage - 1 && t.isModified && t.currentText !== t.originalText
+              (t) => t.pageIndex === p - 1 && t.isModified && t.currentText !== t.originalText
             );
 
             if (itemsToInpaint && itemsToInpaint.length > 0) {
@@ -1146,11 +1799,31 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               }
             }
           }
+        }
+        if (p === currentPage) {
           const baseW = cssWidth / zoomScale;
           const baseH = cssHeight / zoomScale;
           setBasePageDims({ width: baseW, height: baseH });
           setViewportDims({ width: cssWidth, height: cssHeight });
           lastRenderedPageRef.current = currentPage;
+        }
+      } catch (err: any) {
+        console.error(`Error rendering page ${p}:`, err);
+      }
+    };
+
+    const executeRender = () => {
+      renderPageCanvas(currentPage)
+        .then(async () => {
+          if (!isMounted) return;
+          setIsRendering(false);
+
+          // Render all other pages continuously in background
+          for (let p = 1; p <= totalPages; p++) {
+            if (p !== currentPage) {
+              renderPageCanvas(p);
+            }
+          }
 
           // Extract selectable text elements for the current page
           try {
@@ -1165,27 +1838,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
                 // Check page text items for signature timestamp (e.g., Aadhaar Date: 2020.09.11 23:26:28 IST)
                 for (const item of textItems) {
-                const dm = item.originalText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
-                if (dm) {
-                  const yr = parseInt(dm[1], 10);
-                  const mo = parseInt(dm[2], 10) - 1;
-                  const da = parseInt(dm[3], 10);
-                  const hr = parseInt(dm[4], 10);
-                  const mi = parseInt(dm[5], 10);
-                  const se = parseInt(dm[6], 10);
-                  const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - 5.5 * 3600 * 1000;
-                  const parsedDate = new Date(utcMs);
-                  setSignatures((prev) =>
-                    prev.map((s) => ({
-                      ...s,
-                      signingTime: s.signingTime || parsedDate,
-                    }))
-                  );
-                  break;
+                  const dm = item.originalText.match(/Date:\s*([0-9]{4})[./-]([0-9]{2})[./-]([0-9]{2})\s+([0-9]{2}):([0-9]{2}):([0-9]{2})/i);
+                  if (dm) {
+                    const yr = parseInt(dm[1], 10);
+                    const mo = parseInt(dm[2], 10) - 1;
+                    const da = parseInt(dm[3], 10);
+                    const hr = parseInt(dm[4], 10);
+                    const mi = parseInt(dm[5], 10);
+                    const se = parseInt(dm[6], 10);
+                    const utcMs = Date.UTC(yr, mo, da, hr, mi, se) - 5.5 * 3600 * 1000;
+                    const parsedDate = new Date(utcMs);
+                    setSignatures((prev) =>
+                      prev.map((s) => ({
+                        ...s,
+                        signingTime: s.signingTime || parsedDate,
+                      }))
+                    );
+                    break;
+                  }
                 }
               }
             }
-          }
           } catch (e) {
             console.warn('Text item extraction warning:', e);
           }
@@ -1215,7 +1888,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         clearTimeout(zoomDebounceRef.current);
       }
     };
-  }, [currentPage, zoomScale, arrayBuffer, totalPages]);
+  }, [currentPage, zoomScale, arrayBuffer, totalPages, pageRotations]);
 
   // Save PDF Document
   const handleSave = async (): Promise<boolean> => {
@@ -1230,12 +1903,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         insertedBlankPages,
         textOverlays,
         imageOverlays,
+        shapes,
+        tables,
         textReplacements: Object.values(modifiedTexts),
         hyperlinks,
       });
 
       const baseName = file.name.replace(/\.pdf$/i, '');
       await saveFile(editedBlob, `${baseName}_edited.pdf`);
+      await clearActivePdfSession();
       setSaveSuccess(true);
       setTabs((prev) =>
         prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: false } : t))
@@ -1323,6 +1999,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
+          shapes: [],
+          tables: [],
           hyperlinks: [],
           pageRotations: {},
           deletedPages: [],
@@ -1333,6 +2011,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             modifiedTexts: {},
             textOverlays: [],
             imageOverlays: [],
+            shapes: [],
+            tables: [],
             hyperlinks: [],
             pageRotations: {},
             deletedPages: [],
@@ -1349,6 +2029,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           setModifiedTexts({});
           setTextOverlays([]);
           setImageOverlays([]);
+          setShapes([]);
+          setTables([]);
           setHyperlinks([]);
           setPageRotations({});
           setDeletedPages([]);
@@ -1449,70 +2131,533 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setZoomScale(Number(newScale.toFixed(2)));
   };
 
-  // Insert Blank Page
-  const handleInsertBlankPage = (position: 'after' | 'before' | 'end') => {
-    let insertAfterIndex = currentPage - 1;
-    if (position === 'before') insertAfterIndex = currentPage - 2;
-    if (position === 'end') insertAfterIndex = totalPages - 1;
+  // Insert Blank Page with matched dimensions or MS Word Page Size catalogue
+  const handleInsertBlankPage = async (
+    position: 'after' | 'before' | 'end' = 'after',
+    specId: string = 'same',
+    specificPageNum?: number
+  ) => {
+    try {
+      setIsSaving(true);
+      setError(null);
+      if (!arrayBuffer) {
+        setError('No active document loaded.');
+        return;
+      }
 
-    const newInsert: InsertBlankPageSpec = {
-      insertAfterIndex,
-      width: 595.28,
-      height: 841.89,
-    };
-    const nextInserts = [...insertedBlankPages, newInsert];
-    setInsertedBlankPages(nextInserts);
-    setTotalPages((prev) => prev + 1);
-    pushSnapshot({ insertedBlankPages: nextInserts });
+      let targetW = basePageDims.width || 595.28;
+      let targetH = basePageDims.height || 841.89;
+
+      if (specId !== 'same') {
+        const found = MS_WORD_PAGE_SIZES.find((s) => s.id === specId);
+        if (found && found.width > 0) {
+          targetW = found.width;
+          targetH = found.height;
+        }
+      }
+
+      const refPage = specificPageNum !== undefined ? specificPageNum : currentPage;
+      let insertIndex = refPage; // 1-indexed insertion position
+      if (position === 'before') insertIndex = Math.max(0, refPage - 1);
+      if (position === 'after') insertIndex = refPage;
+      if (position === 'end') insertIndex = totalPages;
+
+      const pdfDoc = await PDFDocument.load(arrayBuffer);
+      pdfDoc.insertPage(insertIndex, [targetW, targetH]);
+      const savedBytes = await pdfDoc.save();
+      const newBuffer = savedBytes.buffer.slice(savedBytes.byteOffset, savedBytes.byteOffset + savedBytes.byteLength);
+
+      setArrayBuffer(newBuffer);
+      const newProxy = await getDocumentProxy(new Uint8Array(newBuffer.slice(0)));
+      pdfProxyRef.current = newProxy;
+
+      const newTotal = pdfDoc.getPageCount();
+      setTotalPages(newTotal);
+
+      // Shift overlays on and after insertIndex
+      setTextOverlays((prev) =>
+        prev.map((t) => (t.pageIndex >= insertIndex ? { ...t, pageIndex: t.pageIndex + 1 } : t))
+      );
+      setImageOverlays((prev) =>
+        prev.map((i) => (i.pageIndex >= insertIndex ? { ...i, pageIndex: i.pageIndex + 1 } : i))
+      );
+      setShapes((prev) =>
+        prev.map((s) => (s.pageIndex >= insertIndex ? { ...s, pageIndex: s.pageIndex + 1 } : s))
+      );
+      setTables((prev) =>
+        prev.map((t) => (t.pageIndex >= insertIndex ? { ...t, pageIndex: t.pageIndex + 1 } : t))
+      );
+      setHyperlinks((prev) =>
+        prev.map((h) => (h.pageIndex >= insertIndex ? { ...h, pageIndex: h.pageIndex + 1 } : h))
+      );
+      setSignatures((prev) =>
+        prev.map((s) => (s.rect && s.rect.pageIndex >= insertIndex ? { ...s, rect: { ...s.rect, pageIndex: s.rect.pageIndex + 1 } } : s))
+      );
+      setPageRotations((prev) => {
+        const next: Record<number, number> = {};
+        Object.entries(prev).forEach(([k, v]) => {
+          const idx = parseInt(k, 10);
+          if (idx >= insertIndex) {
+            next[idx + 1] = v;
+          } else {
+            next[idx] = v;
+          }
+        });
+        return next;
+      });
+
+      setCurrentPage(insertIndex + 1);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+      );
+      setShowBlankPageDropdown(false);
+    } catch (err: any) {
+      console.error('Failed to insert blank page:', err);
+      setError('Failed to insert blank page: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  // Delete Page
+  // Resize Current Page (Complete MS Word Page Size Catalogue)
+  const handleResizeCurrentPage = async (specId: string) => {
+    try {
+      if (!arrayBuffer) {
+        setError('No active document loaded.');
+        return;
+      }
+      const found = MS_WORD_PAGE_SIZES.find((s) => s.id === specId);
+      if (!found || found.width <= 0) return;
+      setIsSaving(true);
+      setError(null);
+      const pdfDoc = await PDFDocument.load(arrayBuffer);
+      const page = pdfDoc.getPage(currentPage - 1);
+      page.setSize(found.width, found.height);
+      const savedBytes = await pdfDoc.save();
+      const newBuffer = savedBytes.buffer.slice(savedBytes.byteOffset, savedBytes.byteOffset + savedBytes.byteLength);
+
+      setArrayBuffer(newBuffer);
+      const newProxy = await getDocumentProxy(new Uint8Array(newBuffer.slice(0)));
+      pdfProxyRef.current = newProxy;
+      setBasePageDims({ width: found.width, height: found.height });
+      setShowPageSizeDropdown(false);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+      );
+    } catch (err: any) {
+      setError('Failed to resize page: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Delete Page prompt
   const handleDeleteCurrentPage = () => {
     if (totalPages <= 1) {
       setError('Cannot delete the only page in the document.');
       return;
     }
-    const pageIndex = currentPage - 1;
-    const nextDeleted = [...deletedPages, pageIndex];
-    setDeletedPages(nextDeleted);
-    pushSnapshot({ deletedPages: nextDeleted });
+    setPageToDelete(currentPage);
+  };
 
-    if (currentPage > 1) {
-      setCurrentPage((p) => p - 1);
+  // Perform genuine page deletion on PDFDocument and re-render
+  const performDeletePage = async (targetPageNum: number) => {
+    try {
+      if (totalPages <= 1) {
+        setError('Cannot delete the only page in the document.');
+        setPageToDelete(null);
+        return;
+      }
+      if (!arrayBuffer) {
+        setError('No active document loaded.');
+        setPageToDelete(null);
+        return;
+      }
+      setIsSaving(true);
+      setError(null);
+
+      const targetIdx = targetPageNum - 1;
+      const pdfDoc = await PDFDocument.load(arrayBuffer);
+      pdfDoc.removePage(targetIdx);
+      const savedBytes = await pdfDoc.save();
+      const newBuffer = savedBytes.buffer.slice(savedBytes.byteOffset, savedBytes.byteOffset + savedBytes.byteLength);
+
+      setArrayBuffer(newBuffer);
+      const newProxy = await getDocumentProxy(new Uint8Array(newBuffer.slice(0)));
+      pdfProxyRef.current = newProxy;
+
+      const newTotal = pdfDoc.getPageCount();
+      setTotalPages(newTotal);
+
+      // Remap & filter page items
+      setTextOverlays((prev) =>
+        prev.filter((t) => t.pageIndex !== targetIdx).map((t) => (t.pageIndex > targetIdx ? { ...t, pageIndex: t.pageIndex - 1 } : t))
+      );
+      setImageOverlays((prev) =>
+        prev.filter((i) => i.pageIndex !== targetIdx).map((i) => (i.pageIndex > targetIdx ? { ...i, pageIndex: i.pageIndex - 1 } : i))
+      );
+      setShapes((prev) =>
+        prev.filter((s) => s.pageIndex !== targetIdx).map((s) => (s.pageIndex > targetIdx ? { ...s, pageIndex: s.pageIndex - 1 } : s))
+      );
+      setTables((prev) =>
+        prev.filter((t) => t.pageIndex !== targetIdx).map((t) => (t.pageIndex > targetIdx ? { ...t, pageIndex: t.pageIndex - 1 } : t))
+      );
+      setHyperlinks((prev) =>
+        prev.filter((h) => h.pageIndex !== targetIdx).map((h) => (h.pageIndex > targetIdx ? { ...h, pageIndex: h.pageIndex - 1 } : h))
+      );
+      setSignatures((prev) =>
+        prev
+          .filter((s) => s.rect?.pageIndex !== targetIdx)
+          .map((s) => (s.rect && s.rect.pageIndex > targetIdx ? { ...s, rect: { ...s.rect, pageIndex: s.rect.pageIndex - 1 } } : s))
+      );
+      setPageRotations((prev) => {
+        const next: Record<number, number> = {};
+        Object.entries(prev).forEach(([k, v]) => {
+          const idx = parseInt(k, 10);
+          if (idx < targetIdx) next[idx] = v;
+          else if (idx > targetIdx) next[idx - 1] = v;
+        });
+        return next;
+      });
+
+      // Clear selected items
+      setSelectedTableId(null);
+      setSelectedTableCell(null);
+      setSelectedShapeId(null);
+      setSelectedOverlayId(null);
+      setSelectedTextItemId(null);
+      setMultiSelectedIds([]);
+      setActiveEditingId(null);
+
+      // Adjust current page
+      if (currentPage > newTotal) {
+        setCurrentPage(newTotal);
+      } else if (currentPage === targetPageNum) {
+        setCurrentPage(Math.min(targetPageNum, newTotal));
+      }
+
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+      );
+    } catch (err: any) {
+      console.error('Failed to delete page:', err);
+      setError('Failed to delete page: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSaving(false);
+      setPageToDelete(null);
     }
   };
 
-  // Rotate Page
-  const handleRotatePage = () => {
+  // Reorder pages via drag and drop thumbnail
+  const handleReorderPage = async (fromPage: number, toPage: number) => {
+    if (fromPage === toPage || !arrayBuffer) return;
+    try {
+      setIsSaving(true);
+      setError(null);
+      const fromIdx = fromPage - 1;
+      const toIdx = toPage - 1;
+
+      const pdfDoc = await PDFDocument.load(arrayBuffer);
+      const [copiedPage] = await pdfDoc.copyPages(pdfDoc, [fromIdx]);
+      pdfDoc.removePage(fromIdx);
+      pdfDoc.insertPage(toIdx, copiedPage);
+
+      const savedBytes = await pdfDoc.save();
+      const newBuffer = savedBytes.buffer.slice(savedBytes.byteOffset, savedBytes.byteOffset + savedBytes.byteLength);
+
+      setArrayBuffer(newBuffer);
+      const newProxy = await getDocumentProxy(new Uint8Array(newBuffer.slice(0)));
+      pdfProxyRef.current = newProxy;
+
+      const remapIdx = (idx: number) => {
+        if (idx === fromIdx) return toIdx;
+        if (fromIdx < toIdx) {
+          if (idx > fromIdx && idx <= toIdx) return idx - 1;
+        } else {
+          if (idx >= toIdx && idx < fromIdx) return idx + 1;
+        }
+        return idx;
+      };
+
+      setTextOverlays((prev) => prev.map((t) => ({ ...t, pageIndex: remapIdx(t.pageIndex) })));
+      setImageOverlays((prev) => prev.map((i) => ({ ...i, pageIndex: remapIdx(i.pageIndex) })));
+      setShapes((prev) => prev.map((s) => ({ ...s, pageIndex: remapIdx(s.pageIndex) })));
+      setTables((prev) => prev.map((t) => ({ ...t, pageIndex: remapIdx(t.pageIndex) })));
+      setHyperlinks((prev) => prev.map((h) => ({ ...h, pageIndex: remapIdx(h.pageIndex) })));
+      setSignatures((prev) =>
+        prev.map((s) => (s.rect ? { ...s, rect: { ...s.rect, pageIndex: remapIdx(s.rect.pageIndex) } } : s))
+      );
+      setPageRotations((prev) => {
+        const next: Record<number, number> = {};
+        Object.entries(prev).forEach(([k, v]) => {
+          const idx = parseInt(k, 10);
+          next[remapIdx(idx)] = v;
+        });
+        return next;
+      });
+
+      setCurrentPage(toPage);
+      setTabs((prev) =>
+        prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+      );
+    } catch (err: any) {
+      console.error('Failed to reorder page:', err);
+      setError('Failed to reorder page: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Rotate specific page
+  const handleRotatePageNum = (pageNum: number, degDelta: number) => {
+    const pageIndex = pageNum - 1;
+    const currentDeg = pageRotations[pageIndex] || 0;
+    const nextDeg = ((Math.round((currentDeg + degDelta) / 90) * 90) % 360 + 360) % 360;
+    const nextRotations = { ...pageRotations, [pageIndex]: nextDeg };
+    setPageRotations(nextRotations);
+    pushSnapshot({ pageRotations: nextRotations });
+    setTabs((prev) =>
+      prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+    );
+  };
+
+  // Rotate Page by relative degrees (+90, -90, +180) - strictly snaps to multiples of 90 for PDF specs
+  const handleRotatePageBy = (degDelta: number) => {
     const pageIndex = currentPage - 1;
     const currentDeg = pageRotations[pageIndex] || 0;
-    const nextDeg = (currentDeg + 90) % 360;
+    const nextDeg = ((Math.round((currentDeg + degDelta) / 90) * 90) % 360 + 360) % 360;
     const nextRotations = { ...pageRotations, [pageIndex]: nextDeg };
     setPageRotations(nextRotations);
     pushSnapshot({ pageRotations: nextRotations });
   };
 
-  // Rotate Selected Element (Text, Image, Signature) or Page
-  const handleRotateCurrentSelectionOrPage = () => {
+  // Set Page rotation to exact degree (strictly snapped to 0, 90, 180, 270)
+  const handleSetPageRotation = (exactDeg: number) => {
+    const pageIndex = currentPage - 1;
+    const snapped = ((Math.round(exactDeg / 90) * 90) % 360 + 360) % 360;
+    const nextRotations = { ...pageRotations, [pageIndex]: snapped };
+    setPageRotations(nextRotations);
+    pushSnapshot({ pageRotations: nextRotations });
+  };
+
+  // Standard Rotate Page 90° Clockwise
+  const handleRotatePage = () => {
+    handleRotatePageBy(90);
+  };
+
+  // Safe Popover Anchoring & Toggle functions (avoids overflow-x-auto clipping)
+  const toggleShapesDropdown = () => {
+    if (showShapesDropdown) {
+      setShowShapesDropdown(false);
+      return;
+    }
+    const rect = shapesBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 276)),
+      });
+    }
+    setShowShapesDropdown(true);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowPageSizeDropdown(false);
+  };
+
+  const toggleTableDropdown = () => {
+    if (showTableDropdown) {
+      setShowTableDropdown(false);
+      return;
+    }
+    const rect = tableBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 240)),
+      });
+    }
+    setShowTableDropdown(true);
+    setShowShapesDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowPageSizeDropdown(false);
+  };
+
+  const toggleRotationPopover = () => {
+    if (showRotationPopover) {
+      setShowRotationPopover(false);
+      return;
+    }
+    const rect = rotationBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 250)),
+      });
+    }
+    setShowRotationPopover(true);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowBulletsDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowPageSizeDropdown(false);
+  };
+
+  const toggleBulletsDropdown = () => {
+    if (showBulletsDropdown) {
+      setShowBulletsDropdown(false);
+      return;
+    }
+    const rect = bulletsBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 230)),
+      });
+    }
+    setShowBulletsDropdown(true);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBlankPageDropdown(false);
+    setShowPageSizeDropdown(false);
+  };
+
+  const toggleBlankPageDropdown = () => {
+    if (showBlankPageDropdown) {
+      setShowBlankPageDropdown(false);
+      return;
+    }
+    const rect = blankPageBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 260)),
+      });
+    }
+    setShowBlankPageDropdown(true);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+    setShowPageSizeDropdown(false);
+    setShowMarginDropdown(false);
+  };
+
+  const togglePageSizeDropdown = () => {
+    if (showPageSizeDropdown) {
+      setShowPageSizeDropdown(false);
+      return;
+    }
+    const rect = pageSizeBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 260)),
+      });
+    }
+    setShowPageSizeDropdown(true);
+    setShowMarginDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+  };
+
+  const toggleMarginDropdown = () => {
+    if (showMarginDropdown) {
+      setShowMarginDropdown(false);
+      return;
+    }
+    const rect = marginBtnRef.current?.getBoundingClientRect();
+    if (rect) {
+      setDropdownCoords({
+        top: rect.bottom + 4,
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 320)),
+      });
+    }
+    setShowMarginDropdown(true);
+    setShowPageSizeDropdown(false);
+    setShowBlankPageDropdown(false);
+    setShowShapesDropdown(false);
+    setShowTableDropdown(false);
+    setShowRotationPopover(false);
+    setShowBulletsDropdown(false);
+  };
+
+  // Set Rotation for the currently selected Element (Text, Shape, Image, Table) or Document Page
+  const handleSetElementRotation = (exactDeg: number) => {
+    const nextDeg = ((exactDeg % 360) + 360) % 360;
+    if (selectedShapeId) {
+      setShapes((prev) => {
+        const next = prev.map((s) => (s.id === selectedShapeId ? { ...s, rotation: nextDeg } : s));
+        pushSnapshot({ shapes: next });
+        return next;
+      });
+      return;
+    }
+    if (selectedTableId) {
+      setTables((prev) => {
+        const next = prev.map((t) => (t.id === selectedTableId ? { ...t, rotation: nextDeg } : t));
+        pushSnapshot({ tables: next });
+        return next;
+      });
+      return;
+    }
     if (selectedOverlayId) {
       const isText = textOverlays.some((t) => t.id === selectedOverlayId);
       if (isText) {
-        setTextOverlays((prev) =>
-          prev.map((t) =>
-            t.id === selectedOverlayId ? { ...t, rotation: ((t.rotation || 0) + 90) % 360 } : t
-          )
-        );
-        pushSnapshot({ textOverlays });
+        setTextOverlays((prev) => {
+          const next = prev.map((t) => (t.id === selectedOverlayId ? { ...t, rotation: nextDeg } : t));
+          pushSnapshot({ textOverlays: next });
+          return next;
+        });
         return;
       }
       const isImg = imageOverlays.some((i) => i.id === selectedOverlayId);
       if (isImg) {
-        setImageOverlays((prev) =>
-          prev.map((i) =>
-            i.id === selectedOverlayId ? { ...i, rotation: ((i.rotation || 0) + 90) % 360 } : i
-          )
-        );
-        pushSnapshot({ imageOverlays });
+        setImageOverlays((prev) => {
+          const next = prev.map((i) => (i.id === selectedOverlayId ? { ...i, rotation: nextDeg } : i));
+          pushSnapshot({ imageOverlays: next });
+          return next;
+        });
+        return;
+      }
+    }
+    if (activeEditingId || selectedTextItemId) {
+      updateActiveTextItemProps({ rotation: nextDeg, isModified: true });
+      return;
+    }
+    handleSetPageRotation(exactDeg);
+  };
+
+  // Rotate Selected Element (Text, Image, Shape, Table) or Page by 90°
+  const handleRotateCurrentSelectionOrPage = () => {
+    if (selectedShapeId) {
+      const shp = shapes.find((s) => s.id === selectedShapeId);
+      handleSetElementRotation(((shp?.rotation || 0) + 90) % 360);
+      return;
+    }
+    if (selectedTableId) {
+      const tbl = tables.find((t) => t.id === selectedTableId);
+      handleSetElementRotation(((tbl?.rotation || 0) + 90) % 360);
+      return;
+    }
+    if (selectedOverlayId) {
+      const isText = textOverlays.some((t) => t.id === selectedOverlayId);
+      if (isText) {
+        const cur = textOverlays.find((t) => t.id === selectedOverlayId);
+        handleSetElementRotation(((cur?.rotation || 0) + 90) % 360);
+        return;
+      }
+      const isImg = imageOverlays.some((i) => i.id === selectedOverlayId);
+      if (isImg) {
+        const cur = imageOverlays.find((i) => i.id === selectedOverlayId);
+        handleSetElementRotation(((cur?.rotation || 0) + 90) % 360);
         return;
       }
     } else if (activeEditingId || selectedTextItemId) {
@@ -1525,19 +2670,984 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     handleRotatePage();
   };
 
+  // Insert MS Word Shape into current document page or selected table cell
+  const handleAddShape = (type: ShapeType) => {
+    if (selectedTableCell) {
+      const { tableId, row, col } = selectedTableCell;
+      setTables((prev) =>
+        prev.map((t) => {
+          if (t.id !== tableId) return t;
+          const nextCellShapes = {
+            ...(t.cellShapes || {}),
+            [`${row}_${col}`]: {
+              type,
+              strokeColor: '#2563eb',
+              fillColor: '#dbeafe',
+              strokeWidth: 2,
+            },
+          };
+          const curRowH = t.rowHeights?.[row] || (t.height / t.rows) || 28;
+          const curColW = t.colWidths?.[col] || (t.width / t.cols) || 80;
+          const nextRowHeights = [...(t.rowHeights || Array(t.rows).fill(t.height / t.rows || 28))];
+          const nextColWidths = [...(t.colWidths || Array(t.cols).fill(t.width / t.cols || 80))];
+          nextRowHeights[row] = Math.max(curRowH, 110);
+          nextColWidths[col] = Math.max(curColW, 140);
+          const totalW = nextColWidths.reduce((a, b) => a + b, 0);
+          const totalH = nextRowHeights.reduce((a, b) => a + b, 0);
+          const diffH = totalH - (t.height || totalH);
+          return {
+            ...t,
+            cellShapes: nextCellShapes,
+            rowHeights: nextRowHeights,
+            colWidths: nextColWidths,
+            width: totalW,
+            height: totalH,
+            y: Math.max(10, (t.y || 100) - diffH),
+          };
+        })
+      );
+      setShowShapesDropdown(false);
+      pushSnapshot({ tables });
+      return;
+    }
+
+    const id = `shape_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const isLineOrArrow = type === 'line' || type === 'arrow' || type === 'double-arrow';
+    const shapeW = isLineOrArrow ? 140 : 120;
+    const shapeH = isLineOrArrow ? 30 : 80;
+    const { pageIndex: targetPage, x: shapeX, y: shapeY } = getInsertionCoords(shapeW, shapeH);
+
+    const newShape: ShapeOverlay = {
+      id,
+      pageIndex: targetPage,
+      type,
+      x: shapeX,
+      y: shapeY,
+      width: shapeW,
+      height: shapeH,
+      strokeColor: '#2563eb',
+      fillColor: isLineOrArrow ? 'transparent' : '#dbeafe',
+      strokeWidth: 2,
+      strokeStyle: 'solid',
+      opacity: 1,
+      rotation: 0,
+    };
+    const nextShapes = [...shapes, newShape];
+    setShapes(nextShapes);
+    setSelectedShapeId(id);
+    setSelectedTableId(null);
+    setSelectedOverlayId(null);
+    setActiveEditingId(null);
+    const isMobile = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+    if (!isMobile) {
+      setShowPropertiesPanel(true);
+    }
+    setShowShapesDropdown(false);
+    pushSnapshot({ shapes: nextShapes });
+  };
+
+  // Insert Word Table into current document page or subtable into selected cell
+  const handleAddTable = (rows: number, cols: number) => {
+    if (selectedTableCell) {
+      const { tableId, row, col } = selectedTableCell;
+      const subR = Math.max(1, Math.min(5, rows));
+      const subC = Math.max(1, Math.min(5, cols));
+      const subCells: string[][] = Array.from({ length: subR }, () => Array(subC).fill(''));
+      setTables((prev) =>
+        prev.map((t) => {
+          if (t.id !== tableId) return t;
+          const nextSubtables = {
+            ...(t.cellSubtables || {}),
+            [`${row}_${col}`]: {
+              rows: subR,
+              cols: subC,
+              cells: subCells,
+            },
+          };
+          const curRowH = t.rowHeights?.[row] || (t.height / t.rows) || 28;
+          const curColW = t.colWidths?.[col] || (t.width / t.cols) || 80;
+          const nextRowHeights = [...(t.rowHeights || Array(t.rows).fill(t.height / t.rows || 28))];
+          const nextColWidths = [...(t.colWidths || Array(t.cols).fill(t.width / t.cols || 80))];
+          nextRowHeights[row] = Math.max(curRowH, subR * 34, 90);
+          nextColWidths[col] = Math.max(curColW, subC * 70, 140);
+          const totalW = nextColWidths.reduce((a, b) => a + b, 0);
+          const totalH = nextRowHeights.reduce((a, b) => a + b, 0);
+          const diffH = totalH - (t.height || totalH);
+          return {
+            ...t,
+            cellSubtables: nextSubtables,
+            rowHeights: nextRowHeights,
+            colWidths: nextColWidths,
+            width: totalW,
+            height: totalH,
+            y: Math.max(10, (t.y || 100) - diffH),
+          };
+        })
+      );
+      setShowTableDropdown(false);
+      pushSnapshot({ tables });
+      return;
+    }
+
+    const id = `table_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const r = Math.max(1, Math.min(20, rows));
+    const c = Math.max(1, Math.min(10, cols));
+    const totalW = Math.min(480, Math.max(180, c * 80));
+    const colW = totalW / c;
+    const rowH = 28;
+    const totalH = r * rowH;
+
+    const cells: string[][] = [];
+    for (let i = 0; i < r; i++) {
+      const row: string[] = [];
+      for (let j = 0; j < c; j++) {
+        row.push('');
+      }
+      cells.push(row);
+    }
+
+    const { pageIndex: targetPage, x: tableX, y: tableY } = getInsertionCoords(totalW, totalH);
+
+    const newTable: TableOverlay = {
+      id,
+      pageIndex: targetPage,
+      x: tableX,
+      y: tableY,
+      width: totalW,
+      height: totalH,
+      rows: r,
+      cols: c,
+      cells,
+      colWidths: Array(c).fill(colW),
+      rowHeights: Array(r).fill(rowH),
+      headerRow: false,
+      borderColor: '#000000',
+      borderWidth: 1,
+      borderStyle: 'solid',
+      fontSize: 10,
+      fontFamily: 'Calibri',
+      textColor: '#000000',
+      rotation: 0,
+    };
+
+    const nextTables = [...tables, newTable];
+    setTables(nextTables);
+    setSelectedTableId(id);
+    setSelectedShapeId(null);
+    setSelectedOverlayId(null);
+    setActiveEditingId(null);
+    setSelectedTextItemId(null);
+    const isMobile = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+    if (!isMobile) {
+      setShowPropertiesPanel(true);
+    }
+    setShowTableDropdown(false);
+    pushSnapshot({ tables: nextTables });
+  };
+
+  // Open Link Dialog for selected text or insert fresh link
+  const handleOpenLinkModal = () => {
+    const activeDetected = activeEditingId || selectedTextItemId;
+    if (activeDetected) {
+      const item = detectedTextItems.find((t) => t.id === activeDetected);
+      const existingTxt = item ? (modifiedTexts[activeDetected]?.currentText ?? item.originalText) : '';
+      setLinkModalData({
+        text: existingTxt,
+        url: 'https://',
+        targetTextItemId: activeDetected,
+      });
+      setShowLinkModal(true);
+      return;
+    }
+    const activeOverlay = selectedOverlayId ? textOverlays.find((t) => t.id === selectedOverlayId) : null;
+    if (activeOverlay) {
+      setLinkModalData({
+        text: activeOverlay.text,
+        url: 'https://',
+        targetOverlayId: activeOverlay.id,
+      });
+      setShowLinkModal(true);
+      return;
+    }
+    // Nothing selected on page
+    setLinkModalData({
+      text: 'Visit Link',
+      url: 'https://',
+    });
+    setShowLinkModal(true);
+  };
+
+  // Apply hyperlink to selected text or insert fresh text link
+  const handleApplyLink = (displayTxt: string, targetUrl: string) => {
+    setShowLinkModal(false);
+    if (!targetUrl || !targetUrl.trim()) return;
+    const cleanUrl = targetUrl.trim().startsWith('http://') || targetUrl.trim().startsWith('https://')
+      ? targetUrl.trim()
+      : `https://${targetUrl.trim()}`;
+    const pageIndex = currentPage - 1;
+
+    if (linkModalData.targetTextItemId) {
+      const item = detectedTextItems.find((t) => t.id === linkModalData.targetTextItemId);
+      if (item) {
+        const newLink: HyperlinkOverlay = {
+          id: `link_${Date.now()}`,
+          pageIndex,
+          url: cleanUrl,
+          x: item.x,
+          y: item.y,
+          width: Math.max(50, item.width),
+          height: Math.max(14, item.height),
+        };
+        const nextLinks = [...hyperlinks, newLink];
+        setHyperlinks(nextLinks);
+        pushSnapshot({ hyperlinks: nextLinks });
+        return;
+      }
+    }
+
+    if (linkModalData.targetOverlayId) {
+      const ov = textOverlays.find((t) => t.id === linkModalData.targetOverlayId);
+      if (ov) {
+        const newLink: HyperlinkOverlay = {
+          id: `link_${Date.now()}`,
+          pageIndex,
+          url: cleanUrl,
+          x: ov.x,
+          y: ov.y,
+          width: Math.max(50, ov.text.length * (ov.size || 12) * 0.65),
+          height: Math.max(16, (ov.size || 12) * 1.3),
+        };
+        const nextLinks = [...hyperlinks, newLink];
+        setHyperlinks(nextLinks);
+        pushSnapshot({ hyperlinks: nextLinks });
+        return;
+      }
+    }
+
+    // Nothing selected: insert both text and link
+    const centerX = Math.max(40, (basePageDims.width || 595) / 2 - 60);
+    const centerY = Math.max(40, (basePageDims.height || 842) / 2);
+    const finalTxt = displayTxt && displayTxt.trim() ? displayTxt.trim() : cleanUrl;
+    const newText: TextOverlay = {
+      id: `txt_overlay_${Date.now()}`,
+      pageIndex,
+      text: finalTxt,
+      x: centerX,
+      y: centerY,
+      size: fontSize || 14,
+      color: '#2563eb',
+      fontFamily: fontFamily || 'Calibri',
+      isUnderline: true,
+    };
+    const newLink: HyperlinkOverlay = {
+      id: `link_${Date.now()}`,
+      pageIndex,
+      url: cleanUrl,
+      x: centerX,
+      y: centerY - 4,
+      width: Math.max(60, finalTxt.length * (fontSize || 14) * 0.65),
+      height: Math.max(18, (fontSize || 14) * 1.3),
+    };
+    const nextOverlays = [...textOverlays, newText];
+    const nextLinks = [...hyperlinks, newLink];
+    setTextOverlays(nextOverlays);
+    setHyperlinks(nextLinks);
+    pushSnapshot({ textOverlays: nextOverlays, hyperlinks: nextLinks });
+  };
+
+  // Insert image into specific table cell
+  const handleInsertCellImageInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0] && selectedTableCell) {
+      const imgFile = e.target.files[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const { tableId, row, col } = selectedTableCell;
+        const img = new Image();
+        img.onload = () => {
+          const aspect = (img.naturalWidth || 100) / (img.naturalHeight || 100);
+          let desiredW = 160;
+          let desiredH = Math.round(desiredW / aspect);
+          if (desiredH > 180) {
+            desiredH = 180;
+            desiredW = Math.round(desiredH * aspect);
+          }
+          if (desiredW < 120) desiredW = 120;
+          if (desiredH < 90) desiredH = 90;
+
+          setTables((prev) =>
+            prev.map((t) => {
+              if (t.id !== tableId) return t;
+              const nextCellImages = { ...(t.cellImages || {}), [`${row}_${col}`]: dataUrl };
+              const curRowH = t.rowHeights?.[row] || (t.height / t.rows) || 28;
+              const curColW = t.colWidths?.[col] || (t.width / t.cols) || 80;
+              const nextRowHeights = [...(t.rowHeights || Array(t.rows).fill(t.height / t.rows || 28))];
+              const nextColWidths = [...(t.colWidths || Array(t.cols).fill(t.width / t.cols || 80))];
+              nextRowHeights[row] = Math.max(curRowH, desiredH);
+              nextColWidths[col] = Math.max(curColW, desiredW);
+              const totalW = nextColWidths.reduce((a, b) => a + b, 0);
+              const totalH = nextRowHeights.reduce((a, b) => a + b, 0);
+              const diffH = totalH - (t.height || totalH);
+              return {
+                ...t,
+                cellImages: nextCellImages,
+                rowHeights: nextRowHeights,
+                colWidths: nextColWidths,
+                width: totalW,
+                height: totalH,
+                y: Math.max(10, (t.y || 100) - diffH),
+              };
+            })
+          );
+          setActiveTableImgCell(`${tableId}_${row}_${col}`);
+          pushSnapshot({ tables });
+        };
+        img.src = dataUrl;
+      };
+      reader.readAsDataURL(imgFile);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemoveCellImage = (tableId: string, row: number, col: number) => {
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const nextCellImages = { ...(t.cellImages || {}) };
+        delete nextCellImages[`${row}_${col}`];
+        return { ...t, cellImages: nextCellImages };
+      })
+    );
+    if (activeTableImgCell === `${tableId}_${row}_${col}`) {
+      setActiveTableImgCell(null);
+    }
+    pushSnapshot({ tables });
+  };
+
+  const updateActiveTableCellImageProps = (patch: Partial<any>) => {
+    if (!selectedTableCell) return;
+    const { tableId, row, col } = selectedTableCell;
+    const key = `${row}_${col}`;
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const currentProps = t.cellImageProps?.[key] || {};
+        const nextProps = { ...(t.cellImageProps || {}), [key]: { ...currentProps, ...patch } };
+        return { ...t, cellImageProps: nextProps };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const updateActiveTableCellShapeProps = (patch: Partial<any>) => {
+    if (!selectedTableCell) return;
+    const { tableId, row, col } = selectedTableCell;
+    const key = `${row}_${col}`;
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const currentShape = t.cellShapes?.[key];
+        if (!currentShape) return t;
+        const nextShapes = { ...(t.cellShapes || {}), [key]: { ...currentShape, ...patch } };
+        return { ...t, cellShapes: nextShapes };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const handleRemoveCellShape = (tableId: string, row: number, col: number) => {
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const nextShapes = { ...(t.cellShapes || {}) };
+        delete nextShapes[`${row}_${col}`];
+        return { ...t, cellShapes: nextShapes };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const handleRemoveCellSubtable = (tableId: string, row: number, col: number) => {
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const nextSubs = { ...(t.cellSubtables || {}) };
+        delete nextSubs[`${row}_${col}`];
+        return { ...t, cellSubtables: nextSubs };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const handleUpdateSubtableCell = (tableId: string, row: number, col: number, subR: number, subC: number, val: string) => {
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId || !t.cellSubtables?.[`${row}_${col}`]) return t;
+        const sub = t.cellSubtables[`${row}_${col}`];
+        const nextCells = sub.cells.map((r, ri) =>
+          ri === subR ? r.map((c, ci) => (ci === subC ? val : c)) : r
+        );
+        const nextSubs = {
+          ...t.cellSubtables,
+          [`${row}_${col}`]: { ...sub, cells: nextCells },
+        };
+        return { ...t, cellSubtables: nextSubs };
+      })
+    );
+  };
+
+  // Apply Bullet formatting to selected text item or overlay
+  const handleApplyBullet = (bulletId: string) => {
+    setShowBulletsDropdown(false);
+    const activeItem = activeEditingId || selectedTextItemId;
+    if (activeItem) {
+      const currentVal =
+        modifiedTexts[activeItem]?.currentText ??
+        detectedTextItems.find((t) => t.id === activeItem)?.originalText ??
+        '';
+      const bulleted = applyBulletToText(currentVal, bulletId);
+      updateActiveTextItemProps({ currentText: bulleted, isModified: true });
+      pushSnapshot({ modifiedTexts });
+      return;
+    }
+    if (selectedOverlayId) {
+      const target = textOverlays.find((t) => t.id === selectedOverlayId);
+      if (target) {
+        const bulleted = applyBulletToText(target.text, bulletId);
+        setTextOverlays((prev) => {
+          const next = prev.map((t) => (t.id === selectedOverlayId ? { ...t, text: bulleted } : t));
+          pushSnapshot({ textOverlays: next });
+          return next;
+        });
+      }
+    }
+  };
+
+  // Apply Crop to Image Overlay
+  const handleApplyCrop = async (imageId: string) => {
+    const img = imageOverlays.find((i) => i.id === imageId);
+    if (!img) return;
+
+    try {
+      const blob = new Blob([img.imageData]);
+      const imgBitmap = await createImageBitmap(blob);
+      const cropPxX = Math.round(cropBox.xPct * imgBitmap.width);
+      const cropPxY = Math.round(cropBox.yPct * imgBitmap.height);
+      const cropPxW = Math.max(1, Math.round(cropBox.wPct * imgBitmap.width));
+      const cropPxH = Math.max(1, Math.round(cropBox.hPct * imgBitmap.height));
+
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = cropPxW;
+      offCanvas.height = cropPxH;
+      const ctx = offCanvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(imgBitmap, cropPxX, cropPxY, cropPxW, cropPxH, 0, 0, cropPxW, cropPxH);
+
+      const mimeType = img.imageType === 'png' ? 'image/png' : 'image/jpeg';
+      const croppedBlob = await new Promise<Blob | null>((resolve) => offCanvas.toBlob(resolve, mimeType, 0.95));
+      if (!croppedBlob) return;
+      const newBuf = await croppedBlob.arrayBuffer();
+
+      const newWidth = Math.max(20, Math.round(img.width * cropBox.wPct));
+      const newHeight = Math.max(20, Math.round(img.height * cropBox.hPct));
+      const newX = img.x + img.width * cropBox.xPct;
+      const newY = img.y + img.height * (1 - cropBox.yPct - cropBox.hPct);
+
+      const nextImages = imageOverlays.map((item) =>
+        item.id === imageId
+          ? {
+              ...item,
+              imageData: newBuf,
+              width: newWidth,
+              height: newHeight,
+              x: newX,
+              y: newY,
+            }
+          : item
+      );
+      setImageOverlays(nextImages);
+      pushSnapshot({ imageOverlays: nextImages });
+      setCropImageId(null);
+    } catch (e) {
+      console.error('Failed to crop image:', e);
+    }
+  };
+
+  // Render SVG Vector for Shape Overlay
+  const renderShapeSvg = (shape: ShapeOverlay) => {
+    const w = shape.width;
+    const h = shape.height;
+    const stroke = shape.strokeColor || '#2563eb';
+    const fill = shape.fillColor || 'transparent';
+    const sw = shape.strokeWidth || 2;
+    const strokeDash = shape.strokeStyle === 'dashed' ? '6,4' : undefined;
+
+    switch (shape.type) {
+      case 'rectangle':
+        return <rect x={sw / 2} y={sw / 2} width={Math.max(1, w - sw)} height={Math.max(1, h - sw)} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      case 'rounded-rectangle':
+        return <rect x={sw / 2} y={sw / 2} width={Math.max(1, w - sw)} height={Math.max(1, h - sw)} rx="10" ry="10" fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      case 'circle':
+        return <ellipse cx={w / 2} cy={h / 2} rx={Math.max(1, (w - sw) / 2)} ry={Math.max(1, (h - sw) / 2)} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      case 'triangle':
+        return <polygon points={`${w / 2},${sw} ${w - sw},${h - sw} ${sw},${h - sw}`} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      case 'diamond':
+        return <polygon points={`${w / 2},${sw} ${w - sw},${h / 2} ${w / 2},${h - sw} ${sw},${h / 2}`} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      case 'line':
+        return <line x1={0} y1={h / 2} x2={w} y2={h / 2} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      case 'arrow':
+        return (
+          <g>
+            <line x1={0} y1={h / 2} x2={Math.max(0, w - 12)} y2={h / 2} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />
+            <polygon points={`${w},${h / 2} ${Math.max(0, w - 12)},${h / 2 - 6} ${Math.max(0, w - 12)},${h / 2 + 6}`} fill={stroke} />
+          </g>
+        );
+      case 'double-arrow':
+        return (
+          <g>
+            <line x1={12} y1={h / 2} x2={Math.max(12, w - 12)} y2={h / 2} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />
+            <polygon points={`${w},${h / 2} ${Math.max(0, w - 12)},${h / 2 - 6} ${Math.max(0, w - 12)},${h / 2 + 6}`} fill={stroke} />
+            <polygon points={`0,${h / 2} 12,${h / 2 - 6} 12,${h / 2 + 6}`} fill={stroke} />
+          </g>
+        );
+      case 'star': {
+        const cx = w / 2;
+        const cy = h / 2;
+        const outerR = Math.min(w, h) / 2 - sw;
+        const innerR = outerR * 0.4;
+        const pts: string[] = [];
+        for (let i = 0; i < 10; i++) {
+          const r = i % 2 === 0 ? outerR : innerR;
+          const angle = (i * Math.PI) / 5 - Math.PI / 2;
+          pts.push(`${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`);
+        }
+        return <polygon points={pts.join(' ')} fill={fill} stroke={stroke} strokeWidth={sw} strokeDasharray={strokeDash} />;
+      }
+      case 'callout': {
+        const bubbleH = h * 0.75;
+        return (
+          <path
+            d={`M 8 0 L ${w - 8} 0 Q ${w} 0 ${w} 8 L ${w} ${bubbleH - 8} Q ${w} ${bubbleH} ${w - 8} ${bubbleH} L 32 ${bubbleH} L 16 ${h} L 20 ${bubbleH} L 8 ${bubbleH} Q 0 ${bubbleH} 0 ${bubbleH - 8} L 0 8 Q 0 0 8 0 Z`}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={sw}
+            strokeDasharray={strokeDash}
+          />
+        );
+      }
+      default:
+        return <rect x={0} y={0} width={w} height={h} fill={fill} stroke={stroke} strokeWidth={sw} />;
+    }
+  };
+
+  // Render 8 Resize Handles and MS Word-Style Rotation Handle on selected Element
+  const renderResizeHandles = (
+    id: string,
+    type: 'overlay' | 'image' | 'shape' | 'table',
+    origX: number,
+    origY: number,
+    origW: number,
+    origH: number,
+    initialColWidths?: number[],
+    initialRowHeights?: number[]
+  ) => {
+    const handles = [
+      { pos: 'nw', style: { top: -4, left: -4, cursor: 'nwse-resize' } },
+      { pos: 'n', style: { top: -4, left: '50%', transform: 'translateX(-50%)', cursor: 'ns-resize' } },
+      { pos: 'ne', style: { top: -4, right: -4, cursor: 'nesw-resize' } },
+      { pos: 'e', style: { top: '50%', right: -4, transform: 'translateY(-50%)', cursor: 'ew-resize' } },
+      { pos: 'se', style: { bottom: -4, right: -4, cursor: 'nwse-resize' } },
+      { pos: 's', style: { bottom: -4, left: '50%', transform: 'translateX(-50%)', cursor: 'ns-resize' } },
+      { pos: 'sw', style: { bottom: -4, left: -4, cursor: 'nesw-resize' } },
+      { pos: 'w', style: { top: '50%', left: -4, transform: 'translateY(-50%)', cursor: 'ew-resize' } },
+    ];
+    return (
+      <>
+        {/* MS Word-Style Rotation Stem & Circular Handle (Top Center) */}
+        <div
+          className="absolute -top-8 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-auto cursor-grab active:cursor-grabbing z-50 group"
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            const parent = e.currentTarget.parentElement;
+            if (parent) {
+              const rect = parent.getBoundingClientRect();
+              const cx = rect.left + rect.width / 2;
+              const cy = rect.top + rect.height / 2;
+              const curAngle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI);
+              let initialRot = 0;
+              if (type === 'shape') {
+                initialRot = shapes.find((s) => s.id === id)?.rotation || 0;
+              } else if (type === 'table') {
+                initialRot = tables.find((t) => t.id === id)?.rotation || 0;
+              } else if (type === 'image') {
+                initialRot = imageOverlays.find((i) => i.id === id)?.rotation || 0;
+              } else if (type === 'overlay') {
+                initialRot = textOverlays.find((t) => t.id === id)?.rotation || 0;
+              }
+              setRotatingItem({
+                id,
+                type,
+                centerX: cx,
+                centerY: cy,
+                startAngle: curAngle,
+                initialRot,
+              });
+            }
+          }}
+          onTouchStart={(e) => {
+            e.stopPropagation();
+            if (e.touches.length > 0) {
+              const touch = e.touches[0];
+              const parent = e.currentTarget.parentElement;
+              if (parent) {
+                const rect = parent.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                const curAngle = Math.atan2(touch.clientY - cy, touch.clientX - cx) * (180 / Math.PI);
+                let initialRot = 0;
+                if (type === 'shape') {
+                  initialRot = shapes.find((s) => s.id === id)?.rotation || 0;
+                } else if (type === 'table') {
+                  initialRot = tables.find((t) => t.id === id)?.rotation || 0;
+                } else if (type === 'image') {
+                  initialRot = imageOverlays.find((i) => i.id === id)?.rotation || 0;
+                } else if (type === 'overlay') {
+                  initialRot = textOverlays.find((t) => t.id === id)?.rotation || 0;
+                }
+                setRotatingItem({
+                  id,
+                  type,
+                  centerX: cx,
+                  centerY: cy,
+                  startAngle: curAngle,
+                  initialRot,
+                });
+              }
+            }
+          }}
+          title="Drag to Rotate (0° to 360°)"
+        >
+          {/* Real-time Angle Tooltip shown seamlessly without delay */}
+          {rotatingItem && rotatingItem.id === id && (
+            <div className="absolute -top-5 left-1/2 -translate-x-1/2 bg-indigo-600 text-white font-mono text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-lg whitespace-nowrap pointer-events-none z-50">
+              {(() => {
+                let r = 0;
+                if (type === 'shape') r = shapes.find((s) => s.id === id)?.rotation || 0;
+                else if (type === 'table') r = tables.find((t) => t.id === id)?.rotation || 0;
+                else if (type === 'image') r = imageOverlays.find((i) => i.id === id)?.rotation || 0;
+                else if (type === 'overlay') r = textOverlays.find((t) => t.id === id)?.rotation || 0;
+                return `${Math.round(r)}°`;
+              })()}
+            </div>
+          )}
+          <div className="w-5 h-5 rounded-full bg-white dark:bg-zinc-800 border-2 border-indigo-600 shadow-md flex items-center justify-center hover:scale-110 active:scale-95 transition-transform">
+            <RotateCw className="w-3 h-3 text-indigo-600" />
+          </div>
+          <div className="w-0.5 h-2 bg-indigo-500" />
+        </div>
+
+        {handles.map((h) => (
+          <span
+            key={h.pos}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              setResizingItem({
+                id,
+                type,
+                handle: h.pos,
+                startX: e.clientX,
+                startY: e.clientY,
+                origX,
+                origY,
+                origW,
+                origH,
+                initialColWidths,
+                initialRowHeights,
+              });
+            }}
+            onTouchStart={(e) => {
+              e.stopPropagation();
+              if (e.touches.length > 0) {
+                setResizingItem({
+                  id,
+                  type,
+                  handle: h.pos,
+                  startX: e.touches[0].clientX,
+                  startY: e.touches[0].clientY,
+                  origX,
+                  origY,
+                  origW,
+                  origH,
+                  initialColWidths,
+                  initialRowHeights,
+                });
+              }
+            }}
+            style={h.style as any}
+            className="absolute w-3 h-3 sm:w-2.5 sm:h-2.5 bg-white border-2 sm:border border-blue-600 rounded-xs shadow-xs z-50 pointer-events-auto touch-none before:content-[''] before:absolute before:-inset-2 sm:before:inset-0"
+          />
+        ))}
+      </>
+    );
+  };
+
+  // Global mouse & touch move / up listeners for smooth canvas dragging, resizing, rotating, and table sizing
+  useEffect(() => {
+    if (!draggingItem && !resizingItem && !rotatingItem && !resizingCol && !resizingRow) return;
+
+    const handlePointerMove = (clientX: number, clientY: number) => {
+      const scale = zoomScale;
+
+      if (rotatingItem) {
+        const currentAngle = Math.atan2(clientY - rotatingItem.centerY, clientX - rotatingItem.centerX) * (180 / Math.PI);
+        const delta = currentAngle - rotatingItem.startAngle;
+        let newRot = Math.round((rotatingItem.initialRot + delta + 360) % 360);
+        if (rotatingItem.type === 'shape') {
+          setShapes((prev) => prev.map((s) => (s.id === rotatingItem.id ? { ...s, rotation: newRot } : s)));
+        } else if (rotatingItem.type === 'table') {
+          setTables((prev) => prev.map((t) => (t.id === rotatingItem.id ? { ...t, rotation: newRot } : t)));
+        } else if (rotatingItem.type === 'image') {
+          setImageOverlays((prev) => prev.map((i) => (i.id === rotatingItem.id ? { ...i, rotation: newRot } : i)));
+        } else if (rotatingItem.type === 'overlay') {
+          setTextOverlays((prev) => prev.map((t) => (t.id === rotatingItem.id ? { ...t, rotation: newRot } : t)));
+        }
+        return;
+      }
+
+      if (resizingCol || resizingRow) {
+        const deltaX = resizingCol ? (clientX - resizingCol.startX) / scale : 0;
+        const deltaY = resizingRow ? (clientY - resizingRow.startY) / scale : 0;
+        const targetTableId = resizingCol?.tableId || resizingRow?.tableId;
+
+        setTables((prev) =>
+          prev.map((t) => {
+            if (t.id !== targetTableId) return t;
+            let updated = { ...t };
+            if (resizingCol) {
+              const widths = [...resizingCol.initialColWidths];
+              const newW = Math.max(30, resizingCol.initialWidth + deltaX);
+              widths[resizingCol.colIdx] = newW;
+              updated.colWidths = widths;
+              updated.width = widths.reduce((a, b) => a + b, 0);
+            }
+            if (resizingRow) {
+              const heights = [...resizingRow.initialRowHeights];
+              const newH = Math.max(22, resizingRow.initialHeight + deltaY);
+              heights[resizingRow.rowIdx] = newH;
+              const newTotalH = heights.reduce((a, b) => a + b, 0);
+              const newY = (resizingRow.initialTableY + resizingRow.initialTotalHeight) - newTotalH;
+              updated.rowHeights = heights;
+              updated.height = newTotalH;
+              updated.y = newY;
+            }
+            return updated;
+          })
+        );
+        return;
+      }
+
+      if (draggingItem) {
+        // Continuous inter-page dragging: check target page under pointer
+        const pageEl = document.elementsFromPoint(clientX, clientY).find((el) => el.hasAttribute('data-page-number'));
+        if (pageEl) {
+          const targetPage = parseInt(pageEl.getAttribute('data-page-number')!, 10);
+          const targetPageIndex = targetPage - 1;
+          const rect = pageEl.getBoundingClientRect();
+
+          let itemW = 100;
+          let itemH = 60;
+          if (draggingItem.type === 'shape') {
+            const sh = shapes.find((s) => s.id === draggingItem.id);
+            if (sh) { itemW = sh.width; itemH = sh.height; }
+          } else if (draggingItem.type === 'table') {
+            const tb = tables.find((t) => t.id === draggingItem.id);
+            if (tb) { itemW = tb.width; itemH = tb.height; }
+          } else if (draggingItem.type === 'image') {
+            const im = imageOverlays.find((i) => i.id === draggingItem.id);
+            if (im) { itemW = im.width; itemH = im.height; }
+          } else if (draggingItem.type === 'overlay') {
+            const tx = textOverlays.find((t) => t.id === draggingItem.id);
+            if (tx) { itemW = 120; itemH = 30; }
+          }
+
+          // Calculate coordinates relative to this page, strictly clamped within page boundaries so nothing is ever in the gap
+          const rawX = (clientX - rect.left) / scale - itemW / 2;
+          const rawY = (rect.height - (clientY - rect.top)) / scale - itemH / 2;
+          const clampedX = Math.round(Math.max(10, Math.min((basePageDims.width || 595) - itemW - 10, rawX)) * 10) / 10;
+          const clampedY = Math.round(Math.max(10, Math.min((basePageDims.height || 842) - itemH - 10, rawY)) * 10) / 10;
+
+          if (draggingItem.type === 'shape') {
+            setShapes((prev) => prev.map((s) => (s.id === draggingItem.id ? { ...s, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : s)));
+          } else if (draggingItem.type === 'table') {
+            setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
+          } else if (draggingItem.type === 'image') {
+            setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : i)));
+          } else if (draggingItem.type === 'overlay') {
+            setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
+          }
+          if (currentPage !== targetPage) {
+            setCurrentPage(targetPage);
+          }
+          return;
+        }
+
+        // Pointer over inter-page gap: clamp position safely within current page
+        const deltaX = (clientX - draggingItem.startX) / scale;
+        const deltaY = -(clientY - draggingItem.startY) / scale;
+        const newX = Math.round(Math.max(10, Math.min((basePageDims.width || 595) - 60, draggingItem.origX + deltaX)) * 10) / 10;
+        const newY = Math.round(Math.max(10, Math.min((basePageDims.height || 842) - 40, draggingItem.origY + deltaY)) * 10) / 10;
+
+        if (draggingItem.type === 'shape') {
+          setShapes((prev) => prev.map((s) => (s.id === draggingItem.id ? { ...s, x: newX, y: newY } : s)));
+        } else if (draggingItem.type === 'table') {
+          setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
+        } else if (draggingItem.type === 'image') {
+          setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, x: newX, y: newY } : i)));
+        } else if (draggingItem.type === 'overlay') {
+          setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
+        }
+      } else if (resizingItem) {
+        // Delta in screen points:
+        // deltaX > 0 means moving right, deltaX < 0 means moving left
+        // deltaY > 0 means moving down, deltaY < 0 means moving up
+        const deltaX = (clientX - resizingItem.startX) / scale;
+        const deltaY = (clientY - resizingItem.startY) / scale;
+        const h = resizingItem.handle;
+
+        let nextW = resizingItem.origW;
+        let nextH = resizingItem.origH;
+        let nextX = resizingItem.origX;
+        let nextY = resizingItem.origY;
+
+        // East: right handle (drag right to increase width, left edge stays fixed)
+        if (h.includes('e')) {
+          nextW = Math.max(20, resizingItem.origW + deltaX);
+        }
+        // West: left handle (drag left to increase width, right edge stays fixed)
+        if (h.includes('w')) {
+          const proposedW = Math.max(20, resizingItem.origW - deltaX);
+          nextX = resizingItem.origX + resizingItem.origW - proposedW;
+          nextW = proposedW;
+        }
+        // South: bottom handle on screen (drag down to increase height, top edge in PDF stays fixed)
+        if (h.includes('s')) {
+          const proposedH = Math.max(15, resizingItem.origH + deltaY);
+          nextY = (resizingItem.origY + resizingItem.origH) - proposedH;
+          nextH = proposedH;
+        }
+        // North: top handle on screen (drag up to increase height, bottom edge in PDF stays fixed)
+        if (h.includes('n')) {
+          const proposedH = Math.max(15, resizingItem.origH - deltaY);
+          nextY = resizingItem.origY;
+          nextH = proposedH;
+        }
+
+        if (resizingItem.type === 'shape') {
+          setShapes((prev) =>
+            prev.map((s) =>
+              s.id === resizingItem.id ? { ...s, x: nextX, y: nextY, width: nextW, height: nextH } : s
+            )
+          );
+        } else if (resizingItem.type === 'table') {
+          setTables((prev) =>
+            prev.map((t) => {
+              if (t.id !== resizingItem.id) return t;
+              const wRatio = nextW / Math.max(1, resizingItem.origW);
+              const hRatio = nextH / Math.max(1, resizingItem.origH);
+              const baseCols = resizingItem.initialColWidths || t.colWidths || Array(t.cols).fill(resizingItem.origW / t.cols);
+              const baseRows = resizingItem.initialRowHeights || t.rowHeights || Array(t.rows).fill(resizingItem.origH / t.rows);
+              const newColWidths = baseCols.map((cw: number) => cw * wRatio);
+              const newRowHeights = baseRows.map((rh: number) => rh * hRatio);
+              return {
+                ...t,
+                x: nextX,
+                y: nextY,
+                width: nextW,
+                height: nextH,
+                colWidths: newColWidths,
+                rowHeights: newRowHeights,
+              };
+            })
+          );
+        } else if (resizingItem.type === 'image') {
+          setImageOverlays((prev) =>
+            prev.map((i) =>
+              i.id === resizingItem.id ? { ...i, x: nextX, y: nextY, width: nextW, height: nextH } : i
+            )
+          );
+        }
+      }
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      handlePointerMove(e.clientX, e.clientY);
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+      }
+    };
+
+    const onPointerUp = () => {
+      if (draggingItem) {
+        pushSnapshot({ shapes, tables, imageOverlays, textOverlays });
+        setDraggingItem(null);
+      }
+      if (resizingItem) {
+        pushSnapshot({ shapes, tables, imageOverlays, textOverlays });
+        setResizingItem(null);
+      }
+      if (rotatingItem) {
+        pushSnapshot({ shapes, tables, imageOverlays, textOverlays });
+        setRotatingItem(null);
+      }
+      if (resizingCol || resizingRow) {
+        pushSnapshot({ tables });
+        setResizingCol(null);
+        setResizingRow(null);
+      }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onPointerUp);
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onPointerUp, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onPointerUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onPointerUp);
+    };
+  }, [
+    draggingItem,
+    resizingItem,
+    rotatingItem,
+    resizingCol,
+    resizingRow,
+    zoomScale,
+    shapes,
+    tables,
+    imageOverlays,
+    textOverlays,
+    pushSnapshot,
+  ]);
+
   // Click on Canvas to Add Text or Hyperlink
-  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!canvasRef.current) return;
-    const rect = canvasRef.current.getBoundingClientRect();
+  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>, pageNumOverride?: number) => {
+    const activePage = pageNumOverride ?? currentPage;
+    const targetCanvas = pageCanvasesRef.current.get(activePage) || canvasRef.current;
+    if (!targetCanvas) return;
+    const rect = targetCanvas.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
 
     if (clickX < 0 || clickY < 0 || clickX > rect.width || clickY > rect.height) return;
 
     if (isSamplingColor) {
-      const ctx = canvasRef.current.getContext('2d', { willReadFrequently: true });
+      const ctx = targetCanvas.getContext('2d', { willReadFrequently: true });
       if (ctx) {
-        const pixelRatio = canvasRef.current.width / rect.width;
+        const pixelRatio = targetCanvas.width / rect.width;
         const p = ctx.getImageData(Math.floor(clickX * pixelRatio), Math.floor(clickY * pixelRatio), 1, 1).data;
         const hex = `#${((1 << 24) + (p[0] << 16) + (p[1] << 8) + p[2]).toString(16).slice(1)}`;
         applyNewColor(hex);
@@ -1546,10 +3656,22 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       return;
     }
 
+    if (activeTool !== 'add-text' && activeTool !== 'add-link') {
+      setSelectedTableId(null);
+      setSelectedTableCell(null);
+      setSelectedShapeId(null);
+      setSelectedOverlayId(null);
+      setSelectedTextItemId(null);
+      setMultiSelectedIds([]);
+      setActiveEditingId(null);
+      setActiveTableImgCell(null);
+      return;
+    }
+
     const scaleFactor = zoomScale;
     const pdfX = clickX / scaleFactor;
     const pdfY = (rect.height - clickY) / scaleFactor;
-    const pageIndex = currentPage - 1;
+    const pageIndex = activePage - 1;
 
     if (activeTool === 'add-text') {
       const newOverlay: TextOverlay = {
@@ -1590,27 +3712,84 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  // Add Photo / Image Overlay
+  // Add Photo / Image Overlay or insert into selected table cell
   const handleAddPhotoInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const imgFile = e.target.files[0];
+
+      if (selectedTableCell) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result as string;
+          const { tableId, row, col } = selectedTableCell;
+          const img = new Image();
+          img.onload = () => {
+            const aspect = (img.naturalWidth || 100) / (img.naturalHeight || 100);
+            let desiredW = 160;
+            let desiredH = Math.round(desiredW / aspect);
+            if (desiredH > 180) {
+              desiredH = 180;
+              desiredW = Math.round(desiredH * aspect);
+            }
+            if (desiredW < 120) desiredW = 120;
+            if (desiredH < 90) desiredH = 90;
+
+            setTables((prev) =>
+              prev.map((t) => {
+                if (t.id !== tableId) return t;
+                const nextCellImages = { ...(t.cellImages || {}), [`${row}_${col}`]: dataUrl };
+                const curRowH = t.rowHeights?.[row] || (t.height / t.rows) || 28;
+                const curColW = t.colWidths?.[col] || (t.width / t.cols) || 80;
+                const nextRowHeights = [...(t.rowHeights || Array(t.rows).fill(t.height / t.rows || 28))];
+                const nextColWidths = [...(t.colWidths || Array(t.cols).fill(t.width / t.cols || 80))];
+                nextRowHeights[row] = Math.max(curRowH, desiredH);
+                nextColWidths[col] = Math.max(curColW, desiredW);
+                const totalW = nextColWidths.reduce((a, b) => a + b, 0);
+                const totalH = nextRowHeights.reduce((a, b) => a + b, 0);
+                const diffH = totalH - (t.height || totalH);
+                return {
+                  ...t,
+                  cellImages: nextCellImages,
+                  rowHeights: nextRowHeights,
+                  colWidths: nextColWidths,
+                  width: totalW,
+                  height: totalH,
+                  y: Math.max(10, (t.y || 100) - diffH),
+                };
+              })
+            );
+            setActiveTableImgCell(`${tableId}_${row}_${col}`);
+            pushSnapshot({ tables });
+          };
+          img.src = dataUrl;
+        };
+        reader.readAsDataURL(imgFile);
+        e.target.value = '';
+        return;
+      }
+
       const isPng = imgFile.type === 'image/png';
       imgFile.arrayBuffer().then((buf) => {
+        const imgW = 160;
+        const imgH = 120;
+        const { pageIndex: targetPage, x: imgX, y: imgY } = getInsertionCoords(imgW, imgH);
+
         const newImg: ImageOverlay = {
           id: `img_${Date.now()}`,
-          pageIndex: currentPage - 1,
+          pageIndex: targetPage,
           imageData: buf,
           imageType: isPng ? 'png' : 'jpeg',
-          x: 50,
-          y: 50,
-          width: 150,
-          height: 100,
+          x: imgX,
+          y: imgY,
+          width: imgW,
+          height: imgH,
         };
         const nextImages = [...imageOverlays, newImg];
         setImageOverlays(nextImages);
         setSelectedOverlayId(newImg.id);
         pushSnapshot({ imageOverlays: nextImages });
       });
+      e.target.value = '';
     }
   };
 
@@ -1625,9 +3804,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         insertedBlankPages,
         textOverlays,
         imageOverlays,
+        shapes,
+        tables,
         textReplacements: Object.values(modifiedTexts),
         hyperlinks,
       });
+
+      const isMobileNative = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+      if (isMobileNative) {
+        await saveFile(editedBlob, `print_${file.name || 'document'}.pdf`);
+        return;
+      }
 
       const blobUrl = URL.createObjectURL(editedBlob);
       const printIframe = document.createElement('iframe');
@@ -1663,6 +3850,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   // Two-Finger Pinch-to-Zoom & Pan Gesture Support (High Performance Compositor Driven)
   const isGesturingRef = useRef<boolean>(false);
+  const currentPageRef = useRef<number>(currentPage);
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+  const totalPagesRef = useRef<number>(totalPages);
+  useEffect(() => {
+    totalPagesRef.current = totalPages;
+  }, [totalPages]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -1725,19 +3920,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     let wheelTimeout: any = null;
     const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
+      if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const delta = e.deltaY < 0 ? 0.08 : -0.08;
         const next = Math.min(4.0, Math.max(0.25, Number((zoomScaleRef.current + delta).toFixed(2))));
         zoomScaleRef.current = next;
-        if (pageFrameRef.current) {
-          pageFrameRef.current.style.transition = 'transform 0.05s ease-out';
-        }
         if (wheelTimeout) clearTimeout(wheelTimeout);
         wheelTimeout = setTimeout(() => {
           setZoomScale(next);
         }, 50);
       }
+      // Native continuous scrolling operates freely without wheel interception
     };
 
     el.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -1842,36 +4035,293 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         return;
       }
 
-      // Cut: Ctrl+X (when text selected or item active)
-      if (isCtrlOrMeta && e.key.toLowerCase() === 'x') {
-        const activeItem = activeEditingId || selectedTextItemId;
+      // Copy: Ctrl+C (when shape, table, image, text selected and not typing in an input)
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'c') {
         const tag = (document.activeElement?.tagName || '').toLowerCase();
-        if (activeItem && tag !== 'input' && tag !== 'textarea') {
-          e.preventDefault();
-          const currentVal =
-            modifiedTexts[activeItem]?.currentText ??
-            detectedTextItems.find((t) => t.id === activeItem)?.originalText ??
-            '';
-          navigator.clipboard?.writeText(currentVal);
-          updateActiveTextItemProps({ currentText: '', isModified: true });
-          return;
+        if (tag !== 'input' && tag !== 'textarea') {
+          if (selectedShapeId) {
+            const shp = shapes.find((s) => s.id === selectedShapeId);
+            if (shp) clipboardRef.current = { type: 'shape', data: { ...shp } };
+            return;
+          }
+          if (selectedTableId) {
+            const tbl = tables.find((t) => t.id === selectedTableId);
+            if (tbl) clipboardRef.current = { type: 'table', data: JSON.parse(JSON.stringify(tbl)) };
+            return;
+          }
+          if (selectedOverlayId) {
+            const img = imageOverlays.find((i) => i.id === selectedOverlayId);
+            if (img) {
+              clipboardRef.current = { type: 'image', data: { ...img } };
+              return;
+            }
+            const txt = textOverlays.find((t) => t.id === selectedOverlayId);
+            if (txt) {
+              clipboardRef.current = { type: 'text', data: { ...txt } };
+              return;
+            }
+          }
         }
       }
 
-      // Delete item when selected and not typing in an input
-      if ((e.key === 'Delete' || e.key === 'Backspace') && (selectedOverlayId || selectedTextItemId)) {
+      // Paste: Ctrl+V (when not typing in an input)
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'v') {
+        const tag = (document.activeElement?.tagName || '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea' && clipboardRef.current) {
+          e.preventDefault();
+          const pageIndex = currentPage - 1;
+          if (clipboardRef.current.type === 'shape') {
+            const newShape: ShapeOverlay = {
+              ...clipboardRef.current.data,
+              id: `shape_${Date.now()}`,
+              pageIndex,
+              x: clipboardRef.current.data.x + 20,
+              y: clipboardRef.current.data.y - 20,
+            };
+            setShapes((prev) => {
+              const next = [...prev, newShape];
+              pushSnapshot({ shapes: next });
+              return next;
+            });
+            setSelectedShapeId(newShape.id);
+            setSelectedTableId(null);
+            setSelectedTableCell(null);
+            setSelectedOverlayId(null);
+            return;
+          }
+          if (clipboardRef.current.type === 'table') {
+            const newTable: TableOverlay = {
+              ...clipboardRef.current.data,
+              id: `tbl_${Date.now()}`,
+              pageIndex,
+              x: clipboardRef.current.data.x + 20,
+              y: clipboardRef.current.data.y - 20,
+            };
+            setTables((prev) => {
+              const next = [...prev, newTable];
+              pushSnapshot({ tables: next });
+              return next;
+            });
+            setSelectedTableId(newTable.id);
+            setSelectedTableCell(null);
+            setSelectedShapeId(null);
+            setSelectedOverlayId(null);
+            return;
+          }
+          if (clipboardRef.current.type === 'image') {
+            const newImg: ImageOverlay = {
+              ...clipboardRef.current.data,
+              id: `img_${Date.now()}`,
+              pageIndex,
+              x: clipboardRef.current.data.x + 20,
+              y: clipboardRef.current.data.y - 20,
+            };
+            setImageOverlays((prev) => {
+              const next = [...prev, newImg];
+              pushSnapshot({ imageOverlays: next });
+              return next;
+            });
+            setSelectedOverlayId(newImg.id);
+            setSelectedShapeId(null);
+            setSelectedTableId(null);
+            setSelectedTableCell(null);
+            return;
+          }
+          if (clipboardRef.current.type === 'text') {
+            const newTxt: TextOverlay = {
+              ...clipboardRef.current.data,
+              id: `txt_overlay_${Date.now()}`,
+              pageIndex,
+              x: clipboardRef.current.data.x + 20,
+              y: clipboardRef.current.data.y - 20,
+            };
+            setTextOverlays((prev) => {
+              const next = [...prev, newTxt];
+              pushSnapshot({ textOverlays: next });
+              return next;
+            });
+            setSelectedOverlayId(newTxt.id);
+            setSelectedShapeId(null);
+            setSelectedTableId(null);
+            setSelectedTableCell(null);
+            return;
+          }
+        }
+      }
+
+      // Cut: Ctrl+X (when text selected or item active)
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'x') {
         const tag = (document.activeElement?.tagName || '').toLowerCase();
         if (tag !== 'input' && tag !== 'textarea') {
-          e.preventDefault();
-          if (selectedOverlayId) {
-            setTextOverlays((prev) => prev.filter((t) => t.id !== selectedOverlayId));
-            setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
-            setHyperlinks((prev) => prev.filter((h) => h.id !== selectedOverlayId));
-            setSelectedOverlayId(null);
-          } else if (selectedTextItemId) {
+          const activeItem = activeEditingId || selectedTextItemId;
+          if (activeItem) {
+            e.preventDefault();
+            const currentVal =
+              modifiedTexts[activeItem]?.currentText ??
+              detectedTextItems.find((t) => t.id === activeItem)?.originalText ??
+              '';
+            navigator.clipboard?.writeText(currentVal);
             updateActiveTextItemProps({ currentText: '', isModified: true });
+            return;
           }
-          return;
+          if (selectedShapeId) {
+            e.preventDefault();
+            const shp = shapes.find((s) => s.id === selectedShapeId);
+            if (shp) clipboardRef.current = { type: 'shape', data: { ...shp } };
+            setShapes((prev) => {
+              const next = prev.filter((s) => s.id !== selectedShapeId);
+              pushSnapshot({ shapes: next });
+              return next;
+            });
+            setSelectedShapeId(null);
+            return;
+          }
+          if (selectedTableId) {
+            e.preventDefault();
+            const tbl = tables.find((t) => t.id === selectedTableId);
+            if (tbl) clipboardRef.current = { type: 'table', data: JSON.parse(JSON.stringify(tbl)) };
+            setTables((prev) => {
+              const next = prev.filter((t) => t.id !== selectedTableId);
+              pushSnapshot({ tables: next });
+              return next;
+            });
+            setSelectedTableId(null);
+            setSelectedTableCell(null);
+            return;
+          }
+          if (selectedOverlayId) {
+            e.preventDefault();
+            const img = imageOverlays.find((i) => i.id === selectedOverlayId);
+            if (img) clipboardRef.current = { type: 'image', data: { ...img } };
+            const txt = textOverlays.find((t) => t.id === selectedOverlayId);
+            if (txt) clipboardRef.current = { type: 'text', data: { ...txt } };
+
+            setTextOverlays((prev) => {
+              const next = prev.filter((t) => t.id !== selectedOverlayId);
+              pushSnapshot({ textOverlays: next });
+              return next;
+            });
+            setImageOverlays((prev) => {
+              const next = prev.filter((i) => i.id !== selectedOverlayId);
+              pushSnapshot({ imageOverlays: next });
+              return next;
+            });
+            setHyperlinks((prev) => {
+              const next = prev.filter((h) => h.id !== selectedOverlayId);
+              pushSnapshot({ hyperlinks: next });
+              return next;
+            });
+            setSelectedOverlayId(null);
+            return;
+          }
+        }
+      }
+
+      // Delete key handler
+      const hasSelectedItem = Boolean(
+        selectedTableCell || selectedOverlayId || selectedTextItemId || selectedShapeId || selectedTableId
+      );
+
+      if (e.key === 'Delete' || (e.key === 'Backspace' && hasSelectedItem)) {
+        const activeEl = document.activeElement;
+        const tag = (activeEl?.tagName || '').toLowerCase();
+        const isEditable = tag === 'input' || tag === 'textarea' || (activeEl as HTMLElement)?.isContentEditable;
+        if (!isEditable) {
+          e.preventDefault();
+
+          // 1. If inside a table cell and cell has element (photo, shape, subtable), delete that element
+          if (selectedTableCell) {
+            const { tableId, row, col } = selectedTableCell;
+            const cellKey = `${row}_${col}`;
+            const targetTable = tables.find((t) => t.id === tableId);
+            const hasCellImg = Boolean(targetTable?.cellImages?.[cellKey]);
+            const hasCellShape = Boolean(targetTable?.cellShapes?.[cellKey]);
+            const hasCellSub = Boolean(targetTable?.cellSubtables?.[cellKey]);
+
+            if (hasCellImg || hasCellShape || hasCellSub) {
+              setTables((prev) => {
+                const next = prev.map((t) => {
+                  if (t.id !== tableId) return t;
+                  const nextImgs = { ...(t.cellImages || {}) };
+                  delete nextImgs[cellKey];
+                  const nextShapes = { ...(t.cellShapes || {}) };
+                  delete nextShapes[cellKey];
+                  const nextSubs = { ...(t.cellSubtables || {}) };
+                  delete nextSubs[cellKey];
+                  const nextProps = { ...(t.cellImageProps || {}) };
+                  delete nextProps[cellKey];
+                  return {
+                    ...t,
+                    cellImages: nextImgs,
+                    cellShapes: nextShapes,
+                    cellSubtables: nextSubs,
+                    cellImageProps: nextProps,
+                  };
+                });
+                pushSnapshot({ tables: next });
+                return next;
+              });
+              setActiveTableImgCell(null);
+              return;
+            }
+          }
+
+          // 2. If entire table is selected, delete the table
+          if (selectedTableId) {
+            setTables((prev) => {
+              const next = prev.filter((t) => t.id !== selectedTableId);
+              pushSnapshot({ tables: next });
+              return next;
+            });
+            setSelectedTableId(null);
+            setSelectedTableCell(null);
+            setActiveTableImgCell(null);
+            return;
+          }
+
+          // 3. If shape is selected, delete shape
+          if (selectedShapeId) {
+            setShapes((prev) => {
+              const next = prev.filter((s) => s.id !== selectedShapeId);
+              pushSnapshot({ shapes: next });
+              return next;
+            });
+            setSelectedShapeId(null);
+            return;
+          }
+
+          // 4. If image or text overlay is selected, delete it
+          if (selectedOverlayId) {
+            setTextOverlays((prev) => {
+              const next = prev.filter((t) => t.id !== selectedOverlayId);
+              pushSnapshot({ textOverlays: next });
+              return next;
+            });
+            setImageOverlays((prev) => {
+              const next = prev.filter((i) => i.id !== selectedOverlayId);
+              pushSnapshot({ imageOverlays: next });
+              return next;
+            });
+            setHyperlinks((prev) => {
+              const next = prev.filter((h) => h.id !== selectedOverlayId);
+              pushSnapshot({ hyperlinks: next });
+              return next;
+            });
+            setSelectedOverlayId(null);
+            return;
+          }
+
+          // 5. If document text item is selected
+          if (selectedTextItemId) {
+            updateActiveTextItemProps({ currentText: '', isModified: true });
+            return;
+          }
+
+          // 6. If nothing is selected and Delete key was pressed, prompt to delete current page!
+          if (e.key === 'Delete') {
+            handleDeleteCurrentPage();
+            return;
+          }
         }
       }
 
@@ -1880,6 +4330,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setActiveEditingId(null);
         setSelectedTextItemId(null);
         setSelectedOverlayId(null);
+        setSelectedShapeId(null);
+        setSelectedTableId(null);
+        setSelectedTableCell(null);
+        setCropImageId(null);
       }
     };
 
@@ -1895,11 +4349,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     activeEditingId,
     selectedTextItemId,
     selectedOverlayId,
+    selectedShapeId,
+    selectedTableId,
+    selectedTableCell,
+    tables,
+    shapes,
+    imageOverlays,
+    textOverlays,
+    currentPage,
     detectedTextItems,
     modifiedTexts,
     handleUndo,
     handleRedo,
     updateActiveTextItemProps,
+    pushSnapshot,
   ]);
 
   const modalContent = (
@@ -1917,7 +4380,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }}
     >
       {/* TIER 0: Multi-Document Tab Bar (Always Visible Acrobat / Chrome Style) */}
-      <div className="flex items-center gap-1.5 px-3 sm:px-4 py-2 bg-zinc-950 border-b border-zinc-800 overflow-x-auto no-scrollbar flex-shrink-0 z-30 select-none">
+      <div className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 bg-zinc-950 border-b border-zinc-800 overflow-x-auto no-scrollbar flex-shrink-0 z-30 select-none">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const tabHasEdits = isActive ? hasUnsavedEdits : tab.hasUnsavedEdits;
@@ -1936,18 +4399,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               {tabHasEdits && (
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0 animate-pulse" title="Unsaved edits" />
               )}
-              {tabs.length > 1 && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
+              {/* Chrome-Style Individual Close Button on EVERY tab */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (tabs.length <= 1) {
+                    handleRequestClose();
+                  } else {
                     handleRequestCloseTab(tab.id);
-                  }}
-                  className="p-0.5 rounded-md hover:bg-zinc-700 text-zinc-400 hover:text-zinc-100 transition-colors ml-1"
-                  title="Close Tab"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
+                  }
+                }}
+                className="p-1 rounded-md hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors ml-1"
+                title="Close Tab"
+              >
+                <X className="w-3 h-3" />
+              </button>
             </div>
           );
         })}
@@ -1967,60 +4433,71 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             onChange={handleAddNewTabFiles}
           />
         </label>
+
+        {/* Far Right: Integrated Close Window/Editor Button */}
+        <div className="ml-auto flex items-center pl-2 flex-shrink-0">
+          <button
+            onClick={handleRequestClose}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-rose-600/80 transition-colors text-xs font-semibold"
+            title="Close Editor"
+          >
+            <X className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline text-[11px]">Close</span>
+          </button>
+        </div>
       </div>
 
       {/* TIER 1: Primary Header Bar (ALWAYS clean & comfortable on Desktop & Android) */}
       <header
-        className="px-3 sm:px-5 py-2.5 sm:py-3 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0"
+        className="px-3 sm:px-5 py-2 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 z-30 flex-shrink-0 min-h-[42px]"
         style={{
           paddingTop: 'max(0.4rem, env(safe-area-inset-top, 0px))',
         }}
       >
         <div className="flex items-center justify-between gap-2 sm:gap-4">
-          {/* Left: Prominent Always-Visible Exit/Close Button */}
+          {/* Left: Thumbnail Sidebar Toggle (Clean & unobtrusive, close is now integrated into tabs) */}
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
-              onClick={handleRequestClose}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition-all shadow-xs active:scale-95 border border-zinc-200 dark:border-zinc-700"
-              title="Close Document & Return"
-            >
-              <X className="w-4 h-4 text-zinc-600 dark:text-zinc-400" />
-              <span>Close</span>
-            </button>
-
-            <button
               onClick={() => setShowSidebar(!showSidebar)}
-              className="hidden sm:flex p-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+              className="p-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800 shadow-2xs transition-colors"
               title="Toggle Page Thumbnails"
             >
               {showSidebar ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
             </button>
           </div>
 
-          {/* Center: File Title & Page Stepper */}
+          {/* Center: File Title & High-Contrast Page Stepper */}
           <div className="flex items-center gap-2 min-w-0">
-            <span className="font-semibold text-xs text-zinc-800 dark:text-zinc-200 truncate max-w-[100px] xs:max-w-[150px] sm:max-w-[260px]">
+            <span className="font-semibold text-xs text-zinc-900 dark:text-zinc-100 truncate max-w-[100px] xs:max-w-[150px] sm:max-w-[260px]">
               {file?.name || 'Untitled Document.pdf'}
             </span>
-            <div className="flex items-center gap-0.5 bg-zinc-100 dark:bg-zinc-800/80 rounded-lg p-0.5 border border-zinc-200 dark:border-zinc-700/60 text-xs flex-shrink-0">
+            <div className="flex items-center gap-0.5 bg-zinc-100 dark:bg-zinc-800 rounded-lg p-0.5 border border-zinc-300 dark:border-zinc-700 text-xs flex-shrink-0 shadow-2xs">
               <button
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                onClick={() => {
+                const target = Math.max(1, currentPage - 1);
+                setCurrentPage(target);
+                document.getElementById(`pdf-page-frame-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }}
                 disabled={currentPage <= 1}
-                className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded disabled:opacity-30"
+                className="p-1 bg-white dark:bg-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-600 text-zinc-900 dark:text-zinc-100 rounded disabled:opacity-30 border border-zinc-200 dark:border-zinc-600 shadow-2xs transition-colors"
                 title="Previous Page"
               >
-                <ChevronLeft className="w-3.5 h-3.5" />
+                <ChevronLeft className="w-3.5 h-3.5 text-zinc-800 dark:text-zinc-200" />
               </button>
-              <span className="px-1 font-mono text-[11px] font-bold text-zinc-700 dark:text-zinc-300">
+              <span className="px-1.5 font-mono text-[11px] font-bold text-zinc-900 dark:text-zinc-100 select-none">
                 {currentPage}/{totalPages || 1}
               </span>
               <button
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                onClick={() => {
+                const target = Math.min(totalPages, currentPage + 1);
+                setCurrentPage(target);
+                document.getElementById(`pdf-page-frame-${target}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }}
                 disabled={currentPage >= totalPages}
-                className="p-1 hover:bg-white dark:hover:bg-zinc-700 rounded disabled:opacity-30"
+                className="p-1 bg-white dark:bg-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-600 text-zinc-900 dark:text-zinc-100 rounded disabled:opacity-30 border border-zinc-200 dark:border-zinc-600 shadow-2xs transition-colors"
                 title="Next Page"
               >
-                <ChevronRight className="w-3.5 h-3.5" />
+                <ChevronRight className="w-3.5 h-3.5 text-zinc-800 dark:text-zinc-200" />
               </button>
             </div>
           </div>
@@ -2132,174 +4609,812 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         </div>
       )}
 
-      {/* TIER 2: Scrollable Mobile & Desktop Tools Strip */}
-      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar px-3 py-1.5 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 text-xs flex-shrink-0">
-        <button
-          onClick={() => {
-            setActiveTool('view');
-            setActiveEditingId(null);
-            setSelectedTextItemId(null);
-            setSelectedOverlayId(null);
-          }}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
-            activeTool === 'view'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
-          }`}
-          title="Read Mode - Pristine viewing without edit bounding boxes"
-        >
-          <Eye className="w-3.5 h-3.5" />
-          <span>Read Mode</span>
-        </button>
+      {/* TIER 2: Classified & Categorized Mobile & Desktop Tools Strip */}
+      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar px-3 py-1.5 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 text-xs flex-shrink-0 flex-nowrap whitespace-nowrap min-h-[40px]">
+        {/* GROUP 1: EDIT */}
+        <div className="flex items-center bg-white dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 gap-0.5 shadow-2xs flex-shrink-0">
+          <span className="text-[9px] font-extrabold text-zinc-400 dark:text-zinc-500 uppercase px-1.5 select-none tracking-wider">
+            EDIT
+          </span>
 
-        <button
-          onClick={() => {
-            setActiveTool('edit-text');
-            setSelectedOverlayId(null);
-          }}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
-            activeTool === 'edit-text'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
-          }`}
-          title="Edit Text - Click any text on page to edit in-place naturally"
-        >
-          <Edit3 className="w-3.5 h-3.5" />
-          <span>Edit Text</span>
-        </button>
+          <button
+            onClick={() => {
+              setActiveTool('view');
+              setActiveEditingId(null);
+              setSelectedTextItemId(null);
+              setSelectedOverlayId(null);
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+              activeTool === 'view'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+            }`}
+            title="Read Mode - Pristine viewing without edit bounding boxes"
+          >
+            <Eye className="w-3.5 h-3.5" />
+            <span>Read</span>
+          </button>
 
-        <button
-          onClick={() => {
-            setActiveTool('add-text');
-            setActiveEditingId(null);
-            setSelectedTextItemId(null);
-          }}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
-            activeTool === 'add-text'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
-          }`}
-          title="Add Text - Insert new formatted text anywhere on document"
-        >
-          <Type className="w-3.5 h-3.5" />
-          <span>Add Text</span>
-        </button>
+          <button
+            onClick={() => {
+              setActiveTool('edit-text');
+              setSelectedOverlayId(null);
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+              activeTool === 'edit-text'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+            }`}
+            title="Edit Text - Click any text on page to edit in-place naturally"
+          >
+            <Edit3 className="w-3.5 h-3.5" />
+            <span>Edit Text</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTool('add-link')}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all ${
-            activeTool === 'add-link'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700'
-          }`}
-        >
-          <LinkIcon className="w-3.5 h-3.5" />
-          <span>Hyperlink</span>
-        </button>
+          <button
+            onClick={() => {
+              setActiveTool('add-text');
+              setActiveEditingId(null);
+              setSelectedTextItemId(null);
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+              activeTool === 'add-text'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+            }`}
+            title="Add Text - Insert new formatted text anywhere on document"
+          >
+            <Type className="w-3.5 h-3.5" />
+            <span>Add Text</span>
+          </button>
 
-        <label className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 cursor-pointer">
-          <input type="file" accept="image/*" onChange={handleAddPhotoInput} className="hidden" />
-          <ImageIcon className="w-3.5 h-3.5" />
-          <span>Add Photo</span>
-        </label>
+          <button
+            onClick={() => {
+              setActiveTool('add-link');
+              handleOpenLinkModal();
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+              activeTool === 'add-link'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+            }`}
+            title="Add Hyperlink to selected text or insert fresh link"
+          >
+            <LinkIcon className="w-3.5 h-3.5" />
+            <span>Link</span>
+          </button>
+        </div>
 
-        <button
-          onClick={() => handleInsertBlankPage('after')}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700"
-          title="Insert Blank Page"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Blank Page</span>
-        </button>
+        {/* GROUP 2: INSERT */}
+        <div className="flex items-center bg-white dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 gap-0.5 shadow-2xs flex-shrink-0">
+          <span className="text-[9px] font-extrabold text-zinc-400 dark:text-zinc-500 uppercase px-1.5 select-none tracking-wider">
+            INSERT
+          </span>
 
-        <button
-          onClick={handleRotatePage}
-          className="p-1.5 rounded-lg text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 flex-shrink-0"
-          title="Rotate Page"
-        >
-          <RotateCw className="w-3.5 h-3.5" />
-        </button>
+          <label
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 cursor-pointer transition-colors"
+            title="Insert Image / Photo"
+          >
+            <input type="file" accept="image/*" onChange={handleAddPhotoInput} className="hidden" />
+            <ImageIcon className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Photo</span>
+          </label>
 
-        <button
-          onClick={handleDeleteCurrentPage}
-          className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 flex-shrink-0"
-          title="Delete Page"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+          {/* MS Word Shapes Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={shapesBtnRef}
+              onClick={toggleShapesDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showShapesDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="MS Word Shapes Toolset"
+            >
+              <Shapes className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Shapes</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showShapesDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowShapesDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-64 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 px-1">
+                      Lines & Rectangles
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5 mb-2">
+                      {[
+                        { type: 'rectangle', label: 'Rectangle' },
+                        { type: 'rounded-rectangle', label: 'Round Rect' },
+                        { type: 'line', label: 'Line' },
+                        { type: 'arrow', label: 'Arrow' },
+                      ].map((s) => (
+                        <button
+                          key={s.type}
+                          type="button"
+                          onClick={() => {
+                            handleAddShape(s.type as ShapeType);
+                            setShowShapesDropdown(false);
+                          }}
+                          className="flex flex-col items-center justify-center p-1.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-zinc-100 dark:border-zinc-800 hover:border-indigo-300 transition-all text-zinc-800 dark:text-zinc-200"
+                          title={s.label}
+                        >
+                          <svg width="22" height="22" viewBox="0 0 40 40" className="stroke-indigo-600 fill-indigo-100/50">
+                            {s.type === 'rectangle' && <rect x="4" y="8" width="32" height="24" strokeWidth="3" />}
+                            {s.type === 'rounded-rectangle' && (
+                              <rect x="4" y="8" width="32" height="24" rx="6" ry="6" strokeWidth="3" />
+                            )}
+                            {s.type === 'line' && <line x1="4" y1="20" x2="36" y2="20" strokeWidth="3" />}
+                            {s.type === 'arrow' && (
+                              <g>
+                                <line x1="4" y1="20" x2="28" y2="20" strokeWidth="3" />
+                                <polygon points="36,20 26,14 26,26" fill="#4f46e5" />
+                              </g>
+                            )}
+                          </svg>
+                          <span className="text-[9px] mt-1 font-medium truncate w-full text-center">{s.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 px-1">
+                      Basic Shapes & Callouts
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[
+                        { type: 'circle', label: 'Circle' },
+                        { type: 'triangle', label: 'Triangle' },
+                        { type: 'diamond', label: 'Diamond' },
+                        { type: 'double-arrow', label: 'Double Arrow' },
+                        { type: 'star', label: '5-Pt Star' },
+                        { type: 'callout', label: 'Callout' },
+                      ].map((s) => (
+                        <button
+                          key={s.type}
+                          type="button"
+                          onClick={() => {
+                            handleAddShape(s.type as ShapeType);
+                            setShowShapesDropdown(false);
+                          }}
+                          className="flex flex-col items-center justify-center p-1.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-zinc-100 dark:border-zinc-800 hover:border-indigo-300 transition-all text-zinc-800 dark:text-zinc-200"
+                          title={s.label}
+                        >
+                          <svg width="22" height="22" viewBox="0 0 40 40" className="stroke-indigo-600 fill-indigo-100/50">
+                            {s.type === 'circle' && <ellipse cx="20" cy="20" rx="15" ry="15" strokeWidth="3" />}
+                            {s.type === 'triangle' && <polygon points="20,4 36,36 4,36" strokeWidth="3" />}
+                            {s.type === 'diamond' && <polygon points="20,4 36,20 20,36 4,20" strokeWidth="3" />}
+                            {s.type === 'double-arrow' && (
+                              <g>
+                                <line x1="12" y1="20" x2="28" y2="20" strokeWidth="3" />
+                                <polygon points="36,20 26,14 26,26" fill="#4f46e5" />
+                                <polygon points="4,20 14,14 14,26" fill="#4f46e5" />
+                              </g>
+                            )}
+                            {s.type === 'star' && (
+                              <polygon
+                                points="20,4 24,15 36,15 26,23 30,34 20,27 10,34 14,23 4,15 16,15"
+                                strokeWidth="2"
+                              />
+                            )}
+                            {s.type === 'callout' && (
+                              <path
+                                d="M 6 6 L 34 6 Q 36 6 36 8 L 36 24 Q 36 26 34 26 L 18 26 L 10 34 L 12 26 L 6 26 Q 4 26 4 24 L 4 8 Q 4 6 6 6 Z"
+                                strokeWidth="2"
+                              />
+                            )}
+                          </svg>
+                          <span className="text-[9px] mt-1 font-medium truncate w-full text-center">{s.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
 
-        <button
-          onClick={() => setIsOcrOpen(true)}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/25 hover:bg-purple-500/20"
-        >
-          <ScanText className="w-3.5 h-3.5" />
-          <span>OCR Engine</span>
-        </button>
+          {/* Word Table Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={tableBtnRef}
+              onClick={toggleTableDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showTableDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Insert Resizable Table"
+            >
+              <TableIcon className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Table</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showTableDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowTableDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-56 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center justify-between">
+                      <span>Insert Table</span>
+                      <span className="text-indigo-600 dark:text-indigo-400 font-mono text-[10px]">
+                        {tableGridHover.cols > 0 && tableGridHover.rows > 0
+                          ? `${tableGridHover.cols} × ${tableGridHover.rows}`
+                          : 'Hover to select'}
+                      </span>
+                    </div>
+                    {/* Word-style Interactive 8x8 Grid */}
+                    <div
+                      className="grid grid-cols-8 gap-1 p-1 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg border border-zinc-200 dark:border-zinc-700"
+                      onMouseLeave={() => setTableGridHover({ rows: 0, cols: 0 })}
+                    >
+                      {Array.from({ length: 64 }).map((_, idx) => {
+                        const r = Math.floor(idx / 8) + 1;
+                        const c = (idx % 8) + 1;
+                        const isHighlighted = r <= tableGridHover.rows && c <= tableGridHover.cols;
+                        return (
+                          <div
+                            key={idx}
+                            onMouseEnter={() => setTableGridHover({ rows: r, cols: c })}
+                            onClick={() => {
+                              handleAddTable(r, c);
+                              setShowTableDropdown(false);
+                            }}
+                            className={`w-4 h-4 rounded-xs border cursor-pointer transition-colors ${
+                              isHighlighted
+                                ? 'bg-indigo-500 border-indigo-600'
+                                : 'bg-white dark:bg-zinc-800 border-zinc-300 dark:border-zinc-600 hover:border-indigo-400'
+                            }`}
+                          />
+                        );
+                      })}
+                    </div>
 
-        <button
-          onClick={() => handleRunOcrOnCurrentPage(ocrLanguage)}
-          disabled={isOcrScanningPage}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-100/50 shadow-xs"
-          title="Extract text with bounding boxes on current page to make scanned document editable"
-        >
-          {isOcrScanningPage ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanText className="w-3.5 h-3.5 text-indigo-500" />}
-          <span>{isOcrScanningPage ? 'Scanning...' : 'OCR to Edit'}</span>
-        </button>
+                    {/* Custom Rows/Cols Inputs */}
+                    <div className="mt-3 pt-2.5 border-t border-zinc-200 dark:border-zinc-800 space-y-2">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                        Custom Size
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <label className="text-[9px] text-zinc-400 block mb-0.5">Rows</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={customTableRows}
+                            onChange={(e) => setCustomTableRows(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-center font-mono font-bold"
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <label className="text-[9px] text-zinc-400 block mb-0.5">Columns</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={10}
+                            value={customTableCols}
+                            onChange={(e) => setCustomTableCols(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 text-center font-mono font-bold"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleAddTable(customTableRows, customTableCols);
+                          setShowTableDropdown(false);
+                        }}
+                        className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-xs"
+                      >
+                        Insert Table
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
 
-        <div className="h-4 w-px bg-zinc-300 dark:bg-zinc-700 flex-shrink-0 mx-1" />
+          {/* Blank Page Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={blankPageBtnRef}
+              onClick={toggleBlankPageDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showBlankPageDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Insert Blank Page (Same dimensions or MS Word Page Sizes catalogue)"
+            >
+              <Plus className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Blank Page</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showBlankPageDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowBlankPageDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-72 max-h-[80vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2 px-1">
+                      Insert Blank Page
+                    </div>
+                    <div className="space-y-1 mb-2">
+                      <button
+                        type="button"
+                        onClick={() => handleInsertBlankPage('after', 'same')}
+                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-700 dark:text-indigo-300 font-semibold text-xs text-left transition-colors"
+                      >
+                        <span>Insert After (Same Size)</span>
+                        <span className="text-[10px] font-mono opacity-70">
+                          {Math.round(basePageDims.width)} × {Math.round(basePageDims.height)} pt
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleInsertBlankPage('before', 'same')}
+                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 font-medium text-xs text-left transition-colors"
+                      >
+                        <span>Insert Before (Same Size)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleInsertBlankPage('end', 'same')}
+                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 font-medium text-xs text-left transition-colors"
+                      >
+                        <span>Insert at End (Same Size)</span>
+                      </button>
+                    </div>
 
-        <button
-          onClick={handleUndo}
-          disabled={historyIndex <= 0}
-          className="p-1.5 rounded-lg text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 disabled:opacity-30 flex-shrink-0"
-          title="Undo (Ctrl+Z)"
-        >
-          <Undo2 className="w-3.5 h-3.5" />
-        </button>
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1 px-1 border-t border-zinc-100 dark:border-zinc-800 pt-2">
+                      Or Choose MS Word Page Size
+                    </div>
+                    <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                      {MS_WORD_PAGE_SIZES.filter((s) => s.id !== 'same').map((spec) => (
+                        <button
+                          key={spec.id}
+                          type="button"
+                          onClick={() => handleInsertBlankPage('after', spec.id)}
+                          className="w-full flex flex-col items-start px-2 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left transition-colors"
+                        >
+                          <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{spec.name}</span>
+                          <span className="text-[10px] text-zinc-500">{spec.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+        </div>
 
-        <button
-          onClick={handleRedo}
-          disabled={historyIndex >= history.length - 1}
-          className="p-1.5 rounded-lg text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 disabled:opacity-30 flex-shrink-0"
-          title="Redo (Ctrl+Y)"
-        >
-          <Redo2 className="w-3.5 h-3.5" />
-        </button>
+        {/* GROUP 3: PAGE */}
+        <div className="flex items-center bg-white dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 gap-0.5 shadow-2xs flex-shrink-0">
+          <span className="text-[9px] font-extrabold text-zinc-400 dark:text-zinc-500 uppercase px-1.5 select-none tracking-wider">
+            PAGE
+          </span>
 
-        <button
-          onClick={handlePrint}
-          disabled={isPrinting}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 flex-shrink-0"
-          title="Print (Ctrl+P)"
-        >
-          {isPrinting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
-          <span>Print</span>
-        </button>
+          {/* Page Size Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={pageSizeBtnRef}
+              onClick={togglePageSizeDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showPageSizeDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Page Size Catalogue (MS Word standard sizes)"
+            >
+              <FileText className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Page Size</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showPageSizeDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowPageSizeDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-72 max-h-[80vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1 px-1 flex items-center justify-between">
+                      <span>Resize Page {currentPage}</span>
+                      <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                        {Math.round(basePageDims.width)} × {Math.round(basePageDims.height)} pt
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-zinc-400 mb-2 px-1">
+                      Select standard MS Word page size:
+                    </div>
+                    <div className="space-y-1 max-h-60 overflow-y-auto pr-1">
+                      {MS_WORD_PAGE_SIZES.filter((s) => s.id !== 'same').map((spec) => {
+                        const isCurrent =
+                          Math.abs(basePageDims.width - spec.width) < 2 &&
+                          Math.abs(basePageDims.height - spec.height) < 2;
+                        return (
+                          <button
+                            key={spec.id}
+                            type="button"
+                            onClick={() => handleResizeCurrentPage(spec.id)}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
+                              isCurrent
+                                ? 'bg-indigo-600 text-white font-semibold'
+                                : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                            }`}
+                          >
+                            <div>
+                              <div className="text-xs font-semibold">{spec.name}</div>
+                              <div className={`text-[10px] ${isCurrent ? 'text-indigo-200' : 'text-zinc-500'}`}>
+                                {spec.description}
+                              </div>
+                            </div>
+                            {isCurrent && <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
 
-        <button
-          onClick={() => setShowPropertiesPanel(!showPropertiesPanel)}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition-all flex-shrink-0 ${
-            showPropertiesPanel
-              ? 'bg-blue-600 text-white shadow-xs font-semibold'
-              : 'text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-          }`}
-          title="Toggle Properties Sidebar"
-        >
-          <Sliders className="w-3.5 h-3.5" />
-          <span>Properties</span>
-        </button>
+          {/* Page Margins Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={marginBtnRef}
+              onClick={toggleMarginDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                showMarginDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Page Margins (MS Word standard margins)"
+            >
+              <LayoutGrid className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Margins</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showMarginDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowMarginDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-80 max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between pb-1.5 border-b border-zinc-100 dark:border-zinc-800 mb-2">
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">
+                        Page Margins
+                      </span>
+                      <label className="flex items-center gap-1.5 text-[10px] font-medium text-zinc-600 dark:text-zinc-400 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={showMarginGuidelines}
+                          onChange={(e) => setShowMarginGuidelines(e.target.checked)}
+                          className="w-3 h-3 text-indigo-600 rounded"
+                        />
+                        <span>Show Guidelines</span>
+                      </label>
+                    </div>
+
+                    <div className="space-y-1 mb-2.5 max-h-56 overflow-y-auto pr-1">
+                      {MS_WORD_MARGINS.map((m) => {
+                        const isSelected = selectedMarginId === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedMarginId(m.id);
+                              setShowMarginDropdown(false);
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
+                              isSelected
+                                ? 'bg-indigo-600 text-white font-semibold'
+                                : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                            }`}
+                          >
+                            <div>
+                              <div className="text-xs font-semibold">{m.name}</div>
+                              <div className={`text-[10px] ${isSelected ? 'text-indigo-200' : 'text-zinc-500'}`}>
+                                {m.description}
+                              </div>
+                            </div>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-white flex-shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Custom Margins Input */}
+                    <div className="pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5">
+                        Custom Margins (inches)
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5 text-xs">
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Top</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="3"
+                            value={Math.round((customMargins.top / 72) * 100) / 100}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setCustomMargins((prev) => ({ ...prev, top: val * 72 }));
+                              setSelectedMarginId('custom');
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Bottom</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="3"
+                            value={Math.round((customMargins.bottom / 72) * 100) / 100}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setCustomMargins((prev) => ({ ...prev, bottom: val * 72 }));
+                              setSelectedMarginId('custom');
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Left</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="3"
+                            value={Math.round((customMargins.left / 72) * 100) / 100}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setCustomMargins((prev) => ({ ...prev, left: val * 72 }));
+                              setSelectedMarginId('custom');
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-500 block mb-0.5">Right</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0"
+                            max="3"
+                            value={Math.round((customMargins.right / 72) * 100) / 100}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value) || 0;
+                              setCustomMargins((prev) => ({ ...prev, right: val * 72 }));
+                              setSelectedMarginId('custom');
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-zinc-300 dark:border-zinc-700 rounded bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+
+          {/* Page Rotation Dropdown */}
+          <div className="flex-shrink-0">
+            <div className="flex items-center rounded-md overflow-hidden">
+              <button
+                onClick={handleRotatePage}
+                className="p-1 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
+                title="Rotate Page 90° Clockwise"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+              </button>
+              <button
+                ref={rotationBtnRef}
+                onClick={toggleRotationPopover}
+                className="px-1.5 py-1 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 border-l border-zinc-200 dark:border-zinc-700 transition-colors flex items-center gap-0.5 text-xs font-semibold"
+                title="Page Rotation Degrees (0°, 90°, 180°, 270°)"
+              >
+                <span>{pageRotations[currentPage - 1] || 0}°</span>
+                <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+              </button>
+            </div>
+            {showRotationPopover &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowRotationPopover(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-52 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[11px] font-bold text-zinc-700 dark:text-zinc-300 mb-2">
+                      Page Rotation ({pageRotations[currentPage - 1] || 0}°)
+                    </div>
+                    <div className="grid grid-cols-4 gap-1 mb-2">
+                      {[
+                        { deg: 0, label: '0°' },
+                        { deg: 90, label: '90°' },
+                        { deg: 180, label: '180°' },
+                        { deg: 270, label: '270°' },
+                      ].map((item) => (
+                        <button
+                          key={item.deg}
+                          type="button"
+                          onClick={() => {
+                            handleSetPageRotation(item.deg);
+                            setShowRotationPopover(false);
+                          }}
+                          className={`py-1 text-[11px] font-semibold rounded border transition-colors ${
+                            (pageRotations[currentPage - 1] || 0) === item.deg
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 pt-1.5 border-t border-zinc-200 dark:border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleRotatePageBy(90);
+                          setShowRotationPopover(false);
+                        }}
+                        className="py-1 px-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded text-[11px] font-medium border border-zinc-200 dark:border-zinc-700 text-center"
+                      >
+                        +90° CW
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleRotatePageBy(-90);
+                          setShowRotationPopover(false);
+                        }}
+                        className="py-1 px-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded text-[11px] font-medium border border-zinc-200 dark:border-zinc-700 text-center"
+                      >
+                        -90° CCW
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+
+          <button
+            onClick={handleDeleteCurrentPage}
+            className="p-1 rounded-md text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+            title="Delete Current Page"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* GROUP 4: TOOLS */}
+        <div className="flex items-center bg-white dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 gap-0.5 shadow-2xs flex-shrink-0">
+          <span className="text-[9px] font-extrabold text-zinc-400 dark:text-zinc-500 uppercase px-1.5 select-none tracking-wider">
+            TOOLS
+          </span>
+
+          <button
+            onClick={() => handleRunOcrOnCurrentPage(ocrLanguage)}
+            disabled={isOcrScanningPage}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100/50 shadow-2xs transition-colors"
+            title="Extract text with bounding boxes on current page to make scanned document editable"
+          >
+            {isOcrScanningPage ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <ScanText className="w-3.5 h-3.5 text-indigo-500" />
+            )}
+            <span>{isOcrScanningPage ? 'Scanning...' : 'OCR to Edit'}</span>
+          </button>
+
+          <button
+            onClick={() => setIsOcrOpen(true)}
+            className="flex items-center gap-1 px-2 py-1 rounded-md font-semibold whitespace-nowrap text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition-colors"
+            title="Full OCR Document Recognition Engine"
+          >
+            <ScanText className="w-3.5 h-3.5" />
+            <span>OCR</span>
+          </button>
+
+          <button
+            onClick={handleUndo}
+            disabled={historyIndex <= 0}
+            className="p-1 rounded-md text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 disabled:opacity-30 transition-colors"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            onClick={handleRedo}
+            disabled={historyIndex >= history.length - 1}
+            className="p-1 rounded-md text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 disabled:opacity-30 transition-colors"
+            title="Redo (Ctrl+Y)"
+          >
+            <Redo2 className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            onClick={handlePrint}
+            disabled={isPrinting}
+            className="flex items-center gap-1 px-2 py-1 rounded-md font-semibold whitespace-nowrap text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
+            title="Print (Ctrl+P)"
+          >
+            {isPrinting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
+            <span>Print</span>
+          </button>
+
+          <button
+            onClick={() => setShowPropertiesPanel(!showPropertiesPanel)}
+            className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+              showPropertiesPanel
+                ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+            }`}
+            title="Toggle Properties Sidebar"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span>Properties</span>
+          </button>
+        </div>
       </div>
 
       {/* TIER 3: High-Contrast MS Word Formatting Bar (Active for both 'Edit Text' and 'Add Text') */}
       {(activeTool === 'edit-text' || activeTool === 'add-text') && (
-        <div className="flex flex-wrap items-center gap-2 px-3 sm:px-4 py-1.5 bg-slate-100 dark:bg-zinc-900 border-b border-zinc-300 dark:border-zinc-800 text-xs z-20 flex-shrink-0 animate-fade-in overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-2 px-3 sm:px-4 py-1.5 bg-slate-100 dark:bg-zinc-900 border-b border-slate-300 dark:border-zinc-800 text-xs z-20 flex-shrink-0 animate-fade-in overflow-x-auto no-scrollbar flex-nowrap whitespace-nowrap">
           {activeTool === 'add-text' && (
             <input
               type="text"
               value={textValue}
               onChange={(e) => setTextValue(e.target.value)}
-              placeholder="Type text to place on page..."
-              className="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 text-xs w-36 sm:w-52 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium shadow-xs"
+              placeholder="Add Text..."
+              className="px-2 py-1 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 placeholder-slate-400 text-xs w-28 sm:w-36 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold shadow-xs shrink-0"
             />
           )}
 
@@ -2311,7 +5426,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               setFontFamily(newFam);
               updateActiveTextItemProps({ fontFamily: newFam });
             }}
-            className="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold text-xs shadow-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer max-w-[160px] sm:max-w-[200px]"
+            className="px-2 py-1 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold text-xs shadow-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer w-28 sm:w-36 shrink-0"
             title="Font Family"
           >
             {MS_WORD_FONTS.map((font) => (
@@ -2324,7 +5439,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   backgroundColor: '#ffffff',
                   fontSize: '13px',
                 }}
-                className="text-zinc-900 bg-white py-1"
+                className="text-slate-900 bg-white py-1"
               >
                 {font}
               </option>
@@ -2332,7 +5447,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </select>
 
           {/* Font Size Stepper & Direct Input */}
-          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden">
+          <div className="flex items-center bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -2340,7 +5455,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setFontSize(newSize);
                 updateActiveTextItemProps({ fontSize: newSize });
               }}
-              className="px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition-colors"
+              className="px-2 py-1 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 text-xs font-bold transition-colors"
               title="Decrease Font Size"
             >
               -
@@ -2355,9 +5470,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   updateActiveTextItemProps({ fontSize: val });
                 }
               }}
-              className="w-10 text-center text-xs font-mono font-bold bg-transparent text-zinc-800 dark:text-zinc-200 border-x border-zinc-200 dark:border-zinc-700 py-0.5 focus:outline-none"
+              className="w-10 text-center text-xs font-mono font-bold bg-transparent text-slate-900 dark:text-zinc-100 border-x border-slate-200 dark:border-zinc-700 py-0.5 focus:outline-none"
             />
-            <span className="text-[10px] text-zinc-500 pr-1 select-none font-semibold">pt</span>
+            <span className="text-[10px] text-slate-600 dark:text-zinc-400 pr-1 select-none font-bold">pt</span>
             <button
               type="button"
               onClick={() => {
@@ -2365,7 +5480,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setFontSize(newSize);
                 updateActiveTextItemProps({ fontSize: newSize });
               }}
-              className="px-2 py-1 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-xs font-bold transition-colors"
+              className="px-2 py-1 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 text-xs font-bold transition-colors"
               title="Increase Font Size"
             >
               +
@@ -2373,7 +5488,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </div>
 
           {/* Bold, Italic, Underline */}
-          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden p-0.5 gap-0.5">
+          <div className="flex items-center bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden p-0.5 gap-0.5 shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -2381,10 +5496,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setIsBold(next);
                 updateActiveTextItemProps({ isBold: next });
               }}
-              className={`p-1.5 rounded-md transition-all ${
+              className={`px-2 py-1 rounded-md transition-all text-xs font-bold ${
                 isBold
                   ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
               }`}
               title="Bold (Ctrl+B)"
             >
@@ -2397,10 +5512,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setIsItalic(next);
                 updateActiveTextItemProps({ isItalic: next });
               }}
-              className={`p-1.5 rounded-md transition-all ${
+              className={`px-2 py-1 rounded-md transition-all text-xs font-bold ${
                 isItalic
                   ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
               }`}
               title="Italic (Ctrl+I)"
             >
@@ -2413,10 +5528,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setIsUnderline(next);
                 updateActiveTextItemProps({ isUnderline: next });
               }}
-              className={`p-1.5 rounded-md transition-all ${
+              className={`px-2 py-1 rounded-md transition-all text-xs font-bold ${
                 isUnderline
                   ? 'bg-indigo-600 text-white font-bold shadow-xs'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
               }`}
               title="Underline (Ctrl+U)"
             >
@@ -2425,7 +5540,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </div>
 
           {/* Alignment (Left, Center, Right) */}
-          <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden p-0.5 gap-0.5">
+          <div className="flex items-center bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden p-0.5 gap-0.5 shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -2435,7 +5550,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               className={`p-1.5 rounded-md transition-all ${
                 alignment === 'left'
                   ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
               }`}
               title="Align Left (Ctrl+L)"
             >
@@ -2450,7 +5565,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               className={`p-1.5 rounded-md transition-all ${
                 alignment === 'center'
                   ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
               }`}
               title="Align Center (Ctrl+E)"
             >
@@ -2465,7 +5580,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               className={`p-1.5 rounded-md transition-all ${
                 alignment === 'right'
                   ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
               }`}
               title="Align Right (Ctrl+R)"
             >
@@ -2473,9 +5588,120 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </button>
           </div>
 
+          {/* Bullets Dropdown Tool */}
+          <div className="shrink-0">
+            <button
+              ref={bulletsBtnRef}
+              type="button"
+              onClick={toggleBulletsDropdown}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 shadow-xs text-xs font-bold transition-all ${
+                showBulletsDropdown ? 'ring-2 ring-indigo-500 text-indigo-600' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-50'
+              }`}
+              title="Bullets & Numbering (•, ◦, ■, ◆, ➢, ✓, 1., A., a., I.)"
+            >
+              <List className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Bullets</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showBulletsDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowBulletsDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-52 bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-xl shadow-2xl p-1.5 animate-fade-in select-none text-slate-900 dark:text-zinc-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 py-1">
+                      Bullet Styles
+                    </div>
+                    {BULLET_STYLES.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => {
+                          handleApplyBullet(b.id);
+                          setShowBulletsDropdown(false);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-left text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 rounded-lg transition-colors font-medium"
+                      >
+                        <span className="w-4 text-center font-bold text-indigo-600">{b.bullet || '1.'}</span>
+                        <span>{b.label}</span>
+                      </button>
+                    ))}
+                    <div className="border-t border-slate-200 dark:border-zinc-800 mt-1 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleApplyBullet('none');
+                          setShowBulletsDropdown(false);
+                        }}
+                        className="w-full text-left px-2.5 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg font-medium"
+                      >
+                        Remove Bullets
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+
+          {/* Element Rotation (0° to 360°) */}
+          <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-xs shrink-0">
+            <RotateCw className="w-3.5 h-3.5 text-indigo-600 flex-shrink-0" />
+            <input
+              type="number"
+              min={0}
+              max={360}
+              value={(() => {
+                const activeItem = activeEditingId || selectedTextItemId;
+                if (activeItem) {
+                  return (
+                    modifiedTexts[activeItem]?.rotation ||
+                    detectedTextItems.find((t) => t.id === activeItem)?.rotation ||
+                    0
+                  );
+                }
+                if (selectedOverlayId) {
+                  return (
+                    textOverlays.find((t) => t.id === selectedOverlayId)?.rotation ||
+                    imageOverlays.find((i) => i.id === selectedOverlayId)?.rotation ||
+                    0
+                  );
+                }
+                if (selectedShapeId) {
+                  return shapes.find((s) => s.id === selectedShapeId)?.rotation || 0;
+                }
+                if (selectedTableId) {
+                  return tables.find((t) => t.id === selectedTableId)?.rotation || 0;
+                }
+                return pageRotations[currentPage - 1] || 0;
+              })()}
+              onChange={(e) => {
+                const deg = parseInt(e.target.value) || 0;
+                handleSetElementRotation(deg);
+              }}
+              className="w-10 text-center text-xs font-mono font-bold bg-transparent text-slate-900 dark:text-zinc-100 focus:outline-none"
+              title="Element Rotation (0-360°)"
+            />
+            <span className="text-[10px] text-slate-600 dark:text-zinc-400 select-none font-bold">°</span>
+            <button
+              type="button"
+              onClick={handleRotateCurrentSelectionOrPage}
+              className="px-1.5 py-0.5 bg-slate-100 dark:bg-zinc-700 hover:bg-slate-200 dark:hover:bg-zinc-600 rounded text-[10px] font-bold text-slate-900 dark:text-zinc-100 border border-slate-300 dark:border-zinc-600 transition-colors"
+              title="Rotate 90°"
+            >
+              +90°
+            </button>
+          </div>
+
           {/* Text Color Picker, Eyedropper & Studio Trigger */}
-          <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-xs">
-            <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider select-none">Color</label>
+          <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-xs shrink-0">
+            <label className="text-[10px] font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider select-none">Color</label>
             <input
               type="color"
               value={textColor}
@@ -2484,7 +5710,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setTextColor(newColor);
                 updateActiveTextItemProps({ color: newColor });
               }}
-              className="w-5 h-5 rounded cursor-pointer border border-zinc-300 dark:border-zinc-600 bg-transparent p-0"
+              className="w-5 h-5 rounded cursor-pointer border border-slate-300 dark:border-zinc-600 bg-transparent p-0"
               title="Pick Custom Text Color"
             />
             {['#000000', '#1e40af', '#dc2626', '#059669', '#d97706', '#7c3aed', '#0891b2'].map((c) => (
@@ -2500,11 +5726,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 title={c}
               />
             ))}
-            <div className="h-4 w-px bg-zinc-200 dark:bg-zinc-700 mx-0.5" />
+            <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
             <button
               type="button"
               onClick={handleOpenEyedropper}
-              className="p-1 rounded text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-colors"
+              className="p-1 rounded text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700 transition-colors"
               title="Sample Color from Document (Eyedropper)"
             >
               <Pipette className="w-3.5 h-3.5" />
@@ -2512,7 +5738,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <button
               type="button"
               onClick={() => setShowColorPickerModal(true)}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-blue-200 dark:border-blue-800 transition-colors"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 transition-colors"
               title="Open Color Studio (Color Wheel, Eyedropper, Palette, HEX/RGB)"
             >
               <Palette className="w-3 h-3" />
@@ -2572,17 +5798,62 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               {Array.from({ length: totalPages }, (_, idx) => {
                 const pageNum = idx + 1;
                 const isSelected = pageNum === currentPage;
+                const isDragOver = dragOverPageNum === pageNum;
+                const isDragging = draggingPageNum === pageNum;
                 return (
                   <div
                     key={pageNum}
-                    onClick={() => setCurrentPage(pageNum)}
-                    className={`group cursor-pointer rounded-xl p-2 border transition-all flex flex-col items-center gap-1.5 ${
-                      isSelected
+                    draggable={true}
+                    onDragStart={(e) => {
+                      setDraggingPageNum(pageNum);
+                      e.dataTransfer.setData('text/plain', String(pageNum));
+                      e.dataTransfer.effectAllowed = 'move';
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dragOverPageNum !== pageNum) {
+                        setDragOverPageNum(pageNum);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverPageNum === pageNum) {
+                        setDragOverPageNum(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const from = draggingPageNum;
+                      setDraggingPageNum(null);
+                      setDragOverPageNum(null);
+                      if (from && from !== pageNum) {
+                        handleReorderPage(from, pageNum);
+                      }
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setPageThumbnailContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        pageNum,
+                      });
+                    }}
+                    onClick={() => {
+                      setCurrentPage(pageNum);
+                      document.getElementById(`pdf-page-frame-${pageNum}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }}
+                    className={`group cursor-pointer rounded-xl p-2 border transition-all flex flex-col items-center gap-1.5 select-none ${
+                      isDragging ? 'opacity-40 scale-95' : ''
+                    } ${
+                      isDragOver
+                        ? 'border-dashed border-2 border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30'
+                        : isSelected
                         ? 'border-indigo-500 bg-indigo-500/10 shadow-xs'
                         : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 bg-zinc-50/50 dark:bg-zinc-800/40'
                     }`}
                   >
-                    <div className="w-20 h-28 bg-white rounded shadow-xs border border-zinc-300/80 flex items-center justify-center text-zinc-400 font-mono text-[11px] overflow-hidden relative">
+                    <div className="w-20 h-28 bg-white rounded shadow-xs border border-zinc-300/80 flex items-center justify-center text-zinc-400 font-mono text-[11px] overflow-hidden relative pointer-events-none">
                       <div className="absolute top-1 left-1 text-[9px] font-bold text-zinc-400">{pageNum}</div>
                       <FileText className="w-7 h-7 text-zinc-300" />
                     </div>
@@ -2599,6 +5870,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         {/* Central Viewport Area */}
         <main
           ref={containerRef}
+          onScroll={handleContainerScroll}
+          onClick={(e) => {
+            if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === 'MAIN') {
+              setSelectedTableId(null);
+              setSelectedTableCell(null);
+              setSelectedShapeId(null);
+              setSelectedOverlayId(null);
+              setSelectedTextItemId(null);
+              setMultiSelectedIds([]);
+              setActiveEditingId(null);
+              setActiveTableImgCell(null);
+            }
+          }}
           className="flex-1 min-h-[35vh] overflow-auto bg-slate-200/70 dark:bg-zinc-950 relative"
           style={{
             WebkitOverflowScrolling: 'touch',
@@ -2608,6 +5892,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         >
           <div
             className="w-fit h-fit p-4 sm:p-8 flex flex-col items-center"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setSelectedTableId(null);
+                setSelectedTableCell(null);
+                setSelectedShapeId(null);
+                setSelectedOverlayId(null);
+                setSelectedTextItemId(null);
+                setMultiSelectedIds([]);
+                setActiveEditingId(null);
+                setActiveTableImgCell(null);
+              }
+            }}
             style={{
               minWidth: '100%',
               minHeight: '100%',
@@ -2663,36 +5959,89 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </div>
             )}
 
-            {/* Active Canvas Page Frame with High-DPI Resolution & GPU transform */}
-            <div
-              ref={pageFrameRef}
-              onClick={handleCanvasClick}
-              className="relative bg-white shadow-2xl rounded-xs border border-zinc-300/70 dark:border-zinc-800 select-none flex-shrink-0"
-              style={{
-                width: Math.max(100, Math.round((basePageDims.width || 595) * zoomScale)),
-                height: Math.max(100, Math.round((basePageDims.height || 842) * zoomScale)),
-                cursor: activeTool === 'add-text' ? 'crosshair' : activeTool === 'add-link' ? 'pointer' : 'default',
-                transformOrigin: 'center center',
-              }}
-            >
-              {/* High-DPI Supersampled Canvas (Razor-Sharp) */}
-              <canvas ref={canvasRef} className="block w-full h-full pointer-events-none" />
+            {/* Continuous Vertical Document Stack (All Pages Rendered Smoothly) */}
+            {Array.from({ length: totalPages || 1 }, (_, pageIdx) => {
+              const pageNum = pageIdx + 1;
+              const isCurrentPage = pageNum === currentPage;
+              return (
+                <div
+                  key={pageNum}
+                  id={`pdf-page-frame-${pageNum}`}
+                  data-page-number={pageNum}
+                  ref={isCurrentPage ? pageFrameRef : undefined}
+                  onClick={(e) => {
+                    if (currentPage !== pageNum) setCurrentPage(pageNum);
+                    handleCanvasClick(e, pageNum);
+                  }}
+                  onPointerDown={(e) => {
+                    updateLastClickedCoords(e, pageNum - 1);
+                    if (currentPage !== pageNum) setCurrentPage(pageNum);
+                  }}
+                  onPointerMove={(e) => updateLastClickedCoords(e, pageNum - 1)}
+                  className={`relative bg-white shadow-2xl rounded-xs border select-none flex-shrink-0 mb-10 transition-shadow ${
+                    isCurrentPage
+                      ? 'border-indigo-500/80 ring-2 ring-indigo-500/25'
+                      : 'border-zinc-300/80 dark:border-zinc-800'
+                  }`}
+                  style={{
+                    width: Math.max(100, Math.round((basePageDims.width || 595) * zoomScale)),
+                    height: Math.max(100, Math.round((basePageDims.height || 842) * zoomScale)),
+                    cursor: activeTool === 'add-text' ? 'crosshair' : activeTool === 'add-link' ? 'pointer' : 'default',
+                    transformOrigin: 'center center',
+                  }}
+                >
+                  {/* High-DPI Supersampled Canvas for this Page */}
+                  <canvas
+                    ref={(el) => {
+                      if (el) {
+                        pageCanvasesRef.current.set(pageNum, el);
+                        if (pageNum === currentPage) {
+                          canvasRef.current = el;
+                        }
+                      } else {
+                        pageCanvasesRef.current.delete(pageNum);
+                      }
+                    }}
+                    className="block w-full h-full pointer-events-none"
+                  />
 
-              {/* OCR Scanning Overlay */}
-              {isOcrScanningPage && (
-                <div className="absolute inset-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xs flex flex-col items-center justify-center z-50 rounded space-y-2 p-4 text-center">
-                  <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-                  <div className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
-                    Optical Character Recognition in Progress
-                  </div>
-                  <div className="text-[11px] text-zinc-500 font-mono">
-                    {ocrProgressText || 'Extracting words and layout...'}
-                  </div>
-                </div>
-              )}
+                  {/* MS Word Margin Guidelines (Dashed line) */}
+                  {showMarginGuidelines && (() => {
+                    const currentMargin = selectedMarginId === 'custom'
+                      ? customMargins
+                      : MS_WORD_MARGINS.find((m) => m.id === selectedMarginId) || MS_WORD_MARGINS[0];
+                    const topPx = currentMargin.top * zoomScale;
+                    const bottomPx = currentMargin.bottom * zoomScale;
+                    const leftPx = currentMargin.left * zoomScale;
+                    const rightPx = currentMargin.right * zoomScale;
+                    return (
+                      <div
+                        className="absolute pointer-events-none border border-dashed border-indigo-400/40 z-10"
+                        style={{
+                          top: `${topPx}px`,
+                          left: `${leftPx}px`,
+                          right: `${rightPx}px`,
+                          bottom: `${bottomPx}px`,
+                        }}
+                      />
+                    );
+                  })()}
 
-            {/* In-Place Interactive Existing Text Bounding Boxes (Edit Text Mode) */}
-            {activeTool === 'edit-text' &&
+                  {/* OCR Scanning Overlay */}
+                  {isCurrentPage && isOcrScanningPage && (
+                    <div className="absolute inset-0 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xs flex flex-col items-center justify-center z-50 rounded space-y-2 p-4 text-center">
+                      <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
+                      <div className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
+                        Optical Character Recognition in Progress
+                      </div>
+                      <div className="text-[11px] text-zinc-500 font-mono">
+                        {ocrProgressText || 'Extracting words and layout...'}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* In-Place Interactive Existing Text Bounding Boxes (Edit Text Mode) */}
+                  {isCurrentPage && activeTool === 'edit-text' &&
               detectedTextItems.map((item) => {
                 const currentItem = modifiedTexts[item.id] || item;
                 const currentTextVal = currentItem.currentText ?? item.originalText;
@@ -2726,7 +6075,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
                 const cssFontFamily = resolveCssFontFamily(itemFontFamily);
                 const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH);
-                const textColor = currentItem.color || item.color || (sampledBg.isDark ? '#f8fafc' : '#0f172a');
+                const sampledFg = sampleCanvasTextColor(canvasRef.current, cssX, cssY, cssW, cssH, sampledBg.rgb);
+                const textColor = currentItem.color || item.color || sampledFg;
 
                 return (
                   <div
@@ -2736,7 +6086,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       setActiveEditingId(item.id);
                       setSelectedTextItemId(item.id);
                       setSelectedOverlayId(null);
-                      setShowPropertiesPanel(true);
+                      setSelectedShapeId(null);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setMultiSelectedIds([item.id]);
+                      if (!/android/i.test(navigator.userAgent)) {
+                        setShowPropertiesPanel(true);
+                      }
                       setFontFamily(itemFontFamily);
                       setFontSize(itemFontSize);
                       setIsBold(itemIsBold);
@@ -2872,19 +6228,130 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             {/* Render Text Overlays */}
             {textOverlays
-              .filter((t) => t.pageIndex === currentPage - 1)
+              .filter((t) => t.pageIndex === pageNum - 1)
               .map((t) => {
                 const scale = zoomScale;
                 const cssX = t.x * scale;
                 const cssY = viewportDims.height - t.y * scale;
-                const isSelected = selectedOverlayId === t.id;
+                const isSelected = selectedOverlayId === t.id || multiSelectedIds.includes(t.id);
+                const isEditing = editingOverlayId === t.id;
+
+                if (isEditing) {
+                  return (
+                    <div
+                      key={t.id}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        left: `${cssX}px`,
+                        top: `${cssY}px`,
+                        minWidth: '150px',
+                        transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
+                      }}
+                      className="absolute z-40 bg-white/95 dark:bg-zinc-900/95 border-2 border-emerald-500 rounded shadow-xl p-2 select-text"
+                    >
+                      <textarea
+                        autoFocus
+                        value={t.text}
+                        placeholder="Type text here..."
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setTextOverlays((prev) =>
+                            prev.map((item) => (item.id === t.id ? { ...item, text: val } : item))
+                          );
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            if (!t.text.trim()) {
+                              setTextOverlays((prev) =>
+                                prev.map((item) => (item.id === t.id ? { ...item, text: 'Sample Text' } : item))
+                              );
+                            }
+                            setEditingOverlayId(null);
+                            pushSnapshot({ textOverlays });
+                          }
+                        }}
+                        onBlur={() => {
+                          if (!t.text.trim()) {
+                            setTextOverlays((prev) =>
+                              prev.map((item) => (item.id === t.id ? { ...item, text: 'Sample Text' } : item))
+                            );
+                          }
+                          setEditingOverlayId(null);
+                          pushSnapshot({ textOverlays });
+                        }}
+                        style={{
+                          fontSize: `${t.size * scale}px`,
+                          fontFamily: t.fontFamily || 'Calibri, sans-serif',
+                          fontWeight: t.isBold ? 700 : 400,
+                          fontStyle: t.isItalic ? 'italic' : 'normal',
+                          textDecoration: t.isUnderline ? 'underline' : 'none',
+                          color: t.color || '#000000',
+                          textAlign: t.alignment || 'left',
+                        }}
+                        className="w-full bg-transparent border-none outline-none resize-both min-h-[36px] p-0 font-medium"
+                      />
+                      <div className="flex items-center justify-between pt-1 border-t border-emerald-200 dark:border-emerald-800 text-[10px] text-emerald-700 dark:text-emerald-400 font-bold select-none">
+                        <span>Press Enter to save</span>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            if (!t.text.trim()) {
+                              setTextOverlays((prev) =>
+                                prev.map((item) => (item.id === t.id ? { ...item, text: 'Sample Text' } : item))
+                              );
+                            }
+                            setEditingOverlayId(null);
+                            pushSnapshot({ textOverlays });
+                          }}
+                          className="px-2 py-0.5 bg-emerald-600 text-white rounded text-[10px] font-bold hover:bg-emerald-700"
+                        >
+                          Done ✓
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
 
                 return (
                   <div
                     key={t.id}
                     onClick={(e) => {
                       e.stopPropagation();
+                      handleItemSelect(t.id, 'overlay', e);
+                    }}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
                       setSelectedOverlayId(t.id);
+                      setEditingOverlayId(t.id);
+                    }}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      handleItemSelect(t.id, 'overlay', e);
+                      setDraggingItem({
+                        id: t.id,
+                        type: 'overlay',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        origX: t.x,
+                        origY: t.y,
+                      });
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches.length !== 1) return;
+                      e.stopPropagation();
+                      handleItemSelect(t.id, 'overlay', e);
+                      const touch = e.touches[0];
+                      setDraggingItem({
+                        id: t.id,
+                        type: 'overlay',
+                        startX: touch.clientX,
+                        startY: touch.clientY,
+                        origX: t.x,
+                        origY: t.y,
+                      });
                     }}
                     style={{
                       left: `${cssX}px`,
@@ -2896,10 +6363,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       textDecoration: t.isUnderline ? 'underline' : 'none',
                       color: t.color,
                       textAlign: t.alignment || 'left',
+                      transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
                     }}
-                    className={`absolute cursor-pointer px-1 py-0.5 rounded transition-all ${
-                      isSelected ? 'ring-2 ring-emerald-500 bg-emerald-500/10' : ''
+                    className={`absolute cursor-move px-1 py-0.5 transition-all bg-transparent ${
+                      isSelected ? 'ring-2 ring-indigo-500 rounded bg-indigo-50/20' : ''
                     }`}
+                    title="Double-click to edit text • Drag to move"
                   >
                     {t.text}
                   </div>
@@ -2908,12 +6377,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             {/* Render Hyperlink Overlays */}
             {hyperlinks
-              .filter((l) => l.pageIndex === currentPage - 1)
+              .filter((l) => l.pageIndex === pageNum - 1)
               .map((l) => {
                 const scale = zoomScale;
                 const cssX = l.x * scale;
                 const cssY = viewportDims.height - l.y * scale - l.height * scale;
-                const isSelected = selectedOverlayId === l.id;
+                const isSelected = selectedOverlayId === l.id || multiSelectedIds.includes(l.id);
 
                 return (
                   <div
@@ -2921,6 +6390,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedOverlayId(l.id);
+                      const targetUrl = l.url.startsWith('http://') || l.url.startsWith('https://') ? l.url : `https://${l.url}`;
+                      window.open(targetUrl, '_blank');
                     }}
                     style={{
                       left: `${cssX}px`,
@@ -2928,13 +6399,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       width: `${l.width * scale}px`,
                       height: `${l.height * scale}px`,
                     }}
-                    className={`absolute flex items-center gap-1 px-1 rounded border border-blue-500/60 bg-blue-500/15 cursor-pointer z-30 group ${
+                    className={`absolute flex items-center gap-1 px-1 rounded border border-blue-500/70 bg-blue-500/20 hover:bg-blue-500/30 cursor-pointer z-30 group shadow-xs transition-colors ${
                       isSelected ? 'ring-2 ring-blue-600' : ''
                     }`}
-                    title={`Hyperlink: ${l.url}`}
+                    title={`Click to open link in web browser: ${l.url}`}
                   >
-                    <ExternalLink className="w-3 h-3 text-blue-600 flex-shrink-0" />
-                    <span className="text-[10px] text-blue-700 dark:text-blue-300 font-mono truncate">
+                    <ExternalLink className="w-3 h-3 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                    <span className="text-[10px] text-blue-700 dark:text-blue-300 font-mono underline truncate">
                       {l.url}
                     </span>
                     <button
@@ -2943,7 +6414,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         setHyperlinks((prev) => prev.filter((item) => item.id !== l.id));
                         pushSnapshot({ hyperlinks: hyperlinks.filter((item) => item.id !== l.id) });
                       }}
-                      className="ml-auto opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-500 transition-opacity"
+                      className="ml-auto opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-red-500 transition-opacity"
+                      title="Delete Hyperlink"
                     >
                       <Trash2 className="w-2.5 h-2.5" />
                     </button>
@@ -2951,41 +6423,1049 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })}
 
-            {/* Render Image Overlays */}
+            {/* Render Interactive Movable, Resizable & Croppable Image Overlays */}
             {imageOverlays
-              .filter((i) => i.pageIndex === currentPage - 1)
+              .filter((i) => i.pageIndex === pageNum - 1)
               .map((img) => {
                 const scale = zoomScale;
                 const cssX = img.x * scale;
                 const cssY = viewportDims.height - img.y * scale - img.height * scale;
+                const cssW = img.width * scale;
+                const cssH = img.height * scale;
                 const isSelected = selectedOverlayId === img.id;
+                const isCropping = cropImageId === img.id;
                 const url = URL.createObjectURL(new Blob([img.imageData]));
+                const imgFilters = [
+                  img.brightness !== undefined && img.brightness !== 100 ? `brightness(${img.brightness}%)` : '',
+                  img.contrast !== undefined && img.contrast !== 100 ? `contrast(${img.contrast}%)` : '',
+                  img.saturation !== undefined && img.saturation !== 100 ? `saturate(${img.saturation}%)` : '',
+                  img.hue !== undefined && img.hue !== 0 ? `hue-rotate(${img.hue}deg)` : '',
+                  img.temperature !== undefined && img.temperature !== 0
+                    ? img.temperature > 0
+                      ? `sepia(${img.temperature * 0.5}%) hue-rotate(-${img.temperature * 0.15}deg) saturate(${100 + img.temperature * 0.2}%)`
+                      : `hue-rotate(${Math.abs(img.temperature) * 0.35}deg) saturate(${100 - Math.abs(img.temperature) * 0.15}%)`
+                    : '',
+                  img.grayscale ? 'grayscale(100%)' : '',
+                  img.invert ? 'invert(100%)' : '',
+                ].filter(Boolean).join(' ');
+
+                const imgTransforms = [
+                  img.flipH ? 'scaleX(-1)' : '',
+                  img.flipV ? 'scaleY(-1)' : '',
+                ].filter(Boolean).join(' ');
 
                 return (
-                  <img
+                  <div
                     key={img.id}
-                    src={url}
-                    alt="Overlay"
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedOverlayId(img.id);
+                      setSelectedShapeId(null);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setActiveEditingId(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([img.id]);
+                      if (!/android/i.test(navigator.userAgent)) {
+                        setShowPropertiesPanel(true);
+                      }
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSelectedOverlayId(img.id);
+                      setSelectedShapeId(null);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([img.id]);
+                      setElementContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        type: 'image',
+                        id: img.id,
+                      });
+                    }}
+                    onMouseDown={(e) => {
+                      if (isCropping || e.button !== 0) return;
+                      e.stopPropagation();
+                      setSelectedOverlayId(img.id);
+                      setSelectedShapeId(null);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([img.id]);
+                      setDraggingItem({
+                        id: img.id,
+                        type: 'image',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        origX: img.x,
+                        origY: img.y,
+                      });
+                    }}
+                    onTouchStart={(e) => {
+                      if (isCropping || e.touches.length !== 1) return;
+                      e.stopPropagation();
+                      setSelectedOverlayId(img.id);
+                      setSelectedShapeId(null);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([img.id]);
+                      const touch = e.touches[0];
+                      setDraggingItem({
+                        id: img.id,
+                        type: 'image',
+                        startX: touch.clientX,
+                        startY: touch.clientY,
+                        origX: img.x,
+                        origY: img.y,
+                      });
                     }}
                     style={{
                       left: `${cssX}px`,
                       top: `${cssY}px`,
-                      width: `${img.width * scale}px`,
-                      height: `${img.height * scale}px`,
+                      width: `${cssW}px`,
+                      height: `${cssH}px`,
+                      transform: img.rotation ? `rotate(${img.rotation}deg)` : undefined,
+                      borderRadius: img.borderRadius ? `${img.borderRadius * scale}px` : undefined,
                     }}
-                    className={`absolute cursor-pointer object-contain rounded ${
+                    className={`absolute cursor-move select-none ${
                       isSelected ? 'ring-2 ring-emerald-500' : ''
                     }`}
-                  />
+                  >
+                    <img
+                      src={url}
+                      alt="Overlay"
+                      style={{
+                        borderWidth: img.borderWidth ? `${img.borderWidth * scale}px` : undefined,
+                        borderColor: img.borderColor || undefined,
+                        borderStyle: img.borderStyle || (img.borderWidth ? 'solid' : undefined),
+                        borderRadius: img.borderRadius ? `${img.borderRadius * scale}px` : undefined,
+                        filter: imgFilters || undefined,
+                        transform: imgTransforms || undefined,
+                        boxSizing: 'border-box',
+                      }}
+                      className="w-full h-full object-fill pointer-events-none overflow-hidden"
+                    />
+
+                    {isSelected && !isCropping && (
+                      <>
+                        {renderResizeHandles(img.id, 'image', img.x, img.y, img.width, img.height)}
+                        {/* Quick Action Floating Badge: Crop Button */}
+                        <div
+                          className={`absolute ${
+                            /android/i.test(navigator.userAgent) ? '-bottom-8' : '-top-7'
+                          } left-1/2 -translate-x-1/2 flex items-center gap-1 bg-zinc-900/90 text-white rounded-md px-1.5 py-0.5 shadow-md text-[10px] z-50`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCropImageId(img.id);
+                              setCropBox({ xPct: 0.05, yPct: 0.05, wPct: 0.9, hPct: 0.9 });
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-zinc-700 font-medium"
+                          >
+                            <Crop className="w-3 h-3 text-emerald-400" />
+                            <span>Crop</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Interactive Crop UI */}
+                    {isCropping && (
+                      <div
+                        className="absolute inset-0 z-50 pointer-events-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {/* Crop Overlay Box */}
+                        <div
+                          className="absolute border-2 border-emerald-400 bg-emerald-500/10 cursor-move"
+                          style={{
+                            left: `${cropBox.xPct * 100}%`,
+                            top: `${cropBox.yPct * 100}%`,
+                            width: `${cropBox.wPct * 100}%`,
+                            height: `${cropBox.hPct * 100}%`,
+                          }}
+                        >
+                          {/* 3x3 Rule-of-Thirds Grid */}
+                          <div className="w-full h-full grid grid-cols-3 grid-rows-3 border border-emerald-400/40 pointer-events-none">
+                            <div className="border-r border-b border-emerald-400/30" />
+                            <div className="border-r border-b border-emerald-400/30" />
+                            <div className="border-b border-emerald-400/30" />
+                            <div className="border-r border-b border-emerald-400/30" />
+                            <div className="border-r border-b border-emerald-400/30" />
+                            <div className="border-b border-emerald-400/30" />
+                            <div className="border-r border-emerald-400/30" />
+                            <div className="border-r border-emerald-400/30" />
+                            <div />
+                          </div>
+                        </div>
+
+                        {/* Apply / Cancel Crop Actions Floating Controls */}
+                        <div className="absolute -bottom-9 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-zinc-900 text-white rounded-lg px-2 py-1 shadow-lg text-xs z-50">
+                          <button
+                            type="button"
+                            onClick={() => handleApplyCrop(img.id)}
+                            className="flex items-center gap-1 px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 rounded font-semibold text-[11px]"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Apply Crop</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCropImageId(null)}
+                            className="flex items-center gap-1 px-2 py-0.5 bg-zinc-700 hover:bg-zinc-600 rounded font-medium text-[11px]"
+                          >
+                            <X className="w-3 h-3" />
+                            <span>Cancel</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+            {/* Render MS Word Vector Shapes */}
+            {shapes
+              .filter((s) => s.pageIndex === pageNum - 1)
+              .map((shape) => {
+                const scale = zoomScale;
+                const cssX = shape.x * scale;
+                const cssY = viewportDims.height - shape.y * scale - shape.height * scale;
+                const cssW = shape.width * scale;
+                const cssH = shape.height * scale;
+                const isSelected = selectedShapeId === shape.id;
+
+                return (
+                  <div
+                    key={shape.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedShapeId(shape.id);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedOverlayId(null);
+                      setActiveEditingId(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([shape.id]);
+                      if (!/android/i.test(navigator.userAgent)) {
+                        setShowPropertiesPanel(true);
+                      }
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSelectedShapeId(shape.id);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedOverlayId(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([shape.id]);
+                      setElementContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        type: 'shape',
+                        id: shape.id,
+                      });
+                    }}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      setSelectedShapeId(shape.id);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedOverlayId(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([shape.id]);
+                      setDraggingItem({
+                        id: shape.id,
+                        type: 'shape',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        origX: shape.x,
+                        origY: shape.y,
+                      });
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches.length !== 1) return;
+                      e.stopPropagation();
+                      setSelectedShapeId(shape.id);
+                      setSelectedTableId(null);
+                      setSelectedTableCell(null);
+                      setSelectedOverlayId(null);
+                      setSelectedTextItemId(null);
+                      setMultiSelectedIds([shape.id]);
+                      const touch = e.touches[0];
+                      setDraggingItem({
+                        id: shape.id,
+                        type: 'shape',
+                        startX: touch.clientX,
+                        startY: touch.clientY,
+                        origX: shape.x,
+                        origY: shape.y,
+                      });
+                    }}
+                    style={{
+                      left: `${cssX}px`,
+                      top: `${cssY}px`,
+                      width: `${cssW}px`,
+                      height: `${cssH}px`,
+                      transform: shape.rotation ? `rotate(${shape.rotation}deg)` : undefined,
+                      opacity: shape.opacity ?? 1,
+                    }}
+                    className={`absolute cursor-move select-none ${
+                      isSelected ? 'ring-2 ring-indigo-500 ring-offset-1' : ''
+                    }`}
+                  >
+                    <svg
+                      width="100%"
+                      height="100%"
+                      viewBox={`0 0 ${shape.width} ${shape.height}`}
+                      style={{ overflow: 'visible' }}
+                    >
+                      {renderShapeSvg(shape)}
+                    </svg>
+                    {isSelected && renderResizeHandles(shape.id, 'shape', shape.x, shape.y, shape.width, shape.height)}
+                  </div>
+                );
+              })}
+
+            {/* Render Resizable Movable Interactive Tables */}
+            {tables
+              .filter((t) => t.pageIndex === pageNum - 1)
+              .map((tbl) => {
+                const scale = zoomScale;
+                const colWidths =
+                  tbl.colWidths && tbl.colWidths.length === tbl.cols
+                    ? tbl.colWidths
+                    : Array(tbl.cols).fill(tbl.width / Math.max(1, tbl.cols));
+                const rowHeights =
+                  tbl.rowHeights && tbl.rowHeights.length === tbl.rows
+                    ? tbl.rowHeights
+                    : Array(tbl.rows).fill(tbl.height / Math.max(1, tbl.rows));
+
+                const totalW = colWidths.reduce((a: number, b: number) => a + b, 0);
+                const totalH = rowHeights.reduce((a: number, b: number) => a + b, 0);
+                const cssW = totalW * scale;
+                const cssH = totalH * scale;
+                const cssX = tbl.x * scale;
+                const cssY = viewportDims.height - tbl.y * scale - cssH;
+                const isSelected = selectedTableId === tbl.id || multiSelectedIds.includes(tbl.id);
+
+                return (
+                  <div
+                    key={tbl.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleItemSelect(tbl.id, 'table', e);
+                    }}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return;
+                      const target = e.target as HTMLElement;
+                      if (target.tagName === 'INPUT' || target.getAttribute('data-resizer') === 'true') return;
+                      e.stopPropagation();
+                      handleItemSelect(tbl.id, 'table', e);
+                      setDraggingItem({
+                        id: tbl.id,
+                        type: 'table',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        origX: tbl.x,
+                        origY: tbl.y,
+                      });
+                    }}
+                    onTouchStart={(e) => {
+                      if (e.touches.length !== 1) return;
+                      const target = e.target as HTMLElement;
+                      if (target.tagName === 'INPUT' || target.getAttribute('data-resizer') === 'true') return;
+                      e.stopPropagation();
+                      handleItemSelect(tbl.id, 'table', e);
+                      const touch = e.touches[0];
+                      setDraggingItem({
+                        id: tbl.id,
+                        type: 'table',
+                        startX: touch.clientX,
+                        startY: touch.clientY,
+                        origX: tbl.x,
+                        origY: tbl.y,
+                      });
+                    }}
+                    style={{
+                      left: `${cssX}px`,
+                      top: `${cssY}px`,
+                      width: `${cssW}px`,
+                      height: `${cssH}px`,
+                      transform: tbl.rotation ? `rotate(${tbl.rotation}deg)` : undefined,
+                    }}
+                    className={`absolute select-none cursor-move ${
+                      isSelected ? 'ring-2 ring-indigo-500 z-30' : ''
+                    }`}
+                  >
+                    {/* Table Grid - fills the entire box 100% */}
+                    <table className="w-full h-full border-collapse table-fixed bg-white/95">
+                      <colgroup>
+                        {colWidths.map((w: number, ci: number) => (
+                          <col key={ci} style={{ width: `${w * scale}px` }} />
+                        ))}
+                      </colgroup>
+                      <tbody>
+                        {(tbl.cells || []).map((row: string[], rIdx: number) => {
+                          const rH = rowHeights[rIdx] ? rowHeights[rIdx] * scale : undefined;
+                          return (
+                            <tr key={rIdx} style={{ height: rH ? `${rH}px` : undefined }}>
+                              {row.map((cellText: string, cIdx: number) => {
+                                const isHeader = rIdx === 0 && tbl.headerRow;
+                                const cellImgKey = `${rIdx}_${cIdx}`;
+                                const hasCellImg = Boolean(tbl.cellImages?.[cellImgKey]);
+                                const hasCellShape = Boolean(tbl.cellShapes?.[cellImgKey]);
+                                const hasCellSub = Boolean(tbl.cellSubtables?.[cellImgKey]);
+                                const isCellSelected = selectedTableCell?.tableId === tbl.id && selectedTableCell?.row === rIdx && selectedTableCell?.col === cIdx;
+
+                                const cellProps = tbl.cellImageProps?.[cellImgKey];
+                                const cellFilters = [
+                                  cellProps?.brightness !== undefined && cellProps.brightness !== 100 ? `brightness(${cellProps.brightness}%)` : (activeTableImgCell === `${tbl.id}_${rIdx}_${cIdx}` && imageBrightness !== 100 ? `brightness(${imageBrightness}%)` : ''),
+                                  cellProps?.contrast !== undefined && cellProps.contrast !== 100 ? `contrast(${cellProps.contrast}%)` : (activeTableImgCell === `${tbl.id}_${rIdx}_${cIdx}` && imageContrast !== 100 ? `contrast(${imageContrast}%)` : ''),
+                                  cellProps?.saturation !== undefined && cellProps.saturation !== 100 ? `saturate(${cellProps.saturation}%)` : '',
+                                  cellProps?.hue !== undefined && cellProps.hue !== 0 ? `hue-rotate(${cellProps.hue}deg)` : '',
+                                  cellProps?.temperature !== undefined && cellProps.temperature !== 0
+                                    ? cellProps.temperature > 0
+                                      ? `sepia(${cellProps.temperature * 0.5}%) hue-rotate(-${cellProps.temperature * 0.15}deg) saturate(${100 + cellProps.temperature * 0.2}%)`
+                                      : `hue-rotate(${Math.abs(cellProps.temperature) * 0.35}deg) saturate(${100 - Math.abs(cellProps.temperature) * 0.15}%)`
+                                    : '',
+                                  cellProps?.grayscale ? 'grayscale(100%)' : '',
+                                  cellProps?.invert ? 'invert(100%)' : '',
+                                ].filter(Boolean).join(' ');
+
+                                const cellTransforms = [
+                                  cellProps?.flipH ? 'scaleX(-1)' : '',
+                                  cellProps?.flipV ? 'scaleY(-1)' : '',
+                                ].filter(Boolean).join(' ');
+
+                                return (
+                                  <td
+                                    key={cIdx}
+                                    onContextMenu={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setSelectedTableId(tbl.id);
+                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                      setSelectedShapeId(null);
+                                      setSelectedOverlayId(null);
+                                      setSelectedTextItemId(null);
+                                      setMultiSelectedIds([tbl.id]);
+                                      setElementContextMenu({
+                                        x: e.clientX,
+                                        y: e.clientY,
+                                        type: 'table',
+                                        id: tbl.id,
+                                        tableRow: rIdx,
+                                        tableCol: cIdx,
+                                      });
+                                    }}
+                                    style={{
+                                      backgroundColor: isHeader
+                                        ? (tbl.headerBgColor || '#f1f5f9')
+                                        : (tbl.cellBgColor || undefined),
+                                      borderColor: tbl.borderColor || '#000000',
+                                      borderWidth: `${tbl.borderWidth || 1}px`,
+                                      borderStyle: tbl.borderStyle || 'solid',
+                                      padding: 0,
+                                      position: 'relative',
+                                      width: colWidths[cIdx] ? `${colWidths[cIdx] * scale}px` : undefined,
+                                      height: rowHeights[rIdx] ? `${rowHeights[rIdx] * scale}px` : undefined,
+                                      maxWidth: colWidths[cIdx] ? `${colWidths[cIdx] * scale}px` : undefined,
+                                      maxHeight: rowHeights[rIdx] ? `${rowHeights[rIdx] * scale}px` : undefined,
+                                      overflow: 'visible',
+                                      boxSizing: 'border-box',
+                                    }}
+                                    className={`relative ${
+                                      isCellSelected ? 'ring-2 ring-indigo-400 inset-0' : ''
+                                    }`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedTableId(tbl.id);
+                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                      setSelectedShapeId(null);
+                                      setSelectedOverlayId(null);
+                                      setSelectedTextItemId(null);
+                                      setMultiSelectedIds([tbl.id]);
+                                      if (hasCellImg) {
+                                        setActiveTableImgCell(`${tbl.id}_${rIdx}_${cIdx}`);
+                                      } else {
+                                        setActiveTableImgCell(null);
+                                      }
+                                    }}
+                                  >
+                                    {hasCellImg ? (
+                                      <div
+                                        className={`relative w-full h-full flex items-center justify-center p-1 group/cellimg min-h-[16px] ${
+                                          isCellSelected ? 'ring-2 ring-emerald-500 rounded-xs' : ''
+                                        }`}
+                                        style={{
+                                          width: '100%',
+                                          height: '100%',
+                                          overflow: 'visible',
+                                          boxSizing: 'border-box',
+                                        }}
+                                      >
+                                        <img
+                                          src={tbl.cellImages![cellImgKey]}
+                                          alt="Cell"
+                                          className="w-full h-full object-contain pointer-events-none"
+                                          style={{
+                                            maxWidth: '100%',
+                                            maxHeight: '100%',
+                                            filter: cellFilters || undefined,
+                                            transform: cellTransforms || undefined,
+                                            borderRadius: `${cellProps?.borderRadius ?? imageBorderRadius}px`,
+                                            borderWidth: cellProps?.borderWidth ? `${cellProps.borderWidth}px` : undefined,
+                                            borderStyle: (cellProps?.borderStyle as any) || undefined,
+                                            borderColor: cellProps?.borderColor || undefined,
+                                          }}
+                                        />
+                                        {isCellSelected && (
+                                          <>
+                                            {/* SE Corner Resizer (Col + Row) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag corner to freely resize row height & column width"
+                                              className="absolute -bottom-2 -right-2 w-3.5 h-3.5 bg-emerald-500 hover:bg-emerald-400 border-2 border-white rounded-full cursor-se-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: e.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: e.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: t.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: t.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                            />
+                                            {/* E Right Resizer (Col) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag right edge to resize column width"
+                                              className="absolute -right-2 top-1/2 -translate-y-1/2 w-2 h-5 bg-emerald-500 hover:bg-emerald-400 border border-white rounded-full cursor-e-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: e.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: t.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                              }}
+                                            />
+                                            {/* S Bottom Resizer (Row) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag bottom edge to resize row height"
+                                              className="absolute left-1/2 -translate-x-1/2 -bottom-2 h-2 w-5 bg-emerald-500 hover:bg-emerald-400 border border-white rounded-full cursor-s-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: e.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: t.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                            />
+                                          </>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRemoveCellImage(tbl.id, rIdx, cIdx);
+                                          }}
+                                          className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded opacity-0 group-hover/cellimg:opacity-100 hover:bg-red-700 transition-opacity z-50 shadow-xs"
+                                          title="Remove Image from Cell"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ) : hasCellShape ? (
+                                      <div
+                                        className={`relative w-full h-full flex items-center justify-center p-1 group/cellshape min-h-[16px] ${
+                                          isCellSelected ? 'ring-2 ring-emerald-500 rounded-xs' : ''
+                                        }`}
+                                        style={{
+                                          width: '100%',
+                                          height: '100%',
+                                          overflow: 'visible',
+                                          boxSizing: 'border-box',
+                                        }}
+                                      >
+                                        <div
+                                          className="w-full h-full flex items-center justify-center rounded"
+                                          style={{
+                                            backgroundColor: tbl.cellShapes![cellImgKey].fillColor || '#dbeafe',
+                                            borderColor: tbl.cellShapes![cellImgKey].strokeColor || '#2563eb',
+                                            borderWidth: `${tbl.cellShapes![cellImgKey].strokeWidth || 2}px`,
+                                            borderStyle: 'solid',
+                                            borderRadius: tbl.cellShapes![cellImgKey].type === 'circle' ? '9999px' : '4px',
+                                          }}
+                                        >
+                                          <span className="text-[10px] font-bold text-slate-700 capitalize truncate px-1">
+                                            {tbl.cellShapes![cellImgKey].type}
+                                          </span>
+                                        </div>
+                                        {isCellSelected && (
+                                          <>
+                                            {/* SE Corner Resizer (Col + Row) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag corner to freely resize row height & column width"
+                                              className="absolute -bottom-2 -right-2 w-3.5 h-3.5 bg-emerald-500 hover:bg-emerald-400 border-2 border-white rounded-full cursor-se-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: e.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: e.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: t.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: t.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                            />
+                                            {/* E Right Resizer (Col) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag right edge to resize column width"
+                                              className="absolute -right-2 top-1/2 -translate-y-1/2 w-2 h-5 bg-emerald-500 hover:bg-emerald-400 border border-white rounded-full cursor-e-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: e.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: t.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                              }}
+                                            />
+                                            {/* S Bottom Resizer (Row) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag bottom edge to resize row height"
+                                              className="absolute left-1/2 -translate-x-1/2 -bottom-2 h-2 w-5 bg-emerald-500 hover:bg-emerald-400 border border-white rounded-full cursor-s-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: e.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: t.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                            />
+                                          </>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRemoveCellShape(tbl.id, rIdx, cIdx);
+                                          }}
+                                          className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded opacity-0 group-hover/cellshape:opacity-100 hover:bg-red-700 transition-opacity z-50 shadow-xs"
+                                          title="Remove Shape from Cell"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ) : hasCellSub ? (
+                                      <div
+                                        className={`relative w-full h-full p-1 group/cellsub min-h-[20px] ${
+                                          isCellSelected ? 'ring-2 ring-emerald-500 rounded-xs' : ''
+                                        }`}
+                                        style={{
+                                          width: '100%',
+                                          height: '100%',
+                                          overflow: 'visible',
+                                          boxSizing: 'border-box',
+                                        }}
+                                      >
+                                        <div
+                                          className="grid h-full border border-slate-300 dark:border-zinc-700 rounded text-[9px]"
+                                          style={{
+                                            gridTemplateColumns: `repeat(${tbl.cellSubtables![cellImgKey].cols}, minmax(0, 1fr))`,
+                                            gridTemplateRows: `repeat(${tbl.cellSubtables![cellImgKey].rows}, minmax(0, 1fr))`,
+                                          }}
+                                        >
+                                          {tbl.cellSubtables![cellImgKey].cells.map((subR, sri) =>
+                                            subR.map((subVal, sci) => (
+                                              <input
+                                                key={`${sri}_${sci}`}
+                                                type="text"
+                                                value={subVal}
+                                                onChange={(e) => {
+                                                  handleUpdateSubtableCell(tbl.id, rIdx, cIdx, sri, sci, e.target.value);
+                                                }}
+                                                className="w-full h-full border border-slate-200 dark:border-zinc-800 bg-transparent text-center font-medium outline-none p-0.5 text-[8px]"
+                                              />
+                                            ))
+                                          )}
+                                        </div>
+                                        {isCellSelected && (
+                                          <>
+                                            {/* SE Corner Resizer (Col + Row) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag corner to freely resize row height & column width"
+                                              className="absolute -bottom-2 -right-2 w-3.5 h-3.5 bg-emerald-500 hover:bg-emerald-400 border-2 border-white rounded-full cursor-se-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: e.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: e.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: t.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: t.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                            />
+                                            {/* E Right Resizer (Col) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag right edge to resize column width"
+                                              className="absolute -right-2 top-1/2 -translate-y-1/2 w-2 h-5 bg-emerald-500 hover:bg-emerald-400 border border-white rounded-full cursor-e-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: e.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingCol({
+                                                  tableId: tbl.id,
+                                                  colIdx: cIdx,
+                                                  startX: t.clientX,
+                                                  initialWidth: colWidths[cIdx],
+                                                  initialColWidths: [...colWidths],
+                                                });
+                                              }}
+                                            />
+                                            {/* S Bottom Resizer (Row) */}
+                                            <div
+                                              data-resizer="true"
+                                              title="Drag bottom edge to resize row height"
+                                              className="absolute left-1/2 -translate-x-1/2 -bottom-2 h-2 w-5 bg-emerald-500 hover:bg-emerald-400 border border-white rounded-full cursor-s-resize z-50 shadow-md pointer-events-auto active:scale-125 transition-transform"
+                                              onMouseDown={(e) => {
+                                                e.stopPropagation();
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: e.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                              onTouchStart={(e) => {
+                                                if (e.touches.length !== 1) return;
+                                                e.stopPropagation();
+                                                const t = e.touches[0];
+                                                setResizingRow({
+                                                  tableId: tbl.id,
+                                                  rowIdx: rIdx,
+                                                  startY: t.clientY,
+                                                  initialHeight: rowHeights[rIdx],
+                                                  initialRowHeights: [...rowHeights],
+                                                  initialTableY: tbl.y,
+                                                  initialTotalHeight: totalH,
+                                                });
+                                              }}
+                                            />
+                                          </>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRemoveCellSubtable(tbl.id, rIdx, cIdx);
+                                          }}
+                                          className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded opacity-0 group-hover/cellsub:opacity-100 hover:bg-red-700 transition-opacity z-50 shadow-xs"
+                                          title="Remove Subtable from Cell"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <input
+                                        type="text"
+                                        value={cellText}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setTables((prev) =>
+                                            prev.map((t) => {
+                                              if (t.id !== tbl.id) return t;
+                                              const nextCells = (t.cells || []).map((r: string[], ri: number) =>
+                                                ri === rIdx ? r.map((c: string, ci: number) => (ci === cIdx ? val : c)) : r
+                                              );
+                                              return { ...t, cells: nextCells };
+                                            })
+                                          );
+                                        }}
+                                        onBlur={() => {
+                                          pushSnapshot({ tables });
+                                        }}
+                                        style={{
+                                          fontSize: `${(tbl.fontSize || 10) * scale}px`,
+                                          fontFamily: tbl.fontFamily || 'Calibri',
+                                          color: tbl.textColor || '#0f172a',
+                                          fontWeight: isHeader ? 700 : 400,
+                                        }}
+                                        className="w-full h-full bg-transparent border-none outline-none p-0 m-0"
+                                      />
+                                    )}
+
+                                    {/* Column Resizer Handle on right border (All columns including end) */}
+                                    {isSelected && !selectedTableCell && (
+                                      <div
+                                        data-resizer="true"
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          const currentW = colWidths[cIdx] || (tbl.width / tbl.cols);
+                                          setResizingCol({
+                                            tableId: tbl.id,
+                                            colIdx: cIdx,
+                                            startX: e.clientX,
+                                            initialWidth: currentW,
+                                            initialColWidths: [...colWidths],
+                                          });
+                                        }}
+                                        onTouchStart={(e) => {
+                                          if (e.touches.length !== 1) return;
+                                          e.stopPropagation();
+                                          const currentW = colWidths[cIdx] || (tbl.width / tbl.cols);
+                                          setResizingCol({
+                                            tableId: tbl.id,
+                                            colIdx: cIdx,
+                                            startX: e.touches[0].clientX,
+                                            initialWidth: currentW,
+                                            initialColWidths: [...colWidths],
+                                          });
+                                        }}
+                                        className="absolute -right-2 top-0 bottom-0 w-4 cursor-col-resize z-20 hover:bg-indigo-500/60 active:bg-indigo-600/80 touch-none transition-colors"
+                                        title="Drag to resize column width"
+                                      />
+                                    )}
+
+                                    {/* Row Resizer Handle on bottom border (All rows including end) */}
+                                    {isSelected && !selectedTableCell && (
+                                      <div
+                                        data-resizer="true"
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          const currentH = rowHeights[rIdx] || (tbl.height / tbl.rows);
+                                          setResizingRow({
+                                            tableId: tbl.id,
+                                            rowIdx: rIdx,
+                                            startY: e.clientY,
+                                            initialHeight: currentH,
+                                            initialRowHeights: [...rowHeights],
+                                            initialTableY: tbl.y,
+                                            initialTotalHeight: totalH,
+                                          });
+                                        }}
+                                        onTouchStart={(e) => {
+                                          if (e.touches.length !== 1) return;
+                                          e.stopPropagation();
+                                          const currentH = rowHeights[rIdx] || (tbl.height / tbl.rows);
+                                          setResizingRow({
+                                            tableId: tbl.id,
+                                            rowIdx: rIdx,
+                                            startY: e.touches[0].clientY,
+                                            initialHeight: currentH,
+                                            initialRowHeights: [...rowHeights],
+                                            initialTableY: tbl.y,
+                                            initialTotalHeight: totalH,
+                                          });
+                                        }}
+                                        className="absolute left-0 right-0 -bottom-2 h-4 cursor-row-resize z-20 hover:bg-indigo-500/60 active:bg-indigo-600/80 touch-none transition-colors"
+                                        title="Drag to resize row height"
+                                      />
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+
+                    {isSelected && !selectedTableCell && renderResizeHandles(tbl.id, 'table', tbl.x, tbl.y, totalW, totalH, colWidths, rowHeights)}
+                  </div>
                 );
               })}
 
             {/* Interactive Digital Signature Hotspots on Canvas */}
             {signatures
-              .filter((sig) => (sig.rect ? sig.rect.pageIndex === currentPage - 1 : currentPage === 1))
+              .filter((sig) => (sig.rect ? sig.rect.pageIndex === pageNum - 1 : pageNum === 1))
               .map((sig) => {
                 const scale = zoomScale;
                 let rect = sig.rect || { x: 58, y: 312, width: 110, height: 74 };
@@ -3021,399 +7501,1889 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })}
 
-            {/* Rendering Spinner */}
-            {isRendering && (
-              <div className="absolute inset-0 bg-white/70 dark:bg-zinc-950/70 backdrop-blur-xs flex items-center justify-center z-50 rounded">
-                <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-lg text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                  <Loader2 className="w-4 h-4 animate-spin" />
+            {/* Seamless Non-blocking Rendering Badge */}
+            {isCurrentPage && isRendering && (
+              <div className="absolute top-3 right-3 z-50 pointer-events-none transition-opacity duration-200">
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/85 dark:bg-zinc-800/90 text-white shadow-lg backdrop-blur-md text-[11px] font-medium border border-white/10">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
                   <span>Loading Page {currentPage}...</span>
                 </div>
               </div>
             )}
+
+            {/* Bottom Page Number Badge */}
+            <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider select-none pointer-events-none">
+              Page {pageNum} of {totalPages}
             </div>
+            </div>
+              );
+            })}
           </div>
         </main>
 
-      {/* Wondershare PDFelement Right Properties Sidebar / Mobile Bottom Sheet */}
+      {/* Mobile Backdrop for Properties Sheet / Drawer */}
       {showPropertiesPanel && (
-        <aside className="w-full sm:w-72 max-h-[46vh] sm:max-h-none bg-white dark:bg-zinc-900 border-t sm:border-t-0 sm:border-l border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xl sm:shadow-xs overflow-y-auto select-none">
-          {/* Mobile Bottom Sheet Pull Handle */}
-          <div className="w-10 h-1 bg-zinc-300 dark:bg-zinc-700 rounded-full mx-auto my-1.5 sm:hidden shrink-0" />
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-2xs z-40 md:hidden animate-fade-in"
+          onClick={() => setShowPropertiesPanel(false)}
+        />
+      )}
+
+      {/* Wondershare PDFelement Right Properties Sidebar / Mobile Bottom Sheet / Landscape Drawer */}
+      {showPropertiesPanel && (
+        <aside className="fixed inset-x-0 bottom-0 z-50 h-[40vh] max-h-[45vh] rounded-t-2xl border-t-2 border-indigo-600 shadow-2xl landscape:inset-y-0 landscape:right-0 landscape:left-auto landscape:bottom-auto landscape:w-80 landscape:max-w-[85vw] landscape:h-full landscape:max-h-none landscape:rounded-none landscape:border-l-2 landscape:border-t-0 landscape:border-indigo-600 md:static md:inset-auto md:w-80 md:h-full md:max-h-none md:rounded-none md:shadow-md md:border-l md:border-t-0 md:border-slate-300 md:dark:border-zinc-800 md:z-30 bg-white dark:bg-zinc-900 flex flex-col flex-shrink-0 animate-fade-in select-none touch-pan-y">
+          {/* Mobile Bottom Sheet Pull Handle with Swipe-Down Gesture (Hidden in Landscape drawer & Desktop) */}
+          <div
+            className="w-full py-1.5 flex flex-col items-center justify-center cursor-grab active:cursor-grabbing md:hidden landscape:hidden shrink-0 touch-none select-none"
+            onTouchStart={(e) => {
+              if (e.touches.length === 1) {
+                setPropertiesTouchStartY(e.touches[0].clientY);
+              }
+            }}
+            onTouchMove={(e) => {
+              if (propertiesTouchStartY !== null && e.touches.length === 1) {
+                const diff = e.touches[0].clientY - propertiesTouchStartY;
+                if (diff > 50) {
+                  setShowPropertiesPanel(false);
+                  setPropertiesTouchStartY(null);
+                }
+              }
+            }}
+            onTouchEnd={() => setPropertiesTouchStartY(null)}
+          >
+            <div className="w-12 h-1.5 bg-slate-400 dark:bg-zinc-600 rounded-full" />
+            <span className="text-[9px] text-slate-400 mt-0.5 font-semibold">Swipe down to close</span>
+          </div>
 
           {/* Panel Header */}
-          <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
-            <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider">
-              Properties
+          <div
+            className="px-3.5 py-2 bg-slate-50 dark:bg-zinc-800/80 border-b border-slate-200 dark:border-zinc-800 flex items-center justify-between"
+            onTouchStart={(e) => {
+              if (e.touches.length === 1) {
+                setPropertiesTouchStartY(e.touches[0].clientY);
+              }
+            }}
+            onTouchMove={(e) => {
+              if (propertiesTouchStartY !== null && e.touches.length === 1) {
+                const diff = e.touches[0].clientY - propertiesTouchStartY;
+                if (diff > 50) {
+                  setShowPropertiesPanel(false);
+                  setPropertiesTouchStartY(null);
+                }
+              }
+            }}
+            onTouchEnd={() => setPropertiesTouchStartY(null)}
+          >
+            <div className="flex items-center gap-2">
+              <Sliders className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                Properties
+              </span>
             </div>
             <button
               onClick={() => setShowPropertiesPanel(false)}
-              className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              className="p-1 rounded-lg text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-100 hover:bg-slate-200 dark:hover:bg-zinc-700 transition-colors"
               title="Close Properties Panel"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="p-3 space-y-4 text-xs">
-            {/* Type Indicator */}
+          <div className="p-3.5 pb-28 sm:pb-16 space-y-4 text-xs flex-1 min-h-0 overflow-y-auto overscroll-contain">
+            {/* Selection Type Indicator */}
             <div className="space-y-1">
-              <div className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
-                Type
+              <div className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider">
+                Selection
               </div>
-              <div className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 px-2.5 py-1.5 bg-zinc-50 dark:bg-zinc-800/60 rounded-lg border border-zinc-200 dark:border-zinc-700/60">
-                {activeEditingId || selectedTextItemId ? 'Text' : selectedOverlayId ? 'Overlay Element' : 'Document Page'}
-              </div>
-            </div>
-
-            {/* SECTION 1: FONTS */}
-            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
-              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
-                ▾ Fonts
-              </div>
-
-              {/* Font Family Dropdown */}
-              <select
-                value={fontFamily}
-                onChange={(e) => {
-                  const newFam = e.target.value;
-                  setFontFamily(newFam);
-                  updateActiveTextItemProps({ fontFamily: newFam });
-                }}
-                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-semibold text-xs shadow-xs focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer"
-              >
-                {MS_WORD_FONTS.map((font) => (
-                  <option key={font} value={font} style={{ fontFamily: font }}>
-                    {font}
-                  </option>
-                ))}
-              </select>
-
-              {/* Font Size & Color Row */}
-              <div className="flex items-center gap-1.5">
-                <div className="flex-1 flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden">
-                  <input
-                    type="number"
-                    value={fontSize}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value, 10);
-                      if (!isNaN(val) && val >= 6 && val <= 120) {
-                        setFontSize(val);
-                        updateActiveTextItemProps({ fontSize: val });
-                      }
-                    }}
-                    className="w-full text-center text-xs font-mono font-bold bg-transparent text-zinc-800 dark:text-zinc-200 py-1 focus:outline-none"
-                  />
-                  <span className="text-[10px] text-zinc-500 pr-1.5 font-medium">pt</span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newSize = Math.min(120, fontSize + 1);
-                    setFontSize(newSize);
-                    updateActiveTextItemProps({ fontSize: newSize });
-                  }}
-                  className="px-2 py-1 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold transition-colors"
-                  title="Increase Font Size (A^)"
-                >
-                  A<span className="text-[9px] align-super">▲</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const newSize = Math.max(6, fontSize - 1);
-                    setFontSize(newSize);
-                    updateActiveTextItemProps({ fontSize: newSize });
-                  }}
-                  className="px-2 py-1 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-bold transition-colors"
-                  title="Decrease Font Size (A_)"
-                >
-                  A<span className="text-[9px] align-sub">▼</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowColorPickerModal(true)}
-                  className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-700/50 transition-colors"
-                  title="Open Color Wheel & Palette"
-                >
-                  <span
-                    className="w-5 h-5 rounded-md border border-zinc-300 dark:border-zinc-600 shadow-xs block"
-                    style={{ backgroundColor: textColor }}
-                  />
-                  <ChevronDown className="w-3 h-3 text-zinc-500" />
-                </button>
-              </div>
-
-              {/* Styles Row: B, I, U, S, A^, A_ */}
-              <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 gap-0.5 justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isBold;
-                    setIsBold(next);
-                    updateActiveTextItemProps({ isBold: next });
-                  }}
-                  className={`flex-1 py-1 text-center font-bold rounded-md transition-all ${
-                    isBold ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Bold (Ctrl+B)"
-                >
-                  B
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isItalic;
-                    setIsItalic(next);
-                    updateActiveTextItemProps({ isItalic: next });
-                  }}
-                  className={`flex-1 py-1 text-center italic font-serif rounded-md transition-all ${
-                    isItalic ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Italic (Ctrl+I)"
-                >
-                  I
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isUnderline;
-                    setIsUnderline(next);
-                    updateActiveTextItemProps({ isUnderline: next });
-                  }}
-                  className={`flex-1 py-1 text-center underline rounded-md transition-all ${
-                    isUnderline ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Underline (Ctrl+U)"
-                >
-                  U
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isStrikethrough;
-                    setIsStrikethrough(next);
-                    updateActiveTextItemProps({ isStrikethrough: next });
-                  }}
-                  className={`flex-1 py-1 text-center line-through rounded-md transition-all ${
-                    isStrikethrough ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Strikethrough"
-                >
-                  S
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isSuperscript;
-                    setIsSuperscript(next);
-                    if (next) setIsSubscript(false);
-                    updateActiveTextItemProps({ isSuperscript: next, isSubscript: false });
-                  }}
-                  className={`flex-1 py-1 text-center text-[10px] rounded-md transition-all ${
-                    isSuperscript ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Superscript (A^)"
-                >
-                  A²
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = !isSubscript;
-                    setIsSubscript(next);
-                    if (next) setIsSuperscript(false);
-                    updateActiveTextItemProps({ isSubscript: next, isSuperscript: false });
-                  }}
-                  className={`flex-1 py-1 text-center text-[10px] rounded-md transition-all ${
-                    isSubscript ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Subscript (A_)"
-                >
-                  A₂
-                </button>
-              </div>
-
-              {/* Alignment Row */}
-              <div className="flex items-center bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 rounded-lg p-0.5 gap-0.5 justify-between">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAlignment('left');
-                    updateActiveTextItemProps({ alignment: 'left' });
-                  }}
-                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
-                    alignment === 'left' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Align Left (Ctrl+L)"
-                >
-                  <AlignLeft className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAlignment('center');
-                    updateActiveTextItemProps({ alignment: 'center' });
-                  }}
-                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
-                    alignment === 'center' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Align Center (Ctrl+E)"
-                >
-                  <AlignCenter className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAlignment('right');
-                    updateActiveTextItemProps({ alignment: 'right' });
-                  }}
-                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
-                    alignment === 'right' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Align Right (Ctrl+R)"
-                >
-                  <AlignRight className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAlignment('justify' as any);
-                    updateActiveTextItemProps({ alignment: 'justify' as any });
-                  }}
-                  className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
-                    (alignment as any) === 'justify' ? 'bg-blue-600 text-white shadow-xs' : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
-                  }`}
-                  title="Justify"
-                >
-                  <AlignJustify className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-
-            {/* SECTION 2: SPACING */}
-            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
-              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
-                ▾ Spacing
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <label className="text-[10px] text-zinc-500 font-medium">↕ Line Spacing</label>
-                  <input
-                    type="number"
-                    step="0.05"
-                    value={lineSpacing}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value);
-                      if (!isNaN(val)) {
-                        setLineSpacing(val);
-                        updateActiveTextItemProps({ lineSpacing: val });
-                      }
-                    }}
-                    className="w-full px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="text-[10px] text-zinc-500 font-medium">↔ Kerning (AV)</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={characterSpacing}
-                    onChange={(e) => {
-                      const val = parseFloat(e.target.value);
-                      if (!isNaN(val)) {
-                        setCharacterSpacing(val);
-                        updateActiveTextItemProps({ characterSpacing: val });
-                      }
-                    }}
-                    className="w-full px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-                  />
-                </div>
-              </div>
-              <div className="space-y-1">
-                <label className="text-[10px] text-zinc-500 font-medium">¶ Paragraph Spacing (pt)</label>
-                <input
-                  type="number"
-                  step="1"
-                  min="0"
-                  max="100"
-                  value={paragraphSpacing}
-                  onChange={(e) => {
-                    const val = parseFloat(e.target.value);
-                    if (!isNaN(val)) {
-                      setParagraphSpacing(val);
-                      updateActiveTextItemProps({ paragraphSpacing: val });
-                    }
-                  }}
-                  className="w-full px-2 py-1 text-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200"
-                />
-              </div>
-            </div>
-
-            {/* SECTION 3: APPEARANCE */}
-            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
-              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
-                ▾ Appearance
-              </div>
-              {(() => {
-                const targetItem = detectedTextItems.find((t) => t.id === (activeEditingId || selectedTextItemId)) ||
-                  textOverlays.find((t) => t.id === selectedOverlayId);
-                return (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <label className="text-[10px] text-zinc-500 font-medium">Position X (pt)</label>
-                      <div className="px-2 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300 font-mono">
-                        {targetItem ? targetItem.x.toFixed(1) : '0.0'}
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] text-zinc-500 font-medium">Position Y (pt)</label>
-                      <div className="px-2 py-1 text-xs rounded-lg border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-800/40 text-zinc-700 dark:text-zinc-300 font-mono">
-                        {targetItem ? targetItem.y.toFixed(1) : '0.0'}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* SECTION 4: ACTIONS */}
-            <div className="space-y-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
-              <div className="text-[11px] font-bold text-zinc-600 dark:text-zinc-300 uppercase tracking-wider">
-                ▾ Actions
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleRotateCurrentSelectionOrPage}
-                  className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[11px] font-medium transition-colors"
-                  title={activeEditingId || selectedTextItemId || selectedOverlayId ? 'Rotate Selected Element 90° Clockwise' : 'Rotate Document Page 90° Clockwise'}
-                >
-                  <RotateCw className="w-3 h-3" />
-                  <span>{activeEditingId || selectedTextItemId || selectedOverlayId ? 'Rotate Element 90°' : 'Rotate Page 90°'}</span>
-                </button>
-                {(activeEditingId || selectedTextItemId || selectedOverlayId) && (
+              <div className="text-xs font-bold text-indigo-950 dark:text-indigo-100 px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between shadow-2xs">
+                <span className="truncate">
+                  {selectedShapeId
+                    ? `Shape: ${shapes.find((s) => s.id === selectedShapeId)?.type || 'Custom'}`
+                    : selectedTableId
+                    ? `Table (${tables.find((t) => t.id === selectedTableId)?.rows} Rows × ${tables.find((t) => t.id === selectedTableId)?.cols} Cols)`
+                    : activeEditingId || selectedTextItemId
+                    ? 'Document Text'
+                    : selectedOverlayId
+                    ? textOverlays.some((t) => t.id === selectedOverlayId)
+                      ? 'Text Overlay'
+                      : imageOverlays.some((i) => i.id === selectedOverlayId)
+                      ? 'Image Overlay'
+                      : 'Overlay'
+                    : `Page ${currentPage} of ${totalPages || 1}`}
+                </span>
+                {(selectedShapeId || selectedTableId || selectedOverlayId || activeEditingId || selectedTextItemId) && (
                   <button
                     type="button"
                     onClick={() => {
-                      if (selectedOverlayId) {
-                        setTextOverlays((prev) => prev.filter((t) => t.id !== selectedOverlayId));
-                        setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
-                        setHyperlinks((prev) => prev.filter((h) => h.id !== selectedOverlayId));
-                        setSelectedOverlayId(null);
-                      } else if (activeEditingId || selectedTextItemId) {
-                        updateActiveTextItemProps({ currentText: '', isModified: true });
-                      }
+                      setSelectedShapeId(null);
+                      setSelectedTableId(null);
+                      setSelectedOverlayId(null);
+                      setActiveEditingId(null);
+                      setSelectedTextItemId(null);
                     }}
-                    className="flex items-center justify-center p-1.5 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 hover:bg-red-100 dark:hover:bg-red-900/60 text-red-600 dark:text-red-400 transition-colors"
-                    title="Clear or Delete Element"
+                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 underline ml-2 shrink-0"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    Deselect
                   </button>
                 )}
               </div>
             </div>
+
+            {/* CASE 1: SHAPE PROPERTIES */}
+            {selectedShapeId && (() => {
+              const shp = shapes.find((s) => s.id === selectedShapeId);
+              if (!shp) return null;
+              return (
+                <div className="space-y-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                    ▾ Shape Style
+                  </div>
+
+                  {/* Fill Color */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Fill Color</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={shp.fillColor === 'transparent' ? '#ffffff' : shp.fillColor || '#dbeafe'}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, fillColor: val } : s)));
+                          pushSnapshot({ shapes });
+                        }}
+                        className="w-7 h-7 rounded border border-slate-300 dark:border-zinc-700 bg-transparent cursor-pointer p-0"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, fillColor: 'transparent' } : s)));
+                          pushSnapshot({ shapes });
+                        }}
+                        className={`px-2.5 py-1 text-xs rounded-lg border font-bold transition-colors ${
+                          shp.fillColor === 'transparent' ? 'bg-indigo-50 border-indigo-400 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300' : 'border-slate-300 dark:border-zinc-700 text-slate-700 dark:text-zinc-300 bg-white dark:bg-zinc-800'
+                        }`}
+                      >
+                        Transparent
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Stroke Color & Width */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Border Stroke</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={shp.strokeColor || '#2563eb'}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, strokeColor: val } : s)));
+                          pushSnapshot({ shapes });
+                        }}
+                        className="w-7 h-7 rounded border border-slate-300 dark:border-zinc-700 bg-transparent cursor-pointer p-0"
+                      />
+                      <div className="flex-1 flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-2xs">
+                        <span className="text-[11px] font-semibold text-slate-500">Width:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={shp.strokeWidth || 2}
+                          onChange={(e) => {
+                            const val = Math.max(1, parseInt(e.target.value) || 1);
+                            setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, strokeWidth: val } : s)));
+                            pushSnapshot({ shapes });
+                          }}
+                          className="w-10 text-xs font-mono font-bold bg-transparent text-center text-slate-900 dark:text-zinc-100 outline-none"
+                        />
+                        <span className="text-[11px] font-semibold text-slate-500">pt</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Stroke Style: Solid or Dashed */}
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, strokeStyle: 'solid' } : s)));
+                        pushSnapshot({ shapes });
+                      }}
+                      className={`flex-1 py-1.5 text-xs rounded-lg border font-bold transition-colors ${
+                        (shp.strokeStyle || 'solid') === 'solid' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'border-slate-300 dark:border-zinc-700 text-slate-800 dark:text-zinc-200 bg-white dark:bg-zinc-800'
+                      }`}
+                    >
+                      Solid
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, strokeStyle: 'dashed' } : s)));
+                        pushSnapshot({ shapes });
+                      }}
+                      className={`flex-1 py-1.5 text-xs rounded-lg border font-bold transition-colors ${
+                        shp.strokeStyle === 'dashed' ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'border-slate-300 dark:border-zinc-700 text-slate-800 dark:text-zinc-200 bg-white dark:bg-zinc-800'
+                      }`}
+                    >
+                      Dashed
+                    </button>
+                  </div>
+
+                  {/* Opacity Slider */}
+                  <div className="space-y-1 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      <span>Opacity</span>
+                      <span className="font-mono text-slate-900 dark:text-zinc-100">{Math.round((shp.opacity ?? 1) * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={10}
+                      max={100}
+                      value={Math.round((shp.opacity ?? 1) * 100)}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) / 100;
+                        setShapes((prev) => prev.map((s) => (s.id === selectedShapeId ? { ...s, opacity: val } : s)));
+                        pushSnapshot({ shapes });
+                      }}
+                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                  </div>
+
+                  {/* Rotation (0° to 360°) */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      <span>Rotation</span>
+                      <span className="font-mono text-slate-900 dark:text-zinc-100">{shp.rotation || 0}°</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={360}
+                        value={shp.rotation || 0}
+                        onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                        className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        max={360}
+                        value={shp.rotation || 0}
+                        onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                        className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
+                      />
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {[0, 90, 180, 270].map((deg) => (
+                        <button
+                          key={deg}
+                          type="button"
+                          onClick={() => handleSetElementRotation(deg)}
+                          className="py-1 rounded-md border border-slate-300 dark:border-zinc-700 text-xs font-mono font-bold text-slate-800 dark:text-zinc-200 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 shadow-2xs transition-colors"
+                        >
+                          {deg}°
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Delete Shape */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShapes((prev) => prev.filter((s) => s.id !== selectedShapeId));
+                      setSelectedShapeId(null);
+                      pushSnapshot({ shapes });
+                    }}
+                    className="w-full py-2 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Shape</span>
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* CASE 2: TABLE PROPERTIES */}
+            {selectedTableId && (() => {
+              const tbl = tables.find((t) => t.id === selectedTableId);
+              if (!tbl) return null;
+              return (
+                <div className="space-y-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                    ▾ Table Controls
+                  </div>
+
+                  {/* Add / Delete Rows and Columns */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newCols = tbl.cols;
+                        const newRow = Array(newCols).fill('');
+                        const nextCells = [...(tbl.cells || []), newRow];
+                        const nextHeights = [...(tbl.rowHeights || Array(tbl.rows).fill(26)), 26];
+                        setTables((prev) =>
+                          prev.map((t) =>
+                            t.id === selectedTableId
+                              ? { ...t, rows: t.rows + 1, cells: nextCells, rowHeights: nextHeights, height: t.height + 26 }
+                              : t
+                          )
+                        );
+                        pushSnapshot({ tables });
+                      }}
+                      className="py-1.5 px-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 text-xs font-bold shadow-2xs transition-colors"
+                    >
+                      + Add Row
+                    </button>
+                    <button
+                      type="button"
+                      disabled={tbl.rows <= 1}
+                      onClick={() => {
+                        if (tbl.rows <= 1) return;
+                        const nextCells = (tbl.cells || []).slice(0, -1);
+                        const nextHeights = (tbl.rowHeights || []).slice(0, -1);
+                        setTables((prev) =>
+                          prev.map((t) =>
+                            t.id === selectedTableId
+                              ? { ...t, rows: t.rows - 1, cells: nextCells, rowHeights: nextHeights, height: Math.max(26, t.height - 26) }
+                              : t
+                          )
+                        );
+                        pushSnapshot({ tables });
+                      }}
+                      className="py-1.5 px-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 text-xs font-bold shadow-2xs transition-colors disabled:opacity-30"
+                    >
+                      - Remove Row
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newColW = 80;
+                        const nextCells = (tbl.cells || []).map((r: string[]) => [...r, '']);
+                        const nextWidths = [...(tbl.colWidths || Array(tbl.cols).fill(newColW)), newColW];
+                        setTables((prev) =>
+                          prev.map((t) =>
+                            t.id === selectedTableId
+                              ? { ...t, cols: t.cols + 1, cells: nextCells, colWidths: nextWidths, width: t.width + newColW }
+                              : t
+                          )
+                        );
+                        pushSnapshot({ tables });
+                      }}
+                      className="py-1.5 px-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 text-xs font-bold shadow-2xs transition-colors"
+                    >
+                      + Add Column
+                    </button>
+                    <button
+                      type="button"
+                      disabled={tbl.cols <= 1}
+                      onClick={() => {
+                        if (tbl.cols <= 1) return;
+                        const nextCells = (tbl.cells || []).map((r: string[]) => r.slice(0, -1));
+                        const nextWidths = (tbl.colWidths || []).slice(0, -1);
+                        const colW = (tbl.colWidths && tbl.colWidths[tbl.colWidths.length - 1]) || 80;
+                        setTables((prev) =>
+                          prev.map((t) =>
+                            t.id === selectedTableId
+                              ? { ...t, cols: t.cols - 1, cells: nextCells, colWidths: nextWidths, width: Math.max(80, t.width - colW) }
+                              : t
+                          )
+                        );
+                        pushSnapshot({ tables });
+                      }}
+                      className="py-1.5 px-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 text-xs font-bold shadow-2xs transition-colors disabled:opacity-30"
+                    >
+                      - Remove Col
+                    </button>
+                  </div>
+
+                  {/* Table Border Lines: Thickness, Style & Color */}
+                  <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-2">
+                    <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                      Table Border Lines
+                    </div>
+
+                    {/* Line Thickness */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Line Thickness</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{tbl.borderWidth || 1}px</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min={1}
+                          max={8}
+                          value={tbl.borderWidth || 1}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) || 1;
+                            setTables((prev) =>
+                              prev.map((t) => (t.id === selectedTableId ? { ...t, borderWidth: val } : t))
+                            );
+                          }}
+                          onMouseUp={() => pushSnapshot({ tables })}
+                          onTouchEnd={() => pushSnapshot({ tables })}
+                          className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          max={8}
+                          value={tbl.borderWidth || 1}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) || 1;
+                            setTables((prev) =>
+                              prev.map((t) => (t.id === selectedTableId ? { ...t, borderWidth: val } : t))
+                            );
+                            pushSnapshot({ tables });
+                          }}
+                          className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Line Style & Border Color */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Line Style</label>
+                        <select
+                          value={tbl.borderStyle || 'solid'}
+                          onChange={(e) => {
+                            const val = e.target.value as any;
+                            setTables((prev) =>
+                              prev.map((t) => (t.id === selectedTableId ? { ...t, borderStyle: val } : t))
+                            );
+                            pushSnapshot({ tables });
+                          }}
+                          className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold shadow-2xs"
+                        >
+                          <option value="solid">Solid</option>
+                          <option value="dashed">Dashed</option>
+                          <option value="dotted">Dotted</option>
+                          <option value="double">Double</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Border Color</label>
+                        <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg p-1 shadow-2xs">
+                          <input
+                            type="color"
+                            value={tbl.borderColor || '#000000'}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setTables((prev) =>
+                                prev.map((t) => (t.id === selectedTableId ? { ...t, borderColor: val } : t))
+                              );
+                            }}
+                            onBlur={() => pushSnapshot({ tables })}
+                            className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0"
+                          />
+                          <input
+                            type="text"
+                            value={tbl.borderColor || '#000000'}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setTables((prev) =>
+                                prev.map((t) => (t.id === selectedTableId ? { ...t, borderColor: val } : t))
+                              );
+                            }}
+                            onBlur={() => pushSnapshot({ tables })}
+                            className="w-16 px-1 text-[11px] font-mono font-bold border-0 bg-transparent text-slate-900 dark:text-zinc-100 outline-none"
+                            placeholder="#000000"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setColorTarget('table-border');
+                              setShowColorPickerModal(true);
+                            }}
+                            className="p-1 rounded hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-400"
+                            title="Open Color Studio"
+                          >
+                            <Palette className="w-3.5 h-3.5 text-blue-600" />
+                          </button>
+                        </div>
+                        {/* Quick Swatches */}
+                        <div className="flex items-center gap-1 pt-0.5">
+                          {['#000000', '#ffffff', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6'].map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                setTables((prev) =>
+                                  prev.map((t) => (t.id === selectedTableId ? { ...t, borderColor: c } : t))
+                                );
+                                pushSnapshot({ tables });
+                              }}
+                              style={{ backgroundColor: c }}
+                              className="w-3.5 h-3.5 rounded-full border border-slate-400 dark:border-zinc-600 transition-transform hover:scale-125"
+                              title={c}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Table Cell Fill Color */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Cell Fill Color</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTables((prev) =>
+                              prev.map((t) => (t.id === selectedTableId ? { ...t, cellBgColor: undefined } : t))
+                            );
+                            pushSnapshot({ tables });
+                          }}
+                          className="text-[10px] font-bold text-slate-500 hover:text-red-600 underline"
+                        >
+                          Clear Fill
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg p-1 shadow-2xs">
+                        <input
+                          type="color"
+                          value={tbl.cellBgColor && tbl.cellBgColor !== 'transparent' ? tbl.cellBgColor : '#ffffff'}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setTables((prev) =>
+                              prev.map((t) => (t.id === selectedTableId ? { ...t, cellBgColor: val } : t))
+                            );
+                          }}
+                          onBlur={() => pushSnapshot({ tables })}
+                          className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0"
+                        />
+                        <input
+                          type="text"
+                          value={tbl.cellBgColor || ''}
+                          placeholder="Transparent"
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setTables((prev) =>
+                              prev.map((t) => (t.id === selectedTableId ? { ...t, cellBgColor: val } : t))
+                            );
+                          }}
+                          onBlur={() => pushSnapshot({ tables })}
+                          className="w-20 px-1 text-[11px] font-mono font-bold border-0 bg-transparent text-slate-900 dark:text-zinc-100 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setColorTarget('table-fill');
+                            setShowColorPickerModal(true);
+                          }}
+                          className="p-1 rounded hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-400"
+                          title="Open Color Studio"
+                        >
+                          <Palette className="w-3.5 h-3.5 text-blue-600" />
+                        </button>
+                      </div>
+                      {/* Quick Swatches */}
+                      <div className="flex items-center gap-1 pt-0.5">
+                        {['#ffffff', '#f8fafc', '#f1f5f9', '#fee2e2', '#fef3c7', '#dcfce7', '#dbeafe', '#f3e8ff'].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => {
+                              setTables((prev) =>
+                                prev.map((t) => (t.id === selectedTableId ? { ...t, cellBgColor: c } : t))
+                              );
+                              pushSnapshot({ tables });
+                            }}
+                            style={{ backgroundColor: c }}
+                            className="w-3.5 h-3.5 rounded-full border border-slate-400 dark:border-zinc-600 transition-transform hover:scale-125"
+                            title={c}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Header Row Toggle */}
+                  <label className="flex items-center gap-2 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={tbl.headerRow ?? false}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setTables((prev) => prev.map((t) => (t.id === selectedTableId ? { ...t, headerRow: checked } : t)));
+                        pushSnapshot({ tables });
+                      }}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="text-xs font-bold text-slate-800 dark:text-zinc-200">Header Row Style</span>
+                  </label>
+
+                  {/* Table Cell Contents & Properties */}
+                  <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                        Cell Content
+                      </div>
+                      {selectedTableCell && selectedTableCell.tableId === tbl.id && (
+                        <span className="text-[10px] font-mono font-bold text-indigo-600 bg-indigo-50 dark:bg-indigo-950/40 px-1.5 py-0.5 rounded">
+                          Row {selectedTableCell.row + 1} : Col {selectedTableCell.col + 1}
+                        </span>
+                      )}
+                    </div>
+
+                    {selectedTableCell && selectedTableCell.tableId === tbl.id ? (
+                      (() => {
+                        const cellKey = `${selectedTableCell.row}_${selectedTableCell.col}`;
+                        const cellImg = tbl.cellImages?.[cellKey];
+                        const cellShape = tbl.cellShapes?.[cellKey];
+                        const cellSub = tbl.cellSubtables?.[cellKey];
+                        const cellProps = tbl.cellImageProps?.[cellKey] || {};
+
+                        return (
+                          <div className="space-y-3">
+                            {/* CASE 1: CELL HAS IMAGE */}
+                            {cellImg && (
+                              <div className="space-y-2.5 p-2 rounded-lg bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <img src={cellImg} alt="Cell Preview" className="w-10 h-10 object-contain rounded border border-slate-300 dark:border-zinc-600 bg-white dark:bg-zinc-900" />
+                                    <div>
+                                      <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 block">Cell Photo</span>
+                                      <span className="text-[10px] text-slate-500">Filters & Frame</span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveCellImage(tbl.id, selectedTableCell.row, selectedTableCell.col)}
+                                    className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition-colors"
+                                    title="Remove Image from Cell"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+
+                                {/* Picture Adjustments */}
+                                <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-zinc-700/60">
+                                  {/* Corner Rounding */}
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                                      <span>Corner Rounding</span>
+                                      <span className="font-mono text-slate-900 dark:text-zinc-100">{cellProps.borderRadius ?? imageBorderRadius}px</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={40}
+                                      value={cellProps.borderRadius ?? imageBorderRadius}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value) || 0;
+                                        setImageBorderRadius(val);
+                                        updateActiveTableCellImageProps({ borderRadius: val });
+                                      }}
+                                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                  </div>
+
+                                  {/* Brightness */}
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                                      <span>Brightness</span>
+                                      <span className="font-mono text-slate-900 dark:text-zinc-100">{cellProps.brightness ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={50}
+                                      max={150}
+                                      value={cellProps.brightness ?? 100}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value) || 100;
+                                        setImageBrightness(val);
+                                        updateActiveTableCellImageProps({ brightness: val });
+                                      }}
+                                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                  </div>
+
+                                  {/* Contrast */}
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                                      <span>Contrast</span>
+                                      <span className="font-mono text-slate-900 dark:text-zinc-100">{cellProps.contrast ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={50}
+                                      max={150}
+                                      value={cellProps.contrast ?? 100}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value) || 100;
+                                        setImageContrast(val);
+                                        updateActiveTableCellImageProps({ contrast: val });
+                                      }}
+                                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                  </div>
+
+                                  {/* Saturation */}
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                                      <span>Saturation</span>
+                                      <span className="font-mono text-slate-900 dark:text-zinc-100">{cellProps.saturation ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={200}
+                                      value={cellProps.saturation ?? 100}
+                                      onChange={(e) => updateActiveTableCellImageProps({ saturation: parseInt(e.target.value) || 100 })}
+                                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                  </div>
+
+                                  {/* Hue Rotate */}
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                                      <span>Hue Rotate</span>
+                                      <span className="font-mono text-slate-900 dark:text-zinc-100">{cellProps.hue ?? 0}°</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={-180}
+                                      max={180}
+                                      value={cellProps.hue ?? 0}
+                                      onChange={(e) => updateActiveTableCellImageProps({ hue: parseInt(e.target.value) || 0 })}
+                                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                  </div>
+
+                                  {/* Warmth */}
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                                      <span>Temperature (Warmth)</span>
+                                      <span className="font-mono text-slate-900 dark:text-zinc-100">{cellProps.temperature ?? 0}</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={-100}
+                                      max={100}
+                                      value={cellProps.temperature ?? 0}
+                                      onChange={(e) => updateActiveTableCellImageProps({ temperature: parseInt(e.target.value) || 0 })}
+                                      className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                  </div>
+
+                                  {/* Filters & Flips */}
+                                  <div className="grid grid-cols-2 gap-1.5 pt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => updateActiveTableCellImageProps({ grayscale: !cellProps.grayscale })}
+                                      className={`py-1 px-2 rounded-lg border text-xs font-bold transition-all ${
+                                        cellProps.grayscale
+                                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                                          : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      Grayscale
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateActiveTableCellImageProps({ invert: !cellProps.invert })}
+                                      className={`py-1 px-2 rounded-lg border text-xs font-bold transition-all ${
+                                        cellProps.invert
+                                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                                          : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      Invert
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateActiveTableCellImageProps({ flipH: !cellProps.flipH })}
+                                      className={`py-1 px-2 rounded-lg border text-xs font-bold transition-all ${
+                                        cellProps.flipH
+                                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                                          : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      Flip H
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateActiveTableCellImageProps({ flipV: !cellProps.flipV })}
+                                      className={`py-1 px-2 rounded-lg border text-xs font-bold transition-all ${
+                                        cellProps.flipV
+                                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                                          : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      Flip V
+                                    </button>
+                                  </div>
+
+                                  {/* Framing Border */}
+                                  <div className="space-y-1.5 pt-1.5 border-t border-slate-200 dark:border-zinc-700">
+                                    <span className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 block">Framing Border</span>
+                                    <div className="grid grid-cols-3 gap-1.5 items-center">
+                                      <div className="space-y-0.5">
+                                        <label className="text-[10px] text-slate-500">Width</label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={12}
+                                          value={cellProps.borderWidth || 0}
+                                          onChange={(e) => updateActiveTableCellImageProps({ borderWidth: parseInt(e.target.value) || 0 })}
+                                          className="w-full px-1.5 py-1 text-xs rounded border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 text-center"
+                                        />
+                                      </div>
+                                      <div className="space-y-0.5">
+                                        <label className="text-[10px] text-slate-500">Color</label>
+                                        <input
+                                          type="color"
+                                          value={cellProps.borderColor || '#3b82f6'}
+                                          onChange={(e) => updateActiveTableCellImageProps({ borderColor: e.target.value })}
+                                          className="w-full h-7 rounded border border-slate-300 dark:border-zinc-700 cursor-pointer p-0.5"
+                                        />
+                                      </div>
+                                      <div className="space-y-0.5">
+                                        <label className="text-[10px] text-slate-500">Style</label>
+                                        <select
+                                          value={cellProps.borderStyle || 'solid'}
+                                          onChange={(e) => updateActiveTableCellImageProps({ borderStyle: e.target.value })}
+                                          className="w-full px-1 py-1 text-xs rounded border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100"
+                                        >
+                                          <option value="solid">Solid</option>
+                                          <option value="dashed">Dashed</option>
+                                          <option value="dotted">Dotted</option>
+                                        </select>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* CASE 2: CELL HAS SHAPE */}
+                            {cellShape && (
+                              <div className="space-y-2 p-2 rounded-lg bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 capitalize">
+                                    Shape: {cellShape.type}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveCellShape(tbl.id, selectedTableCell.row, selectedTableCell.col)}
+                                    className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition-colors"
+                                    title="Remove Shape from Cell"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 pt-1">
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-600 dark:text-zinc-400">Fill</label>
+                                    <input
+                                      type="color"
+                                      value={cellShape.fillColor || '#dbeafe'}
+                                      onChange={(e) => updateActiveTableCellShapeProps({ fillColor: e.target.value })}
+                                      className="w-full h-7 rounded border border-slate-300 dark:border-zinc-700 cursor-pointer p-0.5"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-[10px] font-bold text-slate-600 dark:text-zinc-400">Stroke</label>
+                                    <input
+                                      type="color"
+                                      value={cellShape.strokeColor || '#2563eb'}
+                                      onChange={(e) => updateActiveTableCellShapeProps({ strokeColor: e.target.value })}
+                                      className="w-full h-7 rounded border border-slate-300 dark:border-zinc-700 cursor-pointer p-0.5"
+                                    />
+                                  </div>
+                                </div>
+                                <div className="space-y-1 pt-1">
+                                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 dark:text-zinc-400">
+                                    <span>Stroke Width</span>
+                                    <span>{cellShape.strokeWidth || 2}px</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={1}
+                                    max={10}
+                                    value={cellShape.strokeWidth || 2}
+                                    onChange={(e) => updateActiveTableCellShapeProps({ strokeWidth: parseInt(e.target.value) || 2 })}
+                                    className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
+                            {/* CASE 3: CELL HAS SUBTABLE */}
+                            {cellSub && (
+                              <div className="flex items-center justify-between p-2 rounded-lg bg-slate-50 dark:bg-zinc-800/60 border border-slate-200 dark:border-zinc-700">
+                                <div>
+                                  <span className="text-xs font-bold text-slate-800 dark:text-zinc-200 block">Subtable Inside Cell</span>
+                                  <span className="text-[10px] text-slate-500 font-mono">{cellSub.rows} rows × {cellSub.cols} cols</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveCellSubtable(tbl.id, selectedTableCell.row, selectedTableCell.col)}
+                                  className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition-colors"
+                                  title="Remove Subtable from Cell"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            )}
+
+                            {/* CASE 4: CELL EMPTY - INSERT CONTROLS */}
+                            {!cellImg && !cellShape && !cellSub && (
+                              <div className="space-y-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => cellImageInputRef.current?.click()}
+                                  className="w-full py-1.5 px-2 rounded-lg border border-indigo-300 dark:border-indigo-800/60 bg-indigo-50/70 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 font-bold hover:bg-indigo-100 transition-colors flex items-center justify-center gap-1.5 text-xs shadow-2xs"
+                                >
+                                  <ImageIcon className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Insert Photo in Cell</span>
+                                </button>
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddShape('rectangle')}
+                                    className="py-1 px-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold hover:bg-slate-100 dark:hover:bg-zinc-700 transition-colors text-xs text-center"
+                                  >
+                                    + Add Shape
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddTable(2, 2)}
+                                    className="py-1 px-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-800 dark:text-zinc-200 font-bold hover:bg-slate-100 dark:hover:bg-zinc-700 transition-colors text-xs text-center"
+                                  >
+                                    + Subtable
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <p className="text-[11px] text-slate-500 italic">
+                        Click any cell in the table to insert a photo, shape, or subtable inside it.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Rotation (0° to 360°) */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      <span>Rotation</span>
+                      <span className="font-mono text-slate-900 dark:text-zinc-100">{tbl.rotation || 0}°</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={360}
+                        value={tbl.rotation || 0}
+                        onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                        className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        max={360}
+                        value={tbl.rotation || 0}
+                        onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                        className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Delete Table */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTables((prev) => prev.filter((t) => t.id !== selectedTableId));
+                      setSelectedTableId(null);
+                      pushSnapshot({ tables });
+                    }}
+                    className="w-full py-2 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Table</span>
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* CASE 3: IMAGE OVERLAY PROPERTIES */}
+            {selectedOverlayId && !selectedTableId && imageOverlays.some((i) => i.id === selectedOverlayId) && (() => {
+              const img = imageOverlays.find((i) => i.id === selectedOverlayId);
+              if (!img) return null;
+              return (
+                <div className="space-y-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                    ▾ Image Appearance
+                  </div>
+
+                  {/* Dimensions */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Width (pt)</label>
+                      <div className="px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800/40 font-mono font-bold text-slate-900 dark:text-zinc-100 shadow-2xs">
+                        {Math.round(img.width)}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Height (pt)</label>
+                      <div className="px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800/40 font-mono font-bold text-slate-900 dark:text-zinc-100 shadow-2xs">
+                        {Math.round(img.height)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Crop Action Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCropImageId(img.id);
+                      setCropBox({ xPct: 0.05, yPct: 0.05, wPct: 0.9, hPct: 0.9 });
+                    }}
+                    className="w-full py-2 rounded-lg border border-emerald-500/50 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 font-bold hover:bg-emerald-100 transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Crop className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Crop Image</span>
+                  </button>
+
+                  {/* Corner Rounding on Image */}
+                  <div className="space-y-1 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      <span>Corner Rounding (Image)</span>
+                      <span className="font-mono text-slate-900 dark:text-zinc-100">{img.borderRadius || 0}px</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={60}
+                        value={img.borderRadius || 0}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderRadius: val } : i))
+                          );
+                        }}
+                        onMouseUp={() => pushSnapshot({ imageOverlays })}
+                        onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                        className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        max={60}
+                        value={img.borderRadius || 0}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderRadius: val } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Picture Adjustments Section */}
+                  <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-2">
+                    <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                      Picture Adjustments
+                    </div>
+
+                    {/* Brightness */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Brightness</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{img.brightness ?? 100}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={50}
+                        max={150}
+                        value={img.brightness ?? 100}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 100;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, brightness: val } : i))
+                          );
+                        }}
+                        onMouseUp={() => pushSnapshot({ imageOverlays })}
+                        onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                    </div>
+
+                    {/* Contrast */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Contrast</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{img.contrast ?? 100}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={50}
+                        max={150}
+                        value={img.contrast ?? 100}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 100;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, contrast: val } : i))
+                          );
+                        }}
+                        onMouseUp={() => pushSnapshot({ imageOverlays })}
+                        onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                    </div>
+
+                    {/* Saturation */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Saturation</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{img.saturation ?? 100}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={200}
+                        value={img.saturation ?? 100}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 100;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, saturation: val } : i))
+                          );
+                        }}
+                        onMouseUp={() => pushSnapshot({ imageOverlays })}
+                        onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                    </div>
+
+                    {/* Hue Rotate */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Hue Rotate</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{img.hue || 0}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-180}
+                        max={180}
+                        value={img.hue || 0}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, hue: val } : i))
+                          );
+                        }}
+                        onMouseUp={() => pushSnapshot({ imageOverlays })}
+                        onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                    </div>
+
+                    {/* Temperature / Warmth */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Temperature (Warmth)</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{img.temperature || 0}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-100}
+                        max={100}
+                        value={img.temperature || 0}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, temperature: val } : i))
+                          );
+                        }}
+                        onMouseUp={() => pushSnapshot({ imageOverlays })}
+                        onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                        className="w-full h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                    </div>
+
+                    {/* Grayscale, Invert, Flip Controls */}
+                    <div className="grid grid-cols-2 gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, grayscale: !i.grayscale } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className={`py-1.5 px-2 rounded-lg border text-xs font-bold transition-all ${
+                          img.grayscale
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        Grayscale
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, invert: !i.invert } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className={`py-1.5 px-2 rounded-lg border text-xs font-bold transition-all ${
+                          img.invert
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        Invert Colors
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, flipH: !i.flipH } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className={`py-1.5 px-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1 transition-all ${
+                          img.flipH
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        <FlipHorizontal className="w-3.5 h-3.5" />
+                        <span>Flip H</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === selectedOverlayId ? { ...i, flipV: !i.flipV } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className={`py-1.5 px-2 rounded-lg border text-xs font-bold flex items-center justify-center gap-1 transition-all ${
+                          img.flipV
+                            ? 'bg-indigo-600 border-indigo-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-zinc-800 border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        <FlipVertical className="w-3.5 h-3.5" />
+                        <span>Flip V</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Border & Framing (Optional) */}
+                  <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-2">
+                    <div className="text-xs font-black text-slate-900 dark:text-zinc-100 uppercase tracking-wider">
+                      Border & Framing (Optional)
+                    </div>
+
+                    {/* Border Thickness */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        <span>Border Thickness</span>
+                        <span className="font-mono text-slate-900 dark:text-zinc-100">{img.borderWidth || 0}px</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="range"
+                          min={0}
+                          max={20}
+                          value={img.borderWidth || 0}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) || 0;
+                            setImageOverlays((prev) =>
+                              prev.map((i) =>
+                                i.id === selectedOverlayId
+                                  ? { ...i, borderWidth: val, borderColor: i.borderColor || '#000000' }
+                                  : i
+                              )
+                            );
+                          }}
+                          onMouseUp={() => pushSnapshot({ imageOverlays })}
+                          onTouchEnd={() => pushSnapshot({ imageOverlays })}
+                          className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={img.borderWidth || 0}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) || 0;
+                            setImageOverlays((prev) =>
+                              prev.map((i) =>
+                                i.id === selectedOverlayId
+                                  ? { ...i, borderWidth: val, borderColor: i.borderColor || '#000000' }
+                                  : i
+                              )
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Border Style & Color */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Line Style</label>
+                        <select
+                          value={img.borderStyle || 'solid'}
+                          onChange={(e) => {
+                            const val = e.target.value as any;
+                            setImageOverlays((prev) =>
+                              prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderStyle: val } : i))
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold shadow-2xs"
+                        >
+                          <option value="solid">Solid</option>
+                          <option value="dashed">Dashed</option>
+                          <option value="dotted">Dotted</option>
+                          <option value="double">Double</option>
+                          <option value="groove">Groove</option>
+                          <option value="ridge">Ridge</option>
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">Border Color</label>
+                        <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg p-1 shadow-2xs">
+                          <input
+                            type="color"
+                            value={img.borderColor || '#000000'}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setImageOverlays((prev) =>
+                                prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderColor: val } : i))
+                              );
+                            }}
+                            onBlur={() => pushSnapshot({ imageOverlays })}
+                            className="w-5 h-5 rounded cursor-pointer border-0 bg-transparent p-0 flex-shrink-0"
+                          />
+                          <input
+                            type="text"
+                            value={img.borderColor || '#000000'}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setImageOverlays((prev) =>
+                                prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderColor: val } : i))
+                              );
+                            }}
+                            onBlur={() => pushSnapshot({ imageOverlays })}
+                            className="w-14 px-0.5 text-[11px] font-mono font-bold border-0 bg-transparent text-slate-900 dark:text-zinc-100 outline-none"
+                            placeholder="#000000"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setColorTarget('image-border');
+                              setShowColorPickerModal(true);
+                            }}
+                            className="p-0.5 rounded hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-600 dark:text-zinc-400"
+                            title="Open Color Studio"
+                          >
+                            <Palette className="w-3.5 h-3.5 text-blue-600" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Swatches for Border */}
+                    <div className="flex items-center gap-1 pt-0.5">
+                      {['#000000', '#ffffff', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6'].map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => {
+                            setImageOverlays((prev) =>
+                              prev.map((i) => (i.id === selectedOverlayId ? { ...i, borderColor: c } : i))
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          style={{ backgroundColor: c }}
+                          className="w-3.5 h-3.5 rounded-full border border-slate-400 dark:border-zinc-600 transition-transform hover:scale-125"
+                          title={c}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Rotation (0° to 360°) */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      <span>Rotation</span>
+                      <span className="font-mono text-slate-900 dark:text-zinc-100">{img.rotation || 0}°</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={360}
+                        value={img.rotation || 0}
+                        onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                        className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                      <input
+                        type="number"
+                        min={0}
+                        max={360}
+                        value={img.rotation || 0}
+                        onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                        className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Delete Image */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
+                      setSelectedOverlayId(null);
+                      pushSnapshot({ imageOverlays });
+                    }}
+                    className="w-full py-2 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Image</span>
+                  </button>
+                </div>
+              );
+            })()}
+
+            {/* CASE 4: TEXT PROPERTIES (Shown when text is active, or overlay text is selected) */}
+            {(activeEditingId || selectedTextItemId || (selectedOverlayId && textOverlays.some((t) => t.id === selectedOverlayId))) && (
+              <>
+                {/* SECTION 1: FONTS */}
+                <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
+                    ▾ Fonts
+                  </div>
+
+                  {/* Font Family Dropdown */}
+                  <select
+                    value={fontFamily}
+                    onChange={(e) => {
+                      const newFam = e.target.value;
+                      setFontFamily(newFam);
+                      updateActiveTextItemProps({ fontFamily: newFam });
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold text-xs shadow-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none cursor-pointer"
+                  >
+                    {MS_WORD_FONTS.map((font) => (
+                      <option key={font} value={font} style={{ fontFamily: font }}>
+                        {font}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Font Size & Color Row */}
+                  <div className="flex items-center gap-1.5">
+                    <div className="flex-1 flex items-center bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg shadow-xs overflow-hidden">
+                      <input
+                        type="number"
+                        value={fontSize}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          if (!isNaN(val) && val >= 6 && val <= 120) {
+                            setFontSize(val);
+                            updateActiveTextItemProps({ fontSize: val });
+                          }
+                        }}
+                        className="w-full text-center text-xs font-mono font-bold bg-transparent text-slate-900 dark:text-zinc-100 py-1 focus:outline-none"
+                      />
+                      <span className="text-[10px] text-slate-600 dark:text-zinc-400 pr-1.5 font-bold">pt</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newSize = Math.min(120, fontSize + 1);
+                        setFontSize(newSize);
+                        updateActiveTextItemProps({ fontSize: newSize });
+                      }}
+                      className="px-2 py-1 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 font-bold transition-colors"
+                      title="Increase Font Size (A^)"
+                    >
+                      A<span className="text-[9px] align-super">▲</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newSize = Math.max(6, fontSize - 1);
+                        setFontSize(newSize);
+                        updateActiveTextItemProps({ fontSize: newSize });
+                      }}
+                      className="px-2 py-1 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg hover:bg-slate-100 dark:hover:bg-zinc-700 text-slate-900 dark:text-zinc-100 font-bold transition-colors"
+                      title="Decrease Font Size (A_)"
+                    >
+                      A<span className="text-[9px] align-sub">▼</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowColorPickerModal(true)}
+                      className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg hover:bg-slate-50 dark:hover:bg-zinc-700/50 transition-colors shadow-2xs"
+                      title="Open Color Wheel & Palette"
+                    >
+                      <span
+                        className="w-5 h-5 rounded-md border border-slate-300 dark:border-zinc-600 shadow-xs block"
+                        style={{ backgroundColor: textColor }}
+                      />
+                      <ChevronDown className="w-3 h-3 text-slate-600 dark:text-zinc-400" />
+                    </button>
+                  </div>
+
+                  {/* Styles Row: B, I, U, S, A^, A_ */}
+                  <div className="flex items-center bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg p-0.5 gap-0.5 justify-between shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isBold;
+                        setIsBold(next);
+                        updateActiveTextItemProps({ isBold: next });
+                      }}
+                      className={`flex-1 py-1 text-center font-bold rounded-md transition-all ${
+                        isBold ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Bold (Ctrl+B)"
+                    >
+                      B
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isItalic;
+                        setIsItalic(next);
+                        updateActiveTextItemProps({ isItalic: next });
+                      }}
+                      className={`flex-1 py-1 text-center italic font-serif rounded-md transition-all ${
+                        isItalic ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Italic (Ctrl+I)"
+                    >
+                      I
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isUnderline;
+                        setIsUnderline(next);
+                        updateActiveTextItemProps({ isUnderline: next });
+                      }}
+                      className={`flex-1 py-1 text-center underline rounded-md transition-all ${
+                        isUnderline ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Underline (Ctrl+U)"
+                    >
+                      U
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isStrikethrough;
+                        setIsStrikethrough(next);
+                        updateActiveTextItemProps({ isStrikethrough: next });
+                      }}
+                      className={`flex-1 py-1 text-center line-through rounded-md transition-all ${
+                        isStrikethrough ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Strikethrough"
+                    >
+                      S
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isSuperscript;
+                        setIsSuperscript(next);
+                        if (next) setIsSubscript(false);
+                        updateActiveTextItemProps({ isSuperscript: next, isSubscript: false });
+                      }}
+                      className={`flex-1 py-1 text-center text-[10px] font-bold rounded-md transition-all ${
+                        isSuperscript ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Superscript (A^)"
+                    >
+                      A²
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !isSubscript;
+                        setIsSubscript(next);
+                        if (next) setIsSubscript(false);
+                        updateActiveTextItemProps({ isSubscript: next, isSuperscript: false });
+                      }}
+                      className={`flex-1 py-1 text-center text-[10px] font-bold rounded-md transition-all ${
+                        isSubscript ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Subscript (A_)"
+                    >
+                      A₂
+                    </button>
+                  </div>
+
+                  {/* Alignment Row */}
+                  <div className="flex items-center bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg p-0.5 gap-0.5 justify-between shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAlignment('left');
+                        updateActiveTextItemProps({ alignment: 'left' });
+                      }}
+                      className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                        alignment === 'left' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Align Left (Ctrl+L)"
+                    >
+                      <AlignLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAlignment('center');
+                        updateActiveTextItemProps({ alignment: 'center' });
+                      }}
+                      className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                        alignment === 'center' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Align Center (Ctrl+E)"
+                    >
+                      <AlignCenter className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAlignment('right');
+                        updateActiveTextItemProps({ alignment: 'right' });
+                      }}
+                      className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                        alignment === 'right' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Align Right (Ctrl+R)"
+                    >
+                      <AlignRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAlignment('justify' as any);
+                        updateActiveTextItemProps({ alignment: 'justify' as any });
+                      }}
+                      className={`flex-1 p-1 flex items-center justify-center rounded-md transition-all ${
+                        (alignment as any) === 'justify' ? 'bg-indigo-600 text-white shadow-xs' : 'text-slate-800 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                      }`}
+                      title="Justify"
+                    >
+                      <AlignJustify className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* SECTION 2: SPACING */}
+                <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
+                    ▾ Spacing
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">↕ Line Spacing</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        value={lineSpacing}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          if (!isNaN(val)) {
+                            setLineSpacing(val);
+                            updateActiveTextItemProps({ lineSpacing: val });
+                          }
+                        }}
+                        className="w-full px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold shadow-2xs"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">↔ Kerning (AV)</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={characterSpacing}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          if (!isNaN(val)) {
+                            setCharacterSpacing(val);
+                            updateActiveTextItemProps({ characterSpacing: val });
+                          }
+                        }}
+                        className="w-full px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold shadow-2xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">¶ Paragraph Spacing (pt)</label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      max="100"
+                      value={paragraphSpacing}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (!isNaN(val)) {
+                          setParagraphSpacing(val);
+                          updateActiveTextItemProps({ paragraphSpacing: val });
+                        }
+                      }}
+                      className="w-full px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-bold shadow-2xs"
+                    />
+                  </div>
+                </div>
+
+                {/* SECTION 3: ROTATION */}
+                <div className="space-y-2 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                  <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
+                    ▾ Text Rotation (0° to 360°)
+                  </div>
+                  {(() => {
+                    const activeItem = activeEditingId || selectedTextItemId;
+                    const rot = activeItem
+                      ? modifiedTexts[activeItem]?.rotation || detectedTextItems.find((t) => t.id === activeItem)?.rotation || 0
+                      : textOverlays.find((t) => t.id === selectedOverlayId)?.rotation || 0;
+                    return (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min={0}
+                            max={360}
+                            value={rot}
+                            onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                            className="flex-1 h-2 bg-slate-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          />
+                          <input
+                            type="number"
+                            min={0}
+                            max={360}
+                            value={rot}
+                            onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
+                            className="w-14 px-1 py-0.5 text-xs rounded border border-slate-300 dark:border-zinc-700 font-mono text-center text-slate-900 dark:text-zinc-100 bg-white dark:bg-zinc-800 font-bold shadow-2xs"
+                          />
+                          <span className="text-slate-700 dark:text-zinc-300 font-bold">°</span>
+                        </div>
+                        <div className="grid grid-cols-4 gap-1">
+                          {[0, 90, 180, 270].map((deg) => (
+                            <button
+                              key={deg}
+                              type="button"
+                              onClick={() => handleSetElementRotation(deg)}
+                              className="py-1 rounded border border-slate-300 dark:border-zinc-700 text-xs font-mono font-bold text-slate-900 dark:text-zinc-100 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 shadow-2xs transition-colors"
+                            >
+                              {deg}°
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </>
+            )}
+
+            {/* CASE 5: DOCUMENT PAGE PROPERTIES (Shown when nothing is selected) */}
+            {!selectedShapeId && !selectedTableId && !selectedOverlayId && !activeEditingId && !selectedTextItemId && (
+              <div className="space-y-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
+                <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
+                  ▾ Page Details
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">Page Size</label>
+                    <div className="px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono font-bold text-slate-900 dark:text-zinc-100 shadow-2xs">
+                      {Math.round(basePageDims.width)} × {Math.round(basePageDims.height)} pt
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-slate-700 dark:text-zinc-300 font-bold">Rotation</label>
+                    <div className="px-2 py-1 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 font-mono font-bold text-slate-900 dark:text-zinc-100 shadow-2xs">
+                      {pageRotations[currentPage - 1] || 0}°
+                    </div>
+                  </div>
+                </div>
+
+                {/* Page Orientation & Rotation (0°, 90°, 180°, 270°) */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between text-[10px] text-slate-700 dark:text-zinc-300 font-bold">
+                    <span>Page Rotation</span>
+                    <span className="font-mono font-bold text-slate-900 dark:text-zinc-100">{pageRotations[currentPage - 1] || 0}°</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {[
+                      { deg: 0, label: '0°' },
+                      { deg: 90, label: '90°' },
+                      { deg: 180, label: '180°' },
+                      { deg: 270, label: '270°' },
+                    ].map((item) => (
+                      <button
+                        key={item.deg}
+                        type="button"
+                        onClick={() => handleSetPageRotation(item.deg)}
+                        className={`py-1 text-[11px] font-bold rounded border transition-colors shadow-2xs ${
+                          (pageRotations[currentPage - 1] || 0) === item.deg
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'border-slate-300 dark:border-zinc-700 text-slate-900 dark:text-zinc-100 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleRotatePageBy(90)}
+                      className="py-1 rounded border border-slate-300 dark:border-zinc-700 text-[11px] font-bold text-slate-900 dark:text-zinc-100 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 flex items-center justify-center gap-1 shadow-2xs transition-colors"
+                    >
+                      <RotateCw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>+90° CW</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRotatePageBy(-90)}
+                      className="py-1 rounded border border-slate-300 dark:border-zinc-700 text-[11px] font-bold text-slate-900 dark:text-zinc-100 bg-white dark:bg-zinc-800 hover:bg-slate-100 dark:hover:bg-zinc-700 flex items-center justify-center gap-1 shadow-2xs transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      <span>-90° CCW</span>
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleDeleteCurrentPage}
+                  className="w-full py-2 rounded-lg border border-red-300 dark:border-red-900/60 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-bold hover:bg-red-100 transition-colors flex items-center justify-center gap-1.5 shadow-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Current Page</span>
+                </button>
+              </div>
+            )}
           </div>
         </aside>
       )}
@@ -3610,7 +9580,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
       {/* FOOTER: Clean Responsive Zoom Bar (NO Squished Text, fully visible above Android navigation bar) */}
       <footer
-        className="flex items-center justify-center sm:justify-between px-3 sm:px-6 py-2 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 z-30 text-xs text-zinc-600 dark:text-zinc-400 flex-shrink-0 shadow-xs"
+        className="flex items-center justify-center sm:justify-between px-3 sm:px-6 py-1.5 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 z-30 text-xs text-zinc-600 dark:text-zinc-400 flex-shrink-0 shadow-xs"
         style={{
           paddingBottom: 'max(0.6rem, env(safe-area-inset-bottom, 8px))',
         }}
@@ -3747,51 +9717,642 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         </div>
       )}
 
-      {/* Close Confirmation Dialog (Clean, Fully Readable Layout on Android & iOS) */}
+      {/* Unified Right-Click Context Menu (Scrollable & Clamped for Small / Minimized Windows) */}
+      {(elementContextMenu || tableContextMenu) && (() => {
+        const menu = elementContextMenu || (tableContextMenu ? {
+          x: tableContextMenu.x,
+          y: tableContextMenu.y,
+          type: 'table' as const,
+          id: tableContextMenu.tableId,
+          tableRow: tableContextMenu.row,
+          tableCol: tableContextMenu.col,
+        } : null);
+        if (!menu) return null;
+
+        const closeMenu = () => {
+          setElementContextMenu(null);
+          setTableContextMenu(null);
+        };
+
+        return (
+          <div
+            className="fixed inset-0 z-[2147483646]"
+            onClick={closeMenu}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              closeMenu();
+            }}
+          >
+            <div
+              className="fixed z-[2147483647] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl py-1 text-xs w-60 font-medium text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in max-h-[min(380px,80vh)] overflow-y-auto overscroll-contain"
+              style={{
+                left: Math.min(window.innerWidth - 245, Math.max(10, menu.x)),
+                top: Math.min(window.innerHeight - 380, Math.max(10, menu.y)),
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {menu.type === 'table' && (() => {
+                const tbl = tables.find((t) => t.id === menu.id);
+                if (!tbl) return null;
+                const row = menu.tableRow ?? 0;
+                const col = menu.tableCol ?? 0;
+                const cellKey = `${row}_${col}`;
+                const hasCellContent = Boolean(
+                  tbl.cellImages?.[cellKey] || tbl.cellShapes?.[cellKey] || tbl.cellSubtables?.[cellKey]
+                );
+                return (
+                  <>
+                    <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-800">
+                      Table Options ({tbl.rows}×{tbl.cols})
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTables((prev) =>
+                          prev.map((t) => {
+                            if (t.id !== tbl.id) return t;
+                            const newRow = Array(t.cols).fill('');
+                            const nextCells = [...t.cells];
+                            nextCells.splice(row, 0, newRow);
+                            const nextHeights = [...(t.rowHeights || Array(t.rows).fill(26))];
+                            nextHeights.splice(row, 0, 26);
+                            return { ...t, rows: t.rows + 1, cells: nextCells, rowHeights: nextHeights, height: t.height + 26 };
+                          })
+                        );
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>Insert Row Above</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTables((prev) =>
+                          prev.map((t) => {
+                            if (t.id !== tbl.id) return t;
+                            const newRow = Array(t.cols).fill('');
+                            const nextCells = [...t.cells];
+                            nextCells.splice(row + 1, 0, newRow);
+                            const nextHeights = [...(t.rowHeights || Array(t.rows).fill(26))];
+                            nextHeights.splice(row + 1, 0, 26);
+                            return { ...t, rows: t.rows + 1, cells: nextCells, rowHeights: nextHeights, height: t.height + 26 };
+                          })
+                        );
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>Insert Row Below</span>
+                    </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTables((prev) =>
+                          prev.map((t) => {
+                            if (t.id !== tbl.id) return t;
+                            const nextCells = t.cells.map((r) => {
+                              const nr = [...r];
+                              nr.splice(col, 0, '');
+                              return nr;
+                            });
+                            const nextWidths = [...(t.colWidths || Array(t.cols).fill(80))];
+                            nextWidths.splice(col, 0, 80);
+                            return { ...t, cols: t.cols + 1, cells: nextCells, colWidths: nextWidths, width: t.width + 80 };
+                          })
+                        );
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Insert Column Left</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTables((prev) =>
+                          prev.map((t) => {
+                            if (t.id !== tbl.id) return t;
+                            const nextCells = t.cells.map((r) => {
+                              const nr = [...r];
+                              nr.splice(col + 1, 0, '');
+                              return nr;
+                            });
+                            const nextWidths = [...(t.colWidths || Array(t.cols).fill(80))];
+                            nextWidths.splice(col + 1, 0, 80);
+                            return { ...t, cols: t.cols + 1, cells: nextCells, colWidths: nextWidths, width: t.width + 80 };
+                          })
+                        );
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Insert Column Right</span>
+                    </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (tbl.rows <= 1) return;
+                        setTables((prev) =>
+                          prev.map((t) => {
+                            if (t.id !== tbl.id) return t;
+                            const nextCells = t.cells.filter((_, ri) => ri !== row);
+                            const nextHeights = (t.rowHeights || []).filter((_, ri) => ri !== row);
+                            return { ...t, rows: t.rows - 1, cells: nextCells, rowHeights: nextHeights, height: Math.max(26, t.height - 26) };
+                          })
+                        );
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      disabled={tbl.rows <= 1}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-rose-600 dark:text-rose-400 disabled:opacity-40"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Row</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (tbl.cols <= 1) return;
+                        setTables((prev) =>
+                          prev.map((t) => {
+                            if (t.id !== tbl.id) return t;
+                            const nextCells = t.cells.map((r) => r.filter((_, ci) => ci !== col));
+                            const colW = (t.colWidths && t.colWidths[col]) || 80;
+                            const nextWidths = (t.colWidths || []).filter((_, ci) => ci !== col);
+                            return { ...t, cols: t.cols - 1, cells: nextCells, colWidths: nextWidths, width: Math.max(80, t.width - colW) };
+                          })
+                        );
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      disabled={tbl.cols <= 1}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-rose-600 dark:text-rose-400 disabled:opacity-40"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Column</span>
+                    </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableCell({ tableId: tbl.id, row, col });
+                        setSelectedTableId(tbl.id);
+                        setActiveTableImgCell(`${tbl.id}_${row}_${col}`);
+                        closeMenu();
+                        cellImageInputRef.current?.click();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      <span>Insert Photo in Cell</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableCell({ tableId: tbl.id, row, col });
+                        setSelectedTableId(tbl.id);
+                        setShowShapesDropdown(true);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold"
+                    >
+                      <Shapes className="w-3.5 h-3.5" />
+                      <span>Insert Shape in Cell</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableCell({ tableId: tbl.id, row, col });
+                        setSelectedTableId(tbl.id);
+                        handleAddTable(2, 2);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold"
+                    >
+                      <TableIcon className="w-3.5 h-3.5" />
+                      <span>Insert Subtable in Cell</span>
+                    </button>
+                    {hasCellContent && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTables((prev) =>
+                            prev.map((t) => {
+                              if (t.id !== tbl.id) return t;
+                              const nextImgs = { ...(t.cellImages || {}) };
+                              delete nextImgs[cellKey];
+                              const nextShapes = { ...(t.cellShapes || {}) };
+                              delete nextShapes[cellKey];
+                              const nextSubs = { ...(t.cellSubtables || {}) };
+                              delete nextSubs[cellKey];
+                              const nextProps = { ...(t.cellImageProps || {}) };
+                              delete nextProps[cellKey];
+                              return {
+                                ...t,
+                                cellImages: nextImgs,
+                                cellShapes: nextShapes,
+                                cellSubtables: nextSubs,
+                                cellImageProps: nextProps,
+                              };
+                            })
+                          );
+                          pushSnapshot({ tables });
+                          setActiveTableImgCell(null);
+                          closeMenu();
+                        }}
+                        className="w-full text-left px-3 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-red-600 flex items-center gap-2 font-medium"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete Cell Content</span>
+                      </button>
+                    )}
+                    {/* Quick Header Color Swatches */}
+                    <div className="px-3 py-1.5 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="text-[10px] font-semibold text-zinc-500 mb-1">Header Background</div>
+                      <div className="flex items-center gap-1.5">
+                        {['#f1f5f9', '#dbeafe', '#e0e7ff', '#d1fae5', '#fef3c7', '#fee2e2'].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => {
+                              setTables((prev) =>
+                                prev.map((t) => (t.id === tbl.id ? { ...t, headerBgColor: c } : t))
+                              );
+                              pushSnapshot({ tables });
+                            }}
+                            className="w-5 h-5 rounded-full border border-zinc-300 dark:border-zinc-600 hover:scale-110 transition-transform shadow-2xs"
+                            style={{ backgroundColor: c }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPropertiesPanel(true);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Settings className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Table Properties</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTables((prev) => prev.filter((t) => t.id !== tbl.id));
+                        setSelectedTableId(null);
+                        setSelectedTableCell(null);
+                        pushSnapshot({ tables });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-red-600 flex items-center gap-2 font-medium"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Entire Table</span>
+                    </button>
+                  </>
+                );
+              })()}
+
+              {menu.type === 'shape' && (() => {
+                const shp = shapes.find((s) => s.id === menu.id);
+                if (!shp) return null;
+                return (
+                  <>
+                    <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-800">
+                      Shape Options ({shp.type})
+                    </div>
+                    {/* Quick Fill Swatches */}
+                    <div className="px-3 py-1.5">
+                      <div className="text-[10px] font-semibold text-zinc-500 mb-1">Fill Color</div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {[
+                          { label: 'None', color: 'transparent' },
+                          { label: 'White', color: '#ffffff' },
+                          { label: 'Indigo', color: '#4f46e5' },
+                          { label: 'Blue', color: '#3b82f6' },
+                          { label: 'Green', color: '#10b981' },
+                          { label: 'Amber', color: '#f59e0b' },
+                          { label: 'Red', color: '#ef4444' },
+                        ].map((sw) => (
+                          <button
+                            key={sw.color}
+                            type="button"
+                            onClick={() => {
+                              setShapes((prev) =>
+                                prev.map((s) => (s.id === shp.id ? { ...s, fillColor: sw.color } : s))
+                              );
+                              pushSnapshot({ shapes });
+                            }}
+                            className="w-5 h-5 rounded-full border border-zinc-300 dark:border-zinc-600 hover:scale-110 transition-transform shadow-2xs relative flex items-center justify-center text-[9px]"
+                            style={{ backgroundColor: sw.color === 'transparent' ? '#ffffff' : sw.color }}
+                            title={sw.label}
+                          >
+                            {sw.color === 'transparent' && <span className="text-red-500 font-bold text-[10px]">✕</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Quick Stroke Width */}
+                    <div className="px-3 py-1.5 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="text-[10px] font-semibold text-zinc-500 mb-1">Stroke Width</div>
+                      <div className="flex items-center gap-2">
+                        {[1, 2, 3, 5].map((w) => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => {
+                              setShapes((prev) =>
+                                prev.map((s) => (s.id === shp.id ? { ...s, strokeWidth: w } : s))
+                              );
+                              pushSnapshot({ shapes });
+                            }}
+                            className={`px-2 py-0.5 rounded border text-[11px] font-bold ${
+                              shp.strokeWidth === w
+                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                : 'border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                            }`}
+                          >
+                            {w}px
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    {/* Duplicate Shape */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dup: ShapeOverlay = {
+                          ...shp,
+                          id: `shape_${Date.now()}`,
+                          x: shp.x + 20,
+                          y: shp.y - 20,
+                        };
+                        setShapes((prev) => {
+                          const next = [...prev, dup];
+                          pushSnapshot({ shapes: next });
+                          return next;
+                        });
+                        setSelectedShapeId(dup.id);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Duplicate Shape</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPropertiesPanel(true);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Settings className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Shape Properties</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShapes((prev) => prev.filter((s) => s.id !== shp.id));
+                        setSelectedShapeId(null);
+                        pushSnapshot({ shapes });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-red-600 flex items-center gap-2 font-medium"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Shape</span>
+                    </button>
+                  </>
+                );
+              })()}
+
+              {menu.type === 'image' && (() => {
+                const img = imageOverlays.find((i) => i.id === menu.id);
+                if (!img) return null;
+                return (
+                  <>
+                    <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-800">
+                      Picture Options
+                    </div>
+                    {/* Quick Filters */}
+                    <div className="px-3 py-1.5">
+                      <div className="text-[10px] font-semibold text-zinc-500 mb-1">Quick Filters</div>
+                      <div className="grid grid-cols-2 gap-1 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImageOverlays((prev) =>
+                              prev.map((i) =>
+                                i.id === img.id
+                                  ? { ...i, grayscale: false, invert: false, brightness: 100, contrast: 100, saturation: 100 }
+                                  : i
+                              )
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          className="px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left font-medium"
+                        >
+                          Normal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImageOverlays((prev) =>
+                              prev.map((i) => (i.id === img.id ? { ...i, grayscale: !i.grayscale } : i))
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          className={`px-2 py-1 rounded border text-left font-medium ${
+                            img.grayscale
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                          }`}
+                        >
+                          B&W / Mono
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImageOverlays((prev) =>
+                              prev.map((i) => (i.id === img.id ? { ...i, invert: !i.invert } : i))
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          className={`px-2 py-1 rounded border text-left font-medium ${
+                            img.invert
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                          }`}
+                        >
+                          Invert
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImageOverlays((prev) =>
+                              prev.map((i) => (i.id === img.id ? { ...i, contrast: i.contrast === 140 ? 100 : 140 } : i))
+                            );
+                            pushSnapshot({ imageOverlays });
+                          }}
+                          className={`px-2 py-1 rounded border text-left font-medium ${
+                            img.contrast === 140
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                          }`}
+                        >
+                          High Contrast
+                        </button>
+                      </div>
+                    </div>
+                    {/* Flips & Crop */}
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <div className="flex items-center gap-1 px-3 py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === img.id ? { ...i, flipH: !i.flipH } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className="flex-1 py-1 rounded border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-[11px] font-medium text-center"
+                      >
+                        Flip Horiz
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageOverlays((prev) =>
+                            prev.map((i) => (i.id === img.id ? { ...i, flipV: !i.flipV } : i))
+                          );
+                          pushSnapshot({ imageOverlays });
+                        }}
+                        className="flex-1 py-1 rounded border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-[11px] font-medium text-center"
+                      >
+                        Flip Vert
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCropImageId(img.id);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Crop className="w-3.5 h-3.5 text-indigo-500" />
+                      <span>Crop Picture</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const dup: ImageOverlay = {
+                          ...img,
+                          id: `img_${Date.now()}`,
+                          x: img.x + 20,
+                          y: img.y - 20,
+                        };
+                        setImageOverlays((prev) => {
+                          const next = [...prev, dup];
+                          pushSnapshot({ imageOverlays: next });
+                          return next;
+                        });
+                        setSelectedOverlayId(dup.id);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Duplicate Picture</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPropertiesPanel(true);
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Settings className="w-3.5 h-3.5 text-zinc-500" />
+                      <span>Picture Properties</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImageOverlays((prev) => prev.filter((i) => i.id !== img.id));
+                        setSelectedOverlayId(null);
+                        pushSnapshot({ imageOverlays });
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-red-600 flex items-center gap-2 font-medium"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete Picture</span>
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Document Close Confirmation Modal */}
       {showCloseConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl w-full max-w-md border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 flex-shrink-0">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100">
-                  Save Changes Before Closing?
-                </h3>
-                <p className="text-xs text-zinc-500">
-                  You have unsaved edits in this document.
-                </p>
-              </div>
+        <div className="fixed inset-0 z-[9999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in select-none">
+          <div className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-2xl w-full max-w-sm border border-zinc-200/90 dark:border-zinc-800 shadow-2xl p-5 space-y-4">
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+                Unsaved Changes
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                You have unsaved edits in this document. Would you like to save your edits before closing?
+              </p>
             </div>
 
-            <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
-              Would you like to save your edited PDF to your device now, or discard all changes made during this session?
-            </p>
-
-            <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-2">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
               <button
+                type="button"
                 onClick={() => setShowCloseConfirmModal(false)}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                className="px-3 py-1.5 rounded-xl border border-zinc-200 dark:border-zinc-700 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               >
-                Cancel
+                Keep Editing
               </button>
               <button
+                type="button"
                 onClick={() => {
                   setShowCloseConfirmModal(false);
                   onClose();
                 }}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-semibold transition-colors"
+                className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors shadow-xs"
               >
                 Discard & Close
               </button>
               <button
+                type="button"
                 onClick={async () => {
                   await handleSave();
                   setShowCloseConfirmModal(false);
                   onClose();
                 }}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-sm active:scale-95"
+                className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all shadow-xs"
               >
                 Save & Close
               </button>
@@ -3857,49 +10418,168 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
       {/* Single Tab Unsaved Edits Confirmation Modal */}
       {tabCloseConfirmTarget && (
-        <div className="fixed inset-0 z-[9999999] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in select-none">
-          <div className="w-full max-w-md bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2.5 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex-shrink-0">
-                <AlertCircle className="w-6 h-6" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
-                  Save Changes to "{tabCloseConfirmTarget.name}"?
-                </h3>
-                <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                  This document has unsaved edits. If you close without saving, your changes will be discarded.
-                </p>
-              </div>
+        <div className="fixed inset-0 z-[9999999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in select-none">
+          <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="space-y-1.5">
+              <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                Close "{tabCloseConfirmTarget.name}"?
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                This document has unsaved edits. Would you like to save your changes before closing?
+              </p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-2 pt-2 sm:justify-end">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
               <button
+                type="button"
                 onClick={() => setTabCloseConfirmTarget(null)}
-                className="px-4 py-2 text-xs font-medium rounded-xl bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors"
+                className="px-3 py-1.5 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               >
-                Cancel
+                Keep Editing
               </button>
               <button
+                type="button"
                 onClick={() => {
                   const id = tabCloseConfirmTarget.id;
                   setTabCloseConfirmTarget(null);
                   performCloseTab(id);
                 }}
-                className="px-4 py-2 text-xs font-semibold rounded-xl bg-zinc-200 hover:bg-zinc-300 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 transition-colors"
+                className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors shadow-xs"
               >
-                Don't Save
+                Discard & Close
               </button>
               <button
+                type="button"
                 onClick={async () => {
                   const id = tabCloseConfirmTarget.id;
                   setTabCloseConfirmTarget(null);
                   await handleSave();
                   performCloseTab(id);
                 }}
-                className="px-4 py-2 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-xs"
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-xs"
               >
-                Save & Close
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Page Confirmation Dialog */}
+      {pageToDelete !== null && (
+        <div className="fixed inset-0 z-[9999999] bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in select-none">
+          <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-base text-zinc-900 dark:text-zinc-100">
+                  Delete Page {pageToDelete}?
+                </h3>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                  Do you want to delete this page? This will remove Page {pageToDelete} and any annotations or elements placed on it.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+              <button
+                type="button"
+                onClick={() => setPageToDelete(null)}
+                className="px-3 py-1.5 text-xs font-medium rounded-xl border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => performDeletePage(pageToDelete)}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors shadow-xs"
+              >
+                Delete Page
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Page Thumbnail Context Menu */}
+      {pageThumbnailContextMenu && (
+        <div
+          className="fixed inset-0 z-[99999] select-none"
+          onClick={() => setPageThumbnailContextMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setPageThumbnailContextMenu(null);
+          }}
+        >
+          <div
+            style={{
+              top: `${Math.min(window.innerHeight - 200, pageThumbnailContextMenu.y)}px`,
+              left: `${Math.min(window.innerWidth - 220, pageThumbnailContextMenu.x)}px`,
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="fixed z-[100000] w-52 bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200 divide-y divide-zinc-100 dark:divide-zinc-800 animate-in fade-in zoom-in-95 duration-100"
+          >
+            <div className="px-3 py-1 text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+              Page {pageThumbnailContextMenu.pageNum} Options
+            </div>
+            <div className="py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const p = pageThumbnailContextMenu.pageNum;
+                  setPageThumbnailContextMenu(null);
+                  handleInsertBlankPage('before', 'same', p);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-700 dark:text-zinc-200"
+              >
+                <Plus className="w-3.5 h-3.5 text-indigo-500" />
+                <span>Insert Blank Page Before</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const p = pageThumbnailContextMenu.pageNum;
+                  setPageThumbnailContextMenu(null);
+                  handleInsertBlankPage('after', 'same', p);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-700 dark:text-zinc-200"
+              >
+                <Plus className="w-3.5 h-3.5 text-indigo-500" />
+                <span>Insert Blank Page After</span>
+              </button>
+            </div>
+            <div className="py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const p = pageThumbnailContextMenu.pageNum;
+                  setPageThumbnailContextMenu(null);
+                  handleRotatePageNum(p, 90);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-indigo-50 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-700 dark:text-zinc-200"
+              >
+                <RotateCw className="w-3.5 h-3.5 text-amber-500" />
+                <span>Rotate 90° Clockwise</span>
+              </button>
+            </div>
+            <div className="py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const p = pageThumbnailContextMenu.pageNum;
+                  setPageThumbnailContextMenu(null);
+                  if (totalPages <= 1) {
+                    setError('Cannot delete the only page in the document.');
+                  } else {
+                    setPageToDelete(p);
+                  }
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 text-red-600 dark:text-red-400 font-semibold"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Page {pageThumbnailContextMenu.pageNum}</span>
               </button>
             </div>
           </div>
@@ -3944,6 +10624,89 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             onClose();
           }}
         />
+      )}
+      {/* Hidden File Input for Inserting Image into Selected Table Cell */}
+      <input
+        type="file"
+        ref={cellImageInputRef}
+        onChange={handleInsertCellImageInput}
+        accept="image/*"
+        className="hidden"
+      />
+
+      {/* Hyperlink Dialog Modal */}
+      {showLinkModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 rounded-2xl p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-zinc-800">
+              <h3 className="font-bold text-sm text-slate-900 dark:text-zinc-100 flex items-center gap-2">
+                <LinkIcon className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Insert Hyperlink</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowLinkModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {!linkModalData.targetTextItemId && !linkModalData.targetOverlayId && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">
+                    Display Text
+                  </label>
+                  <input
+                    type="text"
+                    value={linkModalData.text}
+                    onChange={(e) => setLinkModalData((prev) => ({ ...prev, text: e.target.value }))}
+                    placeholder="e.g. Click Here / Visit Website"
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 dark:text-zinc-300 mb-1">
+                  Destination URL
+                </label>
+                <input
+                  type="url"
+                  value={linkModalData.url}
+                  onChange={(e) => setLinkModalData((prev) => ({ ...prev, url: e.target.value }))}
+                  placeholder="https://example.com"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleApplyLink(linkModalData.text, linkModalData.url);
+                    }
+                  }}
+                  className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-medium focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowLinkModal(false)}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-slate-700 dark:text-zinc-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyLink(linkModalData.text, linkModalData.url)}
+                className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-xs"
+              >
+                Apply Link
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

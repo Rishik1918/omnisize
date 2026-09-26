@@ -1,7 +1,9 @@
 {
   "name": "omnisize",
   "private": true,
-  "version": "2.7.0",
+  "version": "2.9.5",
+  "author": "Rishik",
+  "description": "Omnisize - Document & PDF Suite by Rishik",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -52,6 +54,7 @@
   "build": {
     "appId": "com.omnisize.app",
     "productName": "Omnisize",
+    "copyright": "Copyright © 2026 Rishik",
     "directories": {
       "output": "release"
     },
@@ -120,7 +123,9 @@
       "shortcutName": "Omnisize",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
-      "uninstallDisplayName": "Omnisize"
+      "uninstallDisplayName": "Omnisize (by Rishik)",
+      "warningsAsErrors": false,
+      "differentialPackage": false
     }
   }
 }
