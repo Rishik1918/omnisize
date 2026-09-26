@@ -1,12 +1,12 @@
-# Omnisize ⚡ Professional Document & PDF Studio • Universal Media Suite
+# Omnisize
 
 <p align="center">
-  <img src="public/favicon.svg" alt="Omnisize Logo" width="80" height="80" />
+  <img src="public/icon.png" alt="Omnisize Logo" width="120" height="120" />
 </p>
 
 <p align="center">
-  <strong>The Ultimate 100% Private, Client-Side Document & Media Powerhouse.</strong><br>
-  Edit PDFs like Microsoft Word, compress videos & photos to exact target sizes, perform multilingual OCR, manage digital signatures, and convert documents — completely offline on your device.
+  <strong>Client-Side Document and PDF Studio with Universal Media Processing</strong><br>
+  Edit PDFs with word-processor precision, optimize media to exact target file sizes, perform multilingual OCR, verify digital signatures, and convert files offline on your device.
 </p>
 
 <p align="center">
@@ -18,143 +18,138 @@
 
 ---
 
-## 🌟 Highlights & Key Features
+## Core Capabilities
 
-### 📑 1. Microsoft Word-Grade PDF Studio
-- **Continuous Smooth Scrolling**: Smooth, glitch-free vertical document scrolling across all pages, just like Acrobat and MS Word.
-- **Word-Style Ribbon Interface**: Organized into *File*, *Home*, *Insert*, *Page*, *Review*, and *View* tabs.
-- **Rich Text & Typography**: Full formatting control — font family, size, line spacing, bold, italic, underline, strikethrough, subscript, superscript, text alignment, and color highlights.
-- **Interactive Tables & Subtables**:
-  - Insert customizable grid tables with draggable row/column dividers.
-  - Insert **photos, geometric shapes, or subtables** directly into table cells.
-  - Independent, unclipped resizer handles (`SE corner`, `E edge`, `S edge`) inside cells that never conflict with outer table boundaries.
-- **Standard MS Word Margins**:
-  - Presets: *Normal*, *Narrow*, *Moderate*, *Wide*, *Mirrored*, and *Office 2003 Default*.
-  - Interactive Custom Margins with real-time dashed canvas guidelines and visibility toggle.
-- **Smart Cursor-Based Insertion**: Elements (images, shapes, tables, text) drop right where your cursor points or clicks on the active page canvas.
+### 1. Document and PDF Studio
+- **Continuous Document Scrolling**: Vertical multi-page document layout with smooth scrolling across all pages.
+- **Ribbon Command Interface**: Comprehensive toolbar organized into File, Home, Insert, Page, Review, and View tabs.
+- **Typography and Text Formatting**: Font family selection, font size, line spacing, bold, italic, underline, strikethrough, subscript, superscript, text alignment, and color highlighting.
+- **Interactive Tables and Subtables**:
+  - Insert configurable grid tables with draggable row and column dividers.
+  - Insert photos, geometric shapes, or nested subtables directly inside table cells.
+  - Independent corner and edge handles inside cells allowing real-time cell resizing without affecting outer table boundaries.
+- **Standard Document Margins**:
+  - Presets: Normal, Narrow, Moderate, Wide, Mirrored, and Office 2003 Default.
+  - Custom margins with interactive numeric inputs and canvas guidelines.
+- **Cursor-Targeted Insertion**: Elements such as images, shapes, tables, and text boxes are placed directly at the pointer coordinates on the active page canvas.
 - **Page Thumbnail Manager**:
-  - Drag-and-drop page reordering with intuitive drop targets.
-  - Right-click context menu: Insert blank page (before/after), rotate 90°, or delete page.
-  - Page deletion confirmation safety modal with direct `Delete` key support.
-- **Optical Character Recognition (OCR)**: In-browser text extraction supporting English + Hindi (`eng+hin`) powered by Tesseract.js.
-- **Digital Signatures & Hotspots**: Inspect and verify PDF digital certificate properties with visual hotspot overlays (including Aadhaar document layout compatibility).
-- **Session Auto-Persistence**: Automatic in-memory and local session preservation so you never lose work accidentally.
+  - Drag-and-drop page reordering with visible target indicators.
+  - Context menu options: Insert blank page before or after, rotate 90 degrees clockwise, and delete page.
+  - Confirmation prompt on page deletion with dedicated Delete key support.
+- **Optical Character Recognition (OCR)**: In-browser text extraction supporting English and Hindi (eng+hin) using Tesseract.js WebAssembly.
+- **Digital Signatures**: Inspection and certificate validation for embedded PDF digital signatures with interactive canvas hotspots, including support for Aadhaar layout formats.
+- **Session Auto-Persistence**: Background IndexedDB snapshot saving that protects in-progress work across application restarts and platform task switching.
+
+### 2. Universal Image Processing
+- **Supported Formats**: JPEG, PNG, WebP, AVIF, GIF, SVG, BMP.
+- **Target File Size Engine**: Binary-search compression to meet exact portal upload limits (such as under 50 KB, 100 KB, or 200 KB).
+- **Image Editing**:
+  - Non-destructive crop tool with rule-of-thirds alignment grid.
+  - Dedicated mobile interface with separated rotation and crop controls.
+  - Adjustments for brightness, contrast, saturation, grayscale, invert, and color temperature.
+- **Edge-Preserving Super-Resolution**: 2x and 4x upscaling with unsharp masking.
+- **Object and Watermark Eraser**: Telea and Fast-Marching gradient inpainting for removing timestamps, logos, and artifacts.
+
+### 3. Video Optimization
+- **Supported Formats**: MP4, WebM, MOV, MKV.
+- **Target Size Calculator**: Automatic bitrate calculation tailored to upload limits for email, messaging, and chat platforms.
+- **Resolution Scaling**: Downscale from 4K, 1080p, 720p, or 480p, or apply custom aspect dimensions.
+- **Audio Control**: Option to retain, re-encode, or mute audio streams.
 
 ---
 
-### 🖼️ 2. Universal Media & Image Compressor
-- **Broad Format Support**: `JPEG`, `PNG`, `WebP`, `AVIF`, `GIF`, `SVG`, `BMP`.
-- **Target File Size Engine**: Binary-search compression guarantees output matches portal upload requirements (e.g., `< 50 KB`, `< 100 KB`, `< 200 KB`).
-- **Precision Image Manipulation**:
-  - Interactive non-destructive Crop with rule-of-thirds grid.
-  - Dedicated Android & touch UX with conflict-free rotate & crop buttons.
-  - Contrast, brightness, saturation, grayscale, invert, temperature, and aspect-ratio locking.
-- **AI / Lanczos Edge-Preserving Super-Resolution**: 2x and 4x upscaling with unsharp masking.
-- **Watermark & Object Eraser**: Telea / Fast-Marching gradient inpainting to seamlessly remove timestamps and logos.
+## Privacy and Security Architecture
 
----
-
-### 🎥 3. Video Compression & Optimization
-- **Formats**: `MP4`, `WebM`, `MOV`, `MKV`.
-- **Target MB Calculator**: Automatic bitrate calculation to fit platforms with strict limits (Discord 25MB, WhatsApp, Email).
-- **Resolution Scaling**: Downscale (4K → 1080p → 720p → 480p) or custom dimensions.
-- **Audio Stream Controls**: Keep, re-encode, or mute audio tracks.
-
----
-
-## 🔒 Zero-Knowledge Privacy Architecture
-
-| Principle | How Omnisize Enforces It |
+| Security Principle | Implementation |
 |---|---|
-| **0 Server Uploads** | All processing is executed locally on your device CPU/GPU via WebAssembly (WASM), Canvas API, and WebCodecs. |
-| **No Telemetry / No Tracking** | Omnisize makes zero external API requests and requires no accounts, licenses, or subscriptions. |
-| **EXIF & Metadata Sanitization** | Automatically strips GPS coordinates, camera serial numbers, and author metadata upon export. |
-| **Air-Gapped Operation** | Works 100% offline — disconnect your Wi-Fi and everything still functions seamlessly. |
+| Zero Server Uploads | All operations run locally inside your browser runtime or desktop binary using WebAssembly, Canvas API, and WebCodecs. |
+| Zero Telemetry | No telemetry collection, external API calls, third-party analytics, user tracking, or account requirements. |
+| Metadata Sanitization | Automatically removes camera metadata, GPS coordinates, author history, and device serial numbers upon export. |
+| Air-Gapped Operation | Functions completely offline with no network connection required. |
 
 ---
 
-## ⌨️ Essential Keyboard Shortcuts
+## Keyboard Shortcuts
 
-| Shortcut | Action |
+| Shortcut | Description |
 |---|---|
-| `Delete` | Deletes selected element (or prompts to delete current page if nothing is selected) |
-| `Ctrl + Z` / `Cmd + Z` | Undo last action |
-| `Ctrl + Y` / `Cmd + Shift + Z` | Redo action |
-| `Ctrl + S` / `Cmd + S` | Export & Save document |
-| `Escape` | Deselect active element / Close modals |
-| `Space + Drag` | Pan document canvas freely |
+| Delete | Deletes selected element; if nothing is selected, prompts to delete the active page |
+| Ctrl + Z / Cmd + Z | Undo previous action |
+| Ctrl + Y / Cmd + Shift + Z | Redo action |
+| Ctrl + S / Cmd + S | Export and save active document |
+| Escape | Clear selection or dismiss open modal |
+| Space + Drag | Pan the document canvas |
 
 ---
 
-## 🚀 Getting Started
+## Development Setup
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher recommended)
-- [npm](https://www.npmjs.com/)
+### Requirements
+- Node.js (version 18 or later)
+- npm (version 9 or later)
 
-### 1. Clone & Install
+### Installation
 ```bash
-git clone https://github.com/rishik/omnisize.git
+git clone https://github.com/Rishik1918/omnisize.git
 cd omnisize
 npm install
 ```
 
-### 2. Run Web Development Server
+### Run Web Development Server
 ```bash
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open http://localhost:5173 in a web browser.
 
 ---
 
-## 📦 Building Releases
+## Build and Distribution
 
-### 🌐 Web Application (Production)
+### Web Production Build
 ```bash
 npm run build
 ```
-The compiled static assets will be located in `dist/`, ready to be hosted on Vercel, Cloudflare Pages, GitHub Pages, or Netlify.
+Generates production-ready static assets in the `dist/` directory.
 
-### 💻 Windows Desktop (Electron)
-Omnisize supports standalone portable and NSIS installer releases:
+### Windows Desktop Executables
 ```bash
 # Build NSIS Setup Installer (.exe)
 npm run dist:installer
 
-# Build Portable Standalone (.exe)
+# Build Standalone Portable Executable (.exe)
 npm run dist:win
 ```
-Output binaries are generated in the `release/` directory:
-- `Omnisize Setup 2.9.5.exe` (Installer)
-- `Omnisize 2.9.5.exe` (Portable)
+Binaries are output to the `release/` directory:
+- `Omnisize Setup 2.9.5.exe` (NSIS Installer)
+- `Omnisize 2.9.5.exe` (Portable executable)
 
-### 📱 Android Application (Capacitor)
+### Android Application
 ```bash
-# Sync web assets to Android
+# Sync production build to Android project
 npm run build
 npx cap sync android
 
-# Build Release APK via Gradle
+# Build Release APK
 cd android
 ./gradlew assembleRelease
 ```
-Output APK is generated at:
+The compiled APK is placed at:
 `android/app/build/outputs/apk/release/app-release.apk`
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
-- **Framework**: React 18, TypeScript, Vite
-- **Styling**: Tailwind CSS, Lucide React icons
-- **Document Processing**: `pdf-lib`, `pdfjs-dist`, `mammoth`, `docx`, `xlsx`, `pako`
-- **OCR Engine**: Tesseract.js (WebAssembly)
-- **Desktop Runtime**: Electron 44, electron-builder
-- **Mobile Engine**: Capacitor 8 (Android runtime)
-- **Cryptography & Signatures**: `node-forge`
+- Frontend Framework: React 18, TypeScript, Vite
+- Styling: Tailwind CSS, Lucide React
+- Document Engine: pdf-lib, pdfjs-dist, mammoth, docx, xlsx, pako
+- OCR Engine: Tesseract.js (WebAssembly)
+- Desktop Platform: Electron 44, electron-builder
+- Mobile Platform: Capacitor 8 (Android)
+- Cryptographic Utilities: node-forge
 
 ---
 
-## 📄 License
+## License
 
-Distributed under the **MIT License**. Free and open-source for personal and commercial use.
+This project is licensed under the MIT License. Free for both commercial and personal use.
