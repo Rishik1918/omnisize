@@ -1726,7 +1726,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (!canvasRef.current) return;
     try {
       setIsOcrScanningPage(true);
-      setOcrProgressText('Initializing OCR optical recognition...');
+      setOcrProgressText('Initializing PaddleOCR (PP-OCRv4) ONNX...');
 
       const items = await OcrEngine.extractTextBoundingBoxes(
         canvasRef.current,

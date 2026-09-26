@@ -2,6 +2,14 @@ import { getDocumentProxy } from 'unpdf';
 import { recognize, createWorker } from 'tesseract.js';
 import { Document, Paragraph, TextRun, HeadingLevel, Packer } from 'docx';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import {
+  PaddleOcrService,
+  V4_MOBILE_MODEL,
+  V4_EN_MOBILE_MODEL,
+  V5_DEVANAGARI_MOBILE_MODEL,
+  type RecognitionResult,
+  type PaddleOcrResult,
+} from 'ppu-paddle-ocr/web';
 
 export interface OcrProgress {
   currentPage: number;
@@ -17,8 +25,109 @@ export interface OcrPageResult {
 }
 
 export class OcrEngine {
+  private static paddleServices: Map<string, PaddleOcrService> = new Map();
+  private static paddleInitPromises: Map<string, Promise<PaddleOcrService>> = new Map();
+
   /**
-   * Helper to run tesseract with graceful fallback if non-English traineddata fails
+   * Get or initialize a PaddleOCR service instance with PP-OCRv4 ONNX Runtime models.
+   * - V4_MOBILE_MODEL for general / multilingual
+   * - V4_EN_MOBILE_MODEL for English
+   * - V5_DEVANAGARI_MOBILE_MODEL for Devanagari/Hindi
+   */
+  private static async getPaddleService(lang: string = 'eng+hin'): Promise<PaddleOcrService> {
+    let modelKey = 'v4_mobile';
+    let modelConfig: any = V4_MOBILE_MODEL;
+
+    if (lang === 'eng') {
+      modelKey = 'v4_en';
+      modelConfig = V4_EN_MOBILE_MODEL;
+    } else if (lang.includes('hin') || lang.includes('devanagari')) {
+      modelKey = 'v5_devanagari';
+      modelConfig = V5_DEVANAGARI_MOBILE_MODEL;
+    }
+
+    if (this.paddleServices.has(modelKey)) {
+      return this.paddleServices.get(modelKey)!;
+    }
+
+    if (this.paddleInitPromises.has(modelKey)) {
+      return await this.paddleInitPromises.get(modelKey)!;
+    }
+
+    const initPromise = (async () => {
+      const service = new PaddleOcrService({
+        model: modelConfig,
+        processing: { engine: 'canvas-native' },
+        session: {
+          executionProviders: ['webgpu', 'wasm', 'cpu'],
+          graphOptimizationLevel: 'all',
+        },
+      });
+      await service.initialize();
+      this.paddleServices.set(modelKey, service);
+      return service;
+    })();
+
+    this.paddleInitPromises.set(modelKey, initPromise);
+
+    try {
+      return await initPromise;
+    } catch (err) {
+      this.paddleInitPromises.delete(modelKey);
+      throw err;
+    }
+  }
+
+  /**
+   * Primary OCR runner using PaddleOCR (PP-OCRv4) with ONNX Runtime acceleration.
+   * If PaddleOCR encounters an offline or environment failure, gracefully falls back to auxiliary engine.
+   */
+  private static async recognizeWithPaddleOcr(
+    source: HTMLCanvasElement | Blob | File | ArrayBuffer,
+    language: string,
+    onProgressUpdate?: (percent: number, status: string) => void
+  ): Promise<{ text: string; lines?: RecognitionResult[][]; confidence: number; engine: string }> {
+    try {
+      onProgressUpdate?.(15, 'Initializing PaddleOCR (PP-OCRv4) ONNX Engine...');
+      const service = await this.getPaddleService(language);
+
+      onProgressUpdate?.(45, 'PP-OCRv4 text detection (DBNet) running...');
+
+      let input: HTMLCanvasElement | ArrayBuffer;
+      if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
+        input = source;
+      } else if (source instanceof ArrayBuffer) {
+        input = source;
+      } else if (source instanceof Blob || (typeof File !== 'undefined' && source instanceof File)) {
+        input = await source.arrayBuffer();
+      } else {
+        throw new Error('Unsupported image source type for PaddleOCR');
+      }
+
+      onProgressUpdate?.(70, 'PP-OCRv4 neural text recognition (ONNX Runtime)...');
+      const res = await service.recognize(input as any, { flatten: false });
+      onProgressUpdate?.(95, 'PP-OCRv4 character recognition complete');
+
+      return {
+        text: res.text || '',
+        lines: res.lines || [],
+        confidence: Math.round((res.confidence || 0) * 100),
+        engine: 'PaddleOCR (PP-OCRv4) ONNX',
+      };
+    } catch (err) {
+      console.warn('PaddleOCR (PP-OCRv4) failed, falling back to auxiliary OCR engine:', err);
+      onProgressUpdate?.(30, 'Auxiliary OCR engine initializing...');
+      const fallbackRes = await this.recognizeWithFallback(source, language, onProgressUpdate);
+      return {
+        text: fallbackRes.data.text.trim(),
+        confidence: fallbackRes.data.confidence || 0,
+        engine: 'Auxiliary OCR Engine',
+      };
+    }
+  }
+
+  /**
+   * Helper to run auxiliary OCR with graceful fallback if non-English traineddata fails
    */
   private static async recognizeWithFallback(
     source: any,
@@ -49,7 +158,7 @@ export class OcrEngine {
   }
 
   /**
-   * Run OCR on any image file (PNG, JPG, WebP, etc.) with bilingual Hindi+English default
+   * Run OCR on any image file (PNG, JPG, WebP, etc.) using PaddleOCR (PP-OCRv4) ONNX
    */
   static async runOcrOnImage(
     file: File | Blob,
@@ -59,11 +168,11 @@ export class OcrEngine {
     onProgress?.({
       currentPage: 1,
       totalPages: 1,
-      status: `Initializing OCR (${language === 'eng+hin' ? 'Bilingual English + Hindi' : language})...`,
+      status: `Initializing PaddleOCR PP-OCRv4 ONNX (${language === 'eng+hin' ? 'Bilingual English + Hindi' : language})...`,
       percent: 10,
     });
 
-    const result = await this.recognizeWithFallback(file, language, (pct, status) => {
+    const result = await this.recognizeWithPaddleOcr(file, language, (pct, status) => {
       onProgress?.({
         currentPage: 1,
         totalPages: 1,
@@ -75,11 +184,11 @@ export class OcrEngine {
     onProgress?.({
       currentPage: 1,
       totalPages: 1,
-      status: 'OCR Completed Successfully',
+      status: `PaddleOCR (PP-OCRv4) Completed Successfully`,
       percent: 100,
     });
 
-    return result.data.text.trim();
+    return result.text.trim();
   }
 
   /**
@@ -252,42 +361,6 @@ export class OcrEngine {
       } catch (e) {}
     }
 
-    const handleLogger = (m: any) => {
-      if (m && m.progress !== undefined) {
-        const pct = Math.round((m.progress || 0) * 100);
-        let status = 'Detecting layout...';
-        if (m.status === 'loading tesseract core') status = 'Initializing OCR core...';
-        else if (m.status === 'loading language traineddata') status = `Loading language model (${language})...`;
-        else if (m.status === 'initializing api') status = 'Analyzing document characters...';
-        else if (m.status === 'recognizing text') status = `Extracting text lines (${pct}%)...`;
-        onProgress?.(pct, status);
-      }
-    };
-
-    let worker: any = null;
-    let res: any = null;
-
-    try {
-      try {
-        worker = await createWorker(language, 1, { logger: handleLogger });
-      } catch (langErr) {
-        if (language !== 'eng') {
-          console.warn(`Language ${language} worker initialization failed, falling back to English:`, langErr);
-          worker = await createWorker('eng', 1, { logger: handleLogger });
-        } else {
-          throw langErr;
-        }
-      }
-
-      res = await worker.recognize(imageSource, {}, { blocks: true });
-    } finally {
-      if (worker) {
-        try {
-          await worker.terminate();
-        } catch (_) {}
-      }
-    }
-
     const scaleX = pageWidth / canvasW;
     const scaleY = pageHeight / canvasH;
 
@@ -308,18 +381,92 @@ export class OcrEngine {
       bgColorHex?: string;
     }[] = [];
 
-    // Extract lines from hierarchical blocks -> paragraphs -> lines
     const lines: { text: string; bbox: { x0: number; y0: number; x1: number; y1: number } }[] = [];
+    let paddleSucceeded = false;
 
-    if (res?.data?.blocks && Array.isArray(res.data.blocks)) {
-      for (const block of res.data.blocks) {
-        if (!block.paragraphs) continue;
-        for (const para of block.paragraphs) {
-          if (!para.lines) continue;
-          for (const line of para.lines) {
-            const trimmed = (line.text || '').trim();
-            if (trimmed && line.bbox) {
-              lines.push({ text: trimmed, bbox: line.bbox });
+    // 1. Primary: Run PaddleOCR (PP-OCRv4) ONNX Runtime detection & recognition
+    try {
+      onProgress?.(10, 'Initializing PaddleOCR (PP-OCRv4) ONNX Engine...');
+      const paddleRes = await this.recognizeWithPaddleOcr(
+        sourceCanvas || imageSource,
+        language,
+        (pct, status) => {
+          onProgress?.(pct, `PaddleOCR: ${status}`);
+        }
+      );
+
+      if (paddleRes?.lines && paddleRes.lines.length > 0) {
+        for (const lineGroup of paddleRes.lines) {
+          for (const item of lineGroup) {
+            const trimmed = (item.text || '').trim();
+            if (trimmed && item.box) {
+              lines.push({
+                text: trimmed,
+                bbox: {
+                  x0: item.box.x,
+                  y0: item.box.y,
+                  x1: item.box.x + item.box.width,
+                  y1: item.box.y + item.box.height,
+                },
+              });
+            }
+          }
+        }
+        if (lines.length > 0) {
+          paddleSucceeded = true;
+        }
+      }
+    } catch (paddleErr) {
+      console.warn('PaddleOCR bounding box detection failed, trying auxiliary fallback:', paddleErr);
+    }
+
+    // 2. Auxiliary Fallback: If PaddleOCR was unavailable or returned no lines, use Tesseract worker
+    let res: any = null;
+    if (!paddleSucceeded && lines.length === 0) {
+      const handleLogger = (m: any) => {
+        if (m && m.progress !== undefined) {
+          const pct = Math.round((m.progress || 0) * 100);
+          let status = 'Detecting layout...';
+          if (m.status === 'loading tesseract core') status = 'Initializing OCR core...';
+          else if (m.status === 'loading language traineddata') status = `Loading language model (${language})...`;
+          else if (m.status === 'initializing api') status = 'Analyzing document characters...';
+          else if (m.status === 'recognizing text') status = `Extracting text lines (${pct}%)...`;
+          onProgress?.(pct, status);
+        }
+      };
+
+      let worker: any = null;
+      try {
+        try {
+          worker = await createWorker(language, 1, { logger: handleLogger });
+        } catch (langErr) {
+          if (language !== 'eng') {
+            console.warn(`Language ${language} worker initialization failed, falling back to English:`, langErr);
+            worker = await createWorker('eng', 1, { logger: handleLogger });
+          } else {
+            throw langErr;
+          }
+        }
+
+        res = await worker.recognize(imageSource, {}, { blocks: true });
+      } finally {
+        if (worker) {
+          try {
+            await worker.terminate();
+          } catch (_) {}
+        }
+      }
+
+      if (res?.data?.blocks && Array.isArray(res.data.blocks)) {
+        for (const block of res.data.blocks) {
+          if (!block.paragraphs) continue;
+          for (const para of block.paragraphs) {
+            if (!para.lines) continue;
+            for (const line of para.lines) {
+              const trimmed = (line.text || '').trim();
+              if (trimmed && line.bbox) {
+                lines.push({ text: trimmed, bbox: line.bbox });
+              }
             }
           }
         }
@@ -467,11 +614,11 @@ export class OcrEngine {
       onProgress?.({
         currentPage: pageNum,
         totalPages: totalPdfPages,
-        status: `Recognizing text on page ${pageNum} of ${totalPdfPages}...`,
+        status: `PaddleOCR (PP-OCRv4): Recognizing text on page ${pageNum} of ${totalPdfPages}...`,
         percent: pageBasePercent + 8,
       });
 
-      const ocrRes = await this.recognizeWithFallback(canvas, language, (pct, status) => {
+      const ocrRes = await this.recognizeWithPaddleOcr(canvas, language, (pct, status) => {
         const step = Math.round((pct / 100) * (80 / totalToProcess));
         onProgress?.({
           currentPage: pageNum,
@@ -481,11 +628,11 @@ export class OcrEngine {
         });
       });
 
-      const pageText = ocrRes.data.text.trim();
+      const pageText = ocrRes.text.trim();
       pageResults.push({
         pageNumber: pageNum,
         text: pageText,
-        confidence: ocrRes.data.confidence || 0,
+        confidence: ocrRes.confidence || 0,
       });
     }
 

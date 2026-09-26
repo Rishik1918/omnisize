@@ -187,8 +187,13 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
               <ScanText className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-semibold text-sm">Full-Document OCR Engine</h3>
-              <p className="text-[11px] text-zinc-500">Optical Character Recognition & Multi-Format Document Export</p>
+              <div className="flex items-center gap-2">
+                <h3 className="font-semibold text-sm">PaddleOCR (PP-OCRv4) ONNX Engine</h3>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  PP-OCRv4 + ONNX
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-500">Neural Text Detection (DBNet) & Recognition via ONNX Runtime</p>
             </div>
           </div>
           <button
