@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   X,
   ChevronLeft,
@@ -676,28 +676,81 @@ export function snapStrokeToGeometricShape(points: DrawingPoint[]): DrawingPoint
   const diag = Math.hypot(bboxW, bboxH);
 
   // 1. Straight line check: chord length is almost equal to total contour length
-  if (totalLength > 10 && chordDist / totalLength > 0.88) {
+  if (totalLength > 10 && chordDist / totalLength > 0.85) {
+    const dx = Math.abs(pEnd.x - pStart.x);
+    const dy = Math.abs(pEnd.y - pStart.y);
+    if (dy / Math.max(1, dx) < 0.08) {
+      return [pStart, { x: pEnd.x, y: pStart.y }];
+    }
+    if (dx / Math.max(1, dy) < 0.08) {
+      return [pStart, { x: pStart.x, y: pEnd.y }];
+    }
     return [pStart, pEnd];
   }
 
-  // 2. Closed shape check: end point is close to start point
-  const isClosed = chordDist < Math.max(30, 0.30 * totalLength);
+  // 2. Closed or semi-closed shape check
+  const isClosed = chordDist < Math.max(35, 0.32 * totalLength);
   if (isClosed) {
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    const rx = bboxW / 2;
-    const ry = bboxH / 2;
+    const isSquareRatio = Math.abs(bboxW - bboxH) / Math.max(bboxW, bboxH) < 0.18;
+    const rx = isSquareRatio ? (bboxW + bboxH) / 4 : bboxW / 2;
+    const ry = isSquareRatio ? (bboxW + bboxH) / 4 : bboxH / 2;
 
-    // Radius variance test from center
-    const distances = points.map((p) => Math.hypot(p.x - cx, p.y - cy));
-    const avgR = distances.reduce((a, b) => a + b, 0) / distances.length;
-    const variance = distances.reduce((acc, d) => acc + Math.pow(d - avgR, 2), 0) / distances.length;
-    const stdDev = Math.sqrt(variance);
+    // A. Circle / Ellipse error
+    let ellipseErrSum = 0;
+    for (const p of points) {
+      const rDist = Math.hypot((p.x - cx) / Math.max(1, rx), (p.y - cy) / Math.max(1, ry));
+      ellipseErrSum += Math.abs(rDist - 1);
+    }
+    const ellipseScore = ellipseErrSum / points.length;
 
-    // If low variance from center -> Circle or Ellipse
-    if (stdDev / avgR < 0.28) {
+    // B. Rectangle / Box error: average distance from points to the closest bounding box edge
+    let rectErrSum = 0;
+    for (const p of points) {
+      const dLeft = Math.abs(p.x - minX);
+      const dRight = Math.abs(p.x - maxX);
+      const dTop = Math.abs(p.y - minY);
+      const dBottom = Math.abs(p.y - maxY);
+      rectErrSum += Math.min(dLeft, dRight, dTop, dBottom);
+    }
+    const rectScore = rectErrSum / (points.length * (diag / 4));
+
+    // C. Polygon corners via Douglas-Peucker
+    const simplified = ramerDouglasPeucker(points, Math.max(7, diag * 0.075));
+    const vertexCount = Math.max(0, simplified.length - 1);
+
+    // Triangle check (vertex count 3)
+    if (vertexCount === 3) {
+      return [...simplified.slice(0, 3), simplified[0]];
+    }
+
+    // Determine whether rectangle or ellipse is a better fit
+    if (rectScore < ellipseScore * 0.88 || (vertexCount >= 4 && vertexCount <= 5 && rectScore < 0.22)) {
+      if (isSquareRatio) {
+        const side = (bboxW + bboxH) / 2;
+        const sqX = cx - side / 2;
+        const sqY = cy - side / 2;
+        return [
+          { x: sqX, y: sqY },
+          { x: sqX + side, y: sqY },
+          { x: sqX + side, y: sqY + side },
+          { x: sqX, y: sqY + side },
+          { x: sqX, y: sqY },
+        ];
+      }
+      return [
+        { x: minX, y: minY },
+        { x: maxX, y: minY },
+        { x: maxX, y: maxY },
+        { x: minX, y: maxY },
+        { x: minX, y: minY },
+      ];
+    }
+
+    if (ellipseScore < 0.26) {
       const circlePoints: DrawingPoint[] = [];
-      const numSteps = 40;
+      const numSteps = 48;
       for (let i = 0; i <= numSteps; i++) {
         const theta = (i / numSteps) * 2 * Math.PI;
         circlePoints.push({
@@ -706,26 +759,6 @@ export function snapStrokeToGeometricShape(points: DrawingPoint[]): DrawingPoint
         });
       }
       return circlePoints;
-    }
-
-    // Douglas-Peucker polygon corner reduction
-    const simplified = ramerDouglasPeucker(points, Math.max(8, diag * 0.07));
-    const vertexCount = Math.max(0, simplified.length - 1); // exclude closing point
-
-    // Triangle: 3 vertices
-    if (vertexCount === 3) {
-      return [...simplified.slice(0, 3), simplified[0]];
-    }
-
-    // Rectangle or Square: 4-5 vertices
-    if (vertexCount >= 4 && vertexCount <= 5) {
-      return [
-        { x: minX, y: minY },
-        { x: maxX, y: minY },
-        { x: maxX, y: maxY },
-        { x: minX, y: maxY },
-        { x: minX, y: minY },
-      ];
     }
   }
 
@@ -913,6 +946,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
   const [selectedTableCell, setSelectedTableCell] = useState<{ row: number; col: number; tableId?: string } | null>(null);
+  const [selectedTableRange, setSelectedTableRange] = useState<{ tableId: string; startRow: number; startCol: number; endRow: number; endCol: number } | null>(null);
+  const [isTableSelecting, setIsTableSelecting] = useState<boolean>(false);
+  const [tableSelectionStart, setTableSelectionStart] = useState<{ tableId: string; row: number; col: number } | null>(null);
+  const [selectedStrokeId, setSelectedStrokeId] = useState<string | null>(null);
+  const [highlighterMode, setHighlighterMode] = useState<'freehand' | 'line-snap'>('freehand');
+  const pagesContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Rotation tool & popover states
   const [showRotationPopover, setShowRotationPopover] = useState<boolean>(false);
@@ -1921,6 +1960,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Stable reference to page container frame for 120 FPS GPU transform zooming
   const pageFrameRef = useRef<HTMLDivElement | null>(null);
   const zoomScaleRef = useRef<number>(zoomScale);
+  const sliderZoomTimeoutRef = useRef<any>(null);
   useEffect(() => {
     zoomScaleRef.current = zoomScale;
   }, [zoomScale]);
@@ -2485,6 +2525,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   }
                 }
               }
+            }
+
+            // Extract existing PDF links and annotations if not already extracted for this page
+            try {
+              const extractedLinks = await PdfStudioEngine.extractPageAnnotations(proxyOrBuf, currentPage);
+              if (isMounted && extractedLinks.length > 0) {
+                setHyperlinks((prev) => {
+                  const existingKeys = new Set(prev.map((l) => `${l.pageIndex}_${Math.round(l.x)}_${Math.round(l.y)}`));
+                  const newLinks = extractedLinks.filter((l) => !existingKeys.has(`${l.pageIndex}_${Math.round(l.x)}_${Math.round(l.y)}`));
+                  return newLinks.length > 0 ? [...prev, ...newLinks] : prev;
+                });
+              }
+            } catch (linkErr) {
+              console.warn('Annotation/link extraction note:', linkErr);
             }
           } catch (e) {
             console.warn('Text item extraction warning:', e);
@@ -4543,6 +4597,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setResizingCol(null);
         setResizingRow(null);
       }
+      setIsTableSelecting(false);
     };
 
     window.addEventListener('mousemove', onMouseMove);
@@ -4605,6 +4660,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setMultiSelectedIds([]);
       setActiveEditingId(null);
       setActiveTableImgCell(null);
+      setSelectedStrokeId(null);
+      setSelectedTableRange(null);
       return;
     }
 
@@ -4614,12 +4671,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     const pageIndex = activePage - 1;
 
     if (activeTool === 'add-text') {
+      // Inline snap check: if clicked near an existing text line baseline, snap to that exact line!
+      let finalPdfY = pdfY;
+      const nearbyCluster = Array.from(textItemLineClusters.values()).find(
+        (c) => Math.abs(c.baselineCssY - clickY) < 16
+      );
+      if (nearbyCluster) {
+        finalPdfY = (rect.height - nearbyCluster.baselineCssY) / scaleFactor;
+      }
+
       const newOverlay: TextOverlay = {
         id: `txt_overlay_${Date.now()}`,
         pageIndex,
         text: textValue || 'Sample Text',
         x: pdfX,
-        y: pdfY,
+        y: finalPdfY,
         size: fontSize,
         color: textColor,
         fontFamily,
@@ -4688,11 +4754,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       blendMode = 'multiply';
     }
 
+    const pressureVal = (e.pointerType === 'pen' && e.pressure > 0) ? e.pressure : (e.pressure || 0.5);
+
     const newStroke: DrawingStroke = {
       id: `stroke_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       tool: activeTool as any,
       pageIndex,
-      points: [{ x, y, pressure: e.pressure || 0.5 }],
+      points: [{ x, y, pressure: pressureVal }],
       color,
       thickness,
       opacity,
@@ -4719,11 +4787,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     if (!isDrawingMouseDown || !currentStroke) return;
 
+    const pressureVal = (e.pointerType === 'pen' && e.pressure > 0) ? e.pressure : (e.pressure || 0.5);
+    let targetY = y;
+    if (activeTool === 'highlighter' && highlighterMode === 'line-snap' && currentStroke.points.length > 0) {
+      targetY = currentStroke.points[0].y;
+    }
+
     setCurrentStroke((prev) => {
       if (!prev) return null;
       return {
         ...prev,
-        points: [...prev.points, { x, y, pressure: e.pressure || 0.5 }],
+        points: [...prev.points, { x, y: targetY, pressure: pressureVal }],
       };
     });
   };
@@ -5043,10 +5117,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         const clampedScale = Math.min(4.0, Math.max(0.25, tempScale));
         const visualRatio = clampedScale / initialScale;
 
-        // Apply fast GPU transform scaling on compositor thread with ZERO React re-renders!
-        if (pageFrameRef.current) {
-          pageFrameRef.current.style.transform = `scale(${visualRatio})`;
-          pageFrameRef.current.style.transformOrigin = 'center center';
+        // Apply fast GPU transform scaling across all pages on compositor thread with ZERO React re-renders!
+        if (pagesContainerRef.current) {
+          pagesContainerRef.current.style.transform = `scale(${visualRatio})`;
+          pagesContainerRef.current.style.transformOrigin = '50% 0';
         }
       }
     };
@@ -5055,9 +5129,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       if (isGesturingRef.current && e.touches.length < 2) {
         isGesturingRef.current = false;
         initialDist = 0;
-        if (pageFrameRef.current) {
-          pageFrameRef.current.style.transform = 'none';
-          pageFrameRef.current.style.willChange = 'auto';
+        if (pagesContainerRef.current) {
+          pagesContainerRef.current.style.transform = 'none';
+          pagesContainerRef.current.style.willChange = 'auto';
         }
         const finalScale = Math.min(4.0, Math.max(0.25, Number((initialScale * currentRatio).toFixed(2))));
         if (Math.abs(finalScale - zoomScaleRef.current) > 0.01) {
@@ -5072,11 +5146,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         e.preventDefault();
         const delta = e.deltaY < 0 ? 0.08 : -0.08;
         const next = Math.min(4.0, Math.max(0.25, Number((zoomScaleRef.current + delta).toFixed(2))));
-        zoomScaleRef.current = next;
+        const visualRatio = next / zoomScaleRef.current;
+        if (pagesContainerRef.current) {
+          pagesContainerRef.current.style.transform = `scale(${visualRatio})`;
+          pagesContainerRef.current.style.transformOrigin = '50% 0';
+        }
         if (wheelTimeout) clearTimeout(wheelTimeout);
         wheelTimeout = setTimeout(() => {
+          if (pagesContainerRef.current) {
+            pagesContainerRef.current.style.transform = 'none';
+          }
           setZoomScale(next);
-        }, 50);
+        }, 120);
       }
       // Native continuous scrolling operates freely without wheel interception
     };
@@ -5366,8 +5447,36 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
 
       // Delete key handler
+      // Select All: Ctrl+A
+      if (isCtrlOrMeta && e.key.toLowerCase() === 'a') {
+        const tag = (document.activeElement?.tagName || '').toLowerCase();
+        if (tag !== 'input' && tag !== 'textarea') {
+          e.preventDefault();
+          if (activeTool === 'view') {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            const cont = pageFrameRef.current || containerRef.current;
+            if (cont && sel) {
+              range.selectNodeContents(cont);
+              sel.removeAllRanges();
+              sel.addRange(range);
+            }
+          } else {
+            const pageElements = [
+              ...textOverlays.filter((t) => t.pageIndex === currentPage - 1).map((t) => t.id),
+              ...imageOverlays.filter((i) => i.pageIndex === currentPage - 1).map((i) => i.id),
+              ...shapes.filter((s) => s.pageIndex === currentPage - 1).map((s) => s.id),
+              ...tables.filter((t) => t.pageIndex === currentPage - 1).map((t) => t.id),
+              ...detectedTextItems.map((item) => item.id),
+            ];
+            setMultiSelectedIds(pageElements);
+          }
+          return;
+        }
+      }
+
       const hasSelectedItem = Boolean(
-        selectedTableCell || selectedOverlayId || selectedTextItemId || selectedShapeId || selectedTableId || selectedBorderPage !== null
+        selectedStrokeId || selectedTableRange || selectedTableCell || selectedOverlayId || selectedTextItemId || selectedShapeId || selectedTableId || selectedBorderPage !== null
       );
 
       if (e.key === 'Delete' || (e.key === 'Backspace' && hasSelectedItem)) {
@@ -5376,6 +5485,81 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         const isEditable = tag === 'input' || tag === 'textarea' || (activeEl as HTMLElement)?.isContentEditable;
         if (!isEditable) {
           e.preventDefault();
+
+          // 0. If drawing stroke is selected, delete it immediately
+          if (selectedStrokeId) {
+            setDrawings((prev) => {
+              const next = prev.filter((d) => d.id !== selectedStrokeId);
+              pushSnapshot({ drawings: next });
+              return next;
+            });
+            setSelectedStrokeId(null);
+            return;
+          }
+
+          // 0.5 If table range/row/col is selected, delete selected rows, columns, or cell contents
+          if (selectedTableRange) {
+            const { tableId, startRow, startCol, endRow, endCol } = selectedTableRange;
+            const minR = Math.min(startRow, endRow);
+            const maxR = Math.max(startRow, endRow);
+            const minC = Math.min(startCol, endCol);
+            const maxC = Math.max(startCol, endCol);
+            const targetTbl = tables.find((t) => t.id === tableId);
+            if (targetTbl) {
+              if (minC === 0 && maxC === targetTbl.cols - 1 && (maxR - minR + 1) < targetTbl.rows) {
+                // Delete full rows
+                setTables((prev) =>
+                  prev.map((t) => {
+                    if (t.id !== tableId) return t;
+                    const nextCells = t.cells.filter((_, ri) => ri < minR || ri > maxR);
+                    const nextRowHeights = (t.rowHeights || []).filter((_, ri) => ri < minR || ri > maxR);
+                    return {
+                      ...t,
+                      rows: nextCells.length,
+                      cells: nextCells,
+                      rowHeights: nextRowHeights,
+                      height: nextRowHeights.reduce((a, b) => a + b, 0),
+                    };
+                  })
+                );
+                setSelectedTableRange(null);
+                pushSnapshot({ tables });
+                return;
+              }
+              if (minR === 0 && maxR === targetTbl.rows - 1 && (maxC - minC + 1) < targetTbl.cols) {
+                // Delete full columns
+                setTables((prev) =>
+                  prev.map((t) => {
+                    if (t.id !== tableId) return t;
+                    const nextCells = t.cells.map((row) => row.filter((_, ci) => ci < minC || ci > maxC));
+                    const nextColWidths = (t.colWidths || []).filter((_, ci) => ci < minC || ci > maxC);
+                    return {
+                      ...t,
+                      cols: nextCells[0]?.length || 0,
+                      cells: nextCells,
+                      colWidths: nextColWidths,
+                      width: nextColWidths.reduce((a, b) => a + b, 0),
+                    };
+                  })
+                );
+                setSelectedTableRange(null);
+                pushSnapshot({ tables });
+                return;
+              }
+              // Clear cell contents
+              setTables((prev) =>
+                prev.map((t) => {
+                  if (t.id !== tableId) return t;
+                  const nextCells = t.cells.map((row, ri) =>
+                    row.map((val, ci) => (ri >= minR && ri <= maxR && ci >= minC && ci <= maxC ? '' : val))
+                  );
+                  return { ...t, cells: nextCells };
+                })
+              );
+              pushSnapshot({ tables });
+              return;
+            }
+          }
 
           // 0. If page border is selected, delete the border immediately without popup
           if (selectedBorderPage !== null) {
@@ -5610,6 +5794,226 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     updateActiveTextItemProps,
     pushSnapshot,
   ]);
+
+  // Cluster detected text items by common baseline to guarantee 100% inline baseline alignment and seamless merging
+  const textItemLineClusters = useMemo(() => {
+    const clusters: Array<{
+      baselineY: number;
+      maxFontSize: number;
+      maxHeight: number;
+      ascender: number;
+      descender: number;
+      items: typeof detectedTextItems;
+    }> = [];
+
+    const sorted = [...detectedTextItems].sort((a, b) => b.y - a.y || a.x - b.x);
+
+    for (const item of sorted) {
+      let matched = clusters.find((c) => Math.abs(c.baselineY - item.y) <= 3.5);
+      if (!matched) {
+        matched = {
+          baselineY: item.y,
+          maxFontSize: item.fontSize || 12,
+          maxHeight: item.height || 12,
+          ascender: (item.fontSize || 12) * 0.82,
+          descender: (item.fontSize || 12) * 0.28,
+          items: [],
+        };
+        clusters.push(matched);
+      }
+      matched.items.push(item);
+      if (item.fontSize && item.fontSize > matched.maxFontSize) {
+        matched.maxFontSize = item.fontSize;
+        matched.ascender = item.fontSize * 0.82;
+        matched.descender = item.fontSize * 0.28;
+      }
+      if (item.height && item.height > matched.maxHeight) {
+        matched.maxHeight = item.height;
+      }
+    }
+
+    const map = new Map<string, {
+      boxTop: number;
+      boxHeight: number;
+      baselineCssY: number;
+      lineAscender: number;
+      lineDescender: number;
+    }>();
+
+    for (const c of clusters) {
+      const scale = zoomScale;
+      const baselineCssY = viewportDims.height - c.baselineY * scale;
+      const lineAscender = Math.max(8, c.ascender * scale);
+      const lineDescender = Math.max(3, c.descender * scale);
+      const boxTop = baselineCssY - lineAscender;
+      const boxHeight = lineAscender + lineDescender;
+
+      for (const it of c.items) {
+        map.set(it.id, {
+          boxTop,
+          boxHeight,
+          baselineCssY,
+          lineAscender,
+          lineDescender,
+        });
+      }
+    }
+    return map;
+  }, [detectedTextItems, zoomScale, viewportDims.height]);
+
+  const isCellInRange = (tableId: string, r: number, c: number): boolean => {
+    if (selectedTableCell && selectedTableCell.tableId === tableId && selectedTableCell.row === r && selectedTableCell.col === c) {
+      return true;
+    }
+    if (selectedTableRange && selectedTableRange.tableId === tableId) {
+      const minR = Math.min(selectedTableRange.startRow, selectedTableRange.endRow);
+      const maxR = Math.max(selectedTableRange.startRow, selectedTableRange.endRow);
+      const minC = Math.min(selectedTableRange.startCol, selectedTableRange.endCol);
+      const maxC = Math.max(selectedTableRange.startCol, selectedTableRange.endCol);
+      return r >= minR && r <= maxR && c >= minC && c <= maxC;
+    }
+    return false;
+  };
+
+  const handleMergeSelectedCells = (tableId: string) => {
+    if (!selectedTableRange || selectedTableRange.tableId !== tableId) return;
+    const minR = Math.min(selectedTableRange.startRow, selectedTableRange.endRow);
+    const maxR = Math.max(selectedTableRange.startRow, selectedTableRange.endRow);
+    const minC = Math.min(selectedTableRange.startCol, selectedTableRange.endCol);
+    const maxC = Math.max(selectedTableRange.startCol, selectedTableRange.endCol);
+    if (minR === maxR && minC === maxC) return;
+
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const filteredMerged = (t.mergedCells || []).filter(
+          (m) => !(m.startRow <= maxR && m.endRow >= minR && m.startCol <= maxC && m.endCol >= minC)
+        );
+        let mergedText = '';
+        for (let r = minR; r <= maxR; r++) {
+          for (let c = minC; c <= maxC; c++) {
+            if (t.cells[r]?.[c]?.trim()) {
+              mergedText += (mergedText ? ' ' : '') + t.cells[r][c].trim();
+            }
+          }
+        }
+        const nextCells = t.cells.map((rowArr, rIdx) =>
+          rowArr.map((val, cIdx) => {
+            if (rIdx === minR && cIdx === minC) return mergedText;
+            if (rIdx >= minR && rIdx <= maxR && cIdx >= minC && cIdx <= maxC) return '';
+            return val;
+          })
+        );
+        return {
+          ...t,
+          cells: nextCells,
+          mergedCells: [...filteredMerged, { startRow: minR, startCol: minC, endRow: maxR, endCol: maxC }],
+        };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const handleUnmergeSelectedCells = (tableId: string) => {
+    const targetR = selectedTableCell?.row ?? selectedTableRange?.startRow ?? 0;
+    const targetC = selectedTableCell?.col ?? selectedTableRange?.startCol ?? 0;
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== tableId) return t;
+        const nextMerged = (t.mergedCells || []).filter(
+          (m) => !(targetR >= m.startRow && targetR <= m.endRow && targetC >= m.startCol && targetC <= m.endCol)
+        );
+        return { ...t, mergedCells: nextMerged };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const handleFillSelectedCellsColor = (colorHex: string) => {
+    if (!selectedTableId) return;
+    const targetCells: Array<{ row: number; col: number }> = [];
+    if (selectedTableRange && selectedTableRange.tableId === selectedTableId) {
+      const minR = Math.min(selectedTableRange.startRow, selectedTableRange.endRow);
+      const maxR = Math.max(selectedTableRange.startRow, selectedTableRange.endRow);
+      const minC = Math.min(selectedTableRange.startCol, selectedTableRange.endCol);
+      const maxC = Math.max(selectedTableRange.startCol, selectedTableRange.endCol);
+      for (let r = minR; r <= maxR; r++) {
+        for (let c = minC; c <= maxC; c++) {
+          targetCells.push({ row: r, col: c });
+        }
+      }
+    } else if (selectedTableCell && selectedTableCell.tableId === selectedTableId) {
+      targetCells.push({ row: selectedTableCell.row, col: selectedTableCell.col });
+    }
+    if (targetCells.length === 0) return;
+
+    setTables((prev) =>
+      prev.map((t) => {
+        if (t.id !== selectedTableId) return t;
+        const nextBgColors = { ...(t.cellBgColors || {}) };
+        for (const cell of targetCells) {
+          nextBgColors[`${cell.row}_${cell.col}`] = colorHex;
+        }
+        return { ...t, cellBgColors: nextBgColors };
+      })
+    );
+    pushSnapshot({ tables });
+  };
+
+  const handleLayerOrder = (action: 'front' | 'back' | 'forward' | 'backward' | 'behindText' | 'inFrontOfText') => {
+    if (selectedShapeId) {
+      setShapes((prev) =>
+        prev.map((s) => {
+          if (s.id !== selectedShapeId) return s;
+          const curZ = s.zIndex ?? 20;
+          let nextZ = curZ;
+          let behind = s.behindText ?? false;
+          if (action === 'front') nextZ = 50;
+          else if (action === 'back') { nextZ = 1; behind = true; }
+          else if (action === 'forward') nextZ = curZ + 1;
+          else if (action === 'backward') nextZ = Math.max(1, curZ - 1);
+          else if (action === 'behindText') { behind = true; nextZ = 5; }
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 30; }
+          return { ...s, zIndex: nextZ, behindText: behind };
+        })
+      );
+      pushSnapshot({ shapes });
+    } else if (selectedTableId) {
+      setTables((prev) =>
+        prev.map((t) => {
+          if (t.id !== selectedTableId) return t;
+          const curZ = t.zIndex ?? 20;
+          let nextZ = curZ;
+          let behind = t.behindText ?? false;
+          if (action === 'front') nextZ = 50;
+          else if (action === 'back') { nextZ = 1; behind = true; }
+          else if (action === 'forward') nextZ = curZ + 1;
+          else if (action === 'backward') nextZ = Math.max(1, curZ - 1);
+          else if (action === 'behindText') { behind = true; nextZ = 5; }
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 30; }
+          return { ...t, zIndex: nextZ, behindText: behind };
+        })
+      );
+      pushSnapshot({ tables });
+    } else if (selectedOverlayId) {
+      setImageOverlays((prev) =>
+        prev.map((img) => {
+          if (img.id !== selectedOverlayId) return img;
+          const curZ = img.zIndex ?? 20;
+          let nextZ = curZ;
+          let behind = img.behindText ?? false;
+          if (action === 'front') nextZ = 50;
+          else if (action === 'back') { nextZ = 1; behind = true; }
+          else if (action === 'forward') nextZ = curZ + 1;
+          else if (action === 'backward') nextZ = Math.max(1, curZ - 1);
+          else if (action === 'behindText') { behind = true; nextZ = 5; }
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 30; }
+          return { ...img, zIndex: nextZ, behindText: behind };
+        })
+      );
+      pushSnapshot({ imageOverlays });
+    }
+  };
 
   const modalContent = (
     <div
@@ -8413,6 +8817,36 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 </div>
               </div>
 
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Highlighter Mode: Freehand vs Text-Line Snap */}
+              <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 p-0.5 rounded-lg border border-slate-200 dark:border-zinc-700">
+                <button
+                  type="button"
+                  onClick={() => setHighlighterMode('freehand')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${
+                    highlighterMode === 'freehand'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Freehand Mode: Draw organic, curved highlighter strokes"
+                >
+                  Freehand
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHighlighterMode('line-snap')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all ${
+                    highlighterMode === 'line-snap'
+                      ? 'bg-amber-500 text-white shadow-xs'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                  }`}
+                  title="Text-Line Snap Mode: Locks highlighter to perfectly straight horizontal lines across text"
+                >
+                  Line Snap
+                </button>
+              </div>
+
               <span className="text-[10px] text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded">
                 Multiply blend mode
               </span>
@@ -8598,14 +9032,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           }}
         >
           <div
+            ref={pagesContainerRef}
             className="w-fit h-fit p-4 sm:p-8 flex flex-col items-center"
             onClick={(e) => {
               if (e.target === e.currentTarget) {
                 setSelectedTableId(null);
                 setSelectedTableCell(null);
+                setSelectedTableRange(null);
                 setSelectedShapeId(null);
                 setSelectedOverlayId(null);
                 setSelectedTextItemId(null);
+                setSelectedStrokeId(null);
                 setMultiSelectedIds([]);
                 setActiveEditingId(null);
                 setActiveTableImgCell(null);
@@ -8617,6 +9054,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               display: 'flex',
               justifyContent: 'safe center',
               alignItems: 'safe center',
+              transformOrigin: '50% 0',
             }}
           >
             {error && (
@@ -9098,25 +9536,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const itemAlign = currentItem.alignment ?? item.alignment ?? 'left';
 
                 const scale = zoomScale;
-                const cssX = item.x * scale;
-                const cssY = viewportDims.height - item.y * scale - item.height * scale;
-                const cssW = Math.max(12, item.width * scale);
-                const cssH = Math.max(10, item.height * scale);
-
-                // Enclose full text line including descenders (g, j, p, q, y, commas) and ascenders
-                // In PDF coordinates, (viewportDims.height - item.y * scale) is the baseline.
-                // Descenders extend ~35% below the baseline, so we expand downwards and upwards to cover 100%
-                const descenderDepth = Math.max(4, Math.round(itemFontSize * scale * 0.35));
-                const ascenderExtra = Math.max(2, Math.round(itemFontSize * scale * 0.15));
-
-                const boxX = Math.max(0, cssX - 2);
-                const boxY = Math.max(0, cssY - ascenderExtra);
-                const boxW = cssW + 6;
-                const boxH = cssH + ascenderExtra + descenderDepth;
+                const cluster = textItemLineClusters.get(item.id);
+                const baselineY = cluster ? cluster.baselineCssY : (viewportDims.height - item.y * scale);
+                const boxY = cluster ? cluster.boxTop : (baselineY - (itemFontSize * scale * 0.82));
+                const boxH = cluster ? cluster.boxHeight : Math.max(12, itemFontSize * scale * 1.15);
+                const boxX = item.x * scale;
+                const boxW = Math.max(8, item.width * scale);
 
                 const cssFontFamily = resolveCssFontFamily(itemFontFamily);
-                const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH, currentItem.bgColorHex || item.bgColorHex);
-                const sampledFg = sampleCanvasTextColor(canvasRef.current, cssX, cssY, cssW, cssH, sampledBg.rgb);
+                const sampledBg = sampleCanvasBgColor(canvasRef.current, boxX, boxY, boxW, boxH, currentItem.bgColorHex || item.bgColorHex);
+                const sampledFg = sampleCanvasTextColor(canvasRef.current, boxX, boxY, boxW, boxH, sampledBg.rgb);
                 const effectiveBgHex = currentItem.bgColorHex || item.bgColorHex || sampledBg.hex;
                 const textColor = currentItem.color || item.color || sampledFg;
 
@@ -9236,7 +9665,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           caretColor: '#2563eb',
                           backgroundColor: effectiveBgHex,
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
-                          lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
+                          lineHeight: `${boxH}px`,
+                          height: '100%',
+                          padding: 0,
+                          margin: 0,
                           transform: currentItem.rotation ? `rotate(${currentItem.rotation}deg)` : undefined,
                         }}
                         className="w-full h-full p-0 m-0 border-0 outline-none select-text"
@@ -9257,11 +9689,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           textAlign: itemAlign,
                           backgroundColor: effectiveBgHex,
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
-                          lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
+                          lineHeight: `${boxH}px`,
+                          height: '100%',
+                          padding: 0,
+                          margin: 0,
                           marginBottom: currentItem.paragraphSpacing ? `${currentItem.paragraphSpacing * scale}px` : undefined,
                           transform: currentItem.rotation ? `rotate(${currentItem.rotation}deg)` : undefined,
                         }}
-                        className="w-full h-full truncate px-0 flex items-center select-text"
+                        className="w-full h-full truncate px-0 select-text overflow-hidden"
                       >
                         {currentTextVal}
                       </div>
@@ -9270,13 +9705,49 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })}
 
+            {/* Transparent Selectable Text Layer in Read Mode (I-Beam Cursor & Selection) */}
+            {isCurrentPage && activeTool === 'view' && (
+              <div className="absolute inset-0 z-20 pointer-events-auto select-text cursor-text">
+                {detectedTextItems.map((item) => {
+                  const cluster = textItemLineClusters.get(item.id);
+                  const scale = zoomScale;
+                  const baselineY = cluster ? cluster.baselineCssY : (viewportDims.height - item.y * scale);
+                  const boxY = cluster ? cluster.boxTop : (baselineY - (item.fontSize || 12) * scale * 0.82);
+                  const boxH = cluster ? cluster.boxHeight : Math.max(12, (item.fontSize || 12) * scale * 1.15);
+                  const boxX = item.x * scale;
+                  const boxW = Math.max(8, item.width * scale);
+                  return (
+                    <span
+                      key={`read_${item.id}`}
+                      style={{
+                        position: 'absolute',
+                        left: `${boxX}px`,
+                        top: `${boxY}px`,
+                        width: `${boxW}px`,
+                        height: `${boxH}px`,
+                        fontSize: `${(item.fontSize || 12) * scale}px`,
+                        fontFamily: resolveCssFontFamily(item.fontFamily || 'Calibri'),
+                        lineHeight: `${boxH}px`,
+                        color: 'transparent',
+                        userSelect: 'text',
+                        whiteSpace: 'pre',
+                      }}
+                      className="selection:bg-blue-500/30 selection:text-transparent select-text"
+                    >
+                      {item.originalText}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
             {/* Render Text Overlays */}
             {textOverlays
               .filter((t) => t.pageIndex === pageNum - 1)
               .map((t) => {
                 const scale = zoomScale;
                 const cssX = t.x * scale;
-                const cssY = viewportDims.height - t.y * scale;
+                const cssY = viewportDims.height - t.y * scale - (t.size * scale * 0.82);
                 const isSelected = selectedOverlayId === t.id || multiSelectedIds.includes(t.id);
                 const isEditing = editingOverlayId === t.id;
 
@@ -9575,6 +10046,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${cssY}px`,
                       width: `${cssW}px`,
                       height: `${cssH}px`,
+                      zIndex: img.zIndex ?? (img.behindText ? 5 : 25),
                       transform: img.rotation ? `rotate(${img.rotation}deg)` : undefined,
                       borderRadius: img.borderRadius ? `${img.borderRadius * scale}px` : undefined,
                     }}
@@ -9762,6 +10234,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${cssY}px`,
                       width: `${cssW}px`,
                       height: `${cssH}px`,
+                      zIndex: shape.zIndex ?? (shape.behindText ? 5 : 25),
                       transform: shape.rotation ? `rotate(${shape.rotation}deg)` : undefined,
                       opacity: shape.opacity ?? 1,
                     }}
@@ -9847,12 +10320,104 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${cssY}px`,
                       width: `${cssW}px`,
                       height: `${cssH}px`,
+                      zIndex: tbl.zIndex ?? (tbl.behindText ? 5 : 25),
                       transform: tbl.rotation ? `rotate(${tbl.rotation}deg)` : undefined,
                     }}
                     className={`absolute select-none cursor-move ${
                       isSelected ? 'ring-2 ring-indigo-500 z-30' : ''
                     }`}
                   >
+                    {/* Floating Quick Action Bar when multiple cells or range selected */}
+                    {isSelected && selectedTableRange && selectedTableRange.tableId === tbl.id && (
+                      <div
+                        className="absolute -top-10 left-0 flex items-center gap-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-xl rounded-lg px-2.5 py-1 z-50 animate-fade-in text-xs font-semibold select-none"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleMergeSelectedCells(tbl.id)}
+                          className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 text-[11px] font-bold transition-colors cursor-pointer"
+                          title="Merge Selected Cells into One"
+                        >
+                          Merge
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleUnmergeSelectedCells(tbl.id)}
+                          className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[11px] transition-colors cursor-pointer"
+                          title="Unmerge Selected Cells"
+                        >
+                          Unmerge
+                        </button>
+                        <div className="flex items-center gap-1 border-l border-zinc-200 dark:border-zinc-700 pl-1.5 ml-0.5">
+                          {['#ffffff', '#fef08a', '#bbf7d0', '#bfdbfe', '#fed7aa', '#fbcfe8'].map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => handleFillSelectedCellsColor(c)}
+                              style={{ backgroundColor: c }}
+                              className="w-3.5 h-3.5 rounded-full border border-zinc-300 hover:scale-125 transition-transform cursor-pointer"
+                              title={`Fill ${c}`}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Column Selectors (Top Header Gutter) */}
+                    {isSelected && (
+                      <div className="absolute -top-5 left-0 right-0 h-5 flex pointer-events-auto">
+                        {colWidths.map((w: number, ci: number) => (
+                          <div
+                            key={ci}
+                            style={{ width: `${w * scale}px` }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTableId(tbl.id);
+                              setSelectedTableRange({
+                                tableId: tbl.id,
+                                startRow: 0,
+                                startCol: ci,
+                                endRow: tbl.rows - 1,
+                                endCol: ci,
+                              });
+                            }}
+                            className="h-full flex items-center justify-center bg-indigo-50 dark:bg-zinc-800 hover:bg-indigo-100 dark:hover:bg-zinc-700 border-r border-t border-indigo-200 dark:border-zinc-700 text-[9px] font-bold text-indigo-700 dark:text-indigo-300 cursor-pointer select-none"
+                            title={`Select Column ${String.fromCharCode(65 + (ci % 26))}`}
+                          >
+                            {String.fromCharCode(65 + (ci % 26))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Row Selectors (Left Header Gutter) */}
+                    {isSelected && (
+                      <div className="absolute top-0 -left-5 bottom-0 w-5 flex flex-col pointer-events-auto">
+                        {rowHeights.map((h: number, ri: number) => (
+                          <div
+                            key={ri}
+                            style={{ height: `${h * scale}px` }}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedTableId(tbl.id);
+                              setSelectedTableRange({
+                                tableId: tbl.id,
+                                startRow: ri,
+                                startCol: 0,
+                                endRow: ri,
+                                endCol: tbl.cols - 1,
+                              });
+                            }}
+                            className="w-full flex items-center justify-center bg-indigo-50 dark:bg-zinc-800 hover:bg-indigo-100 dark:hover:bg-zinc-700 border-b border-l border-indigo-200 dark:border-zinc-700 text-[9px] font-bold text-indigo-700 dark:text-indigo-300 cursor-pointer select-none"
+                            title={`Select Row ${ri + 1}`}
+                          >
+                            {ri + 1}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Table Grid - fills the entire box 100% */}
                     <table className="w-full h-full border-collapse table-fixed bg-white/95">
                       <colgroup>
@@ -9871,7 +10436,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                 const hasCellImg = Boolean(tbl.cellImages?.[cellImgKey]);
                                 const hasCellShape = Boolean(tbl.cellShapes?.[cellImgKey]);
                                 const hasCellSub = Boolean(tbl.cellSubtables?.[cellImgKey]);
-                                const isCellSelected = selectedTableCell?.tableId === tbl.id && selectedTableCell?.row === rIdx && selectedTableCell?.col === cIdx;
+                                const isCellSelected = isCellInRange(tbl.id, rIdx, cIdx);
+
+                                // Check if covered by a merged cell
+                                const mergeBlock = (tbl.mergedCells || []).find(
+                                  (m) => rIdx >= m.startRow && rIdx <= m.endRow && cIdx >= m.startCol && cIdx <= m.endCol
+                                );
+                                if (mergeBlock && (rIdx !== mergeBlock.startRow || cIdx !== mergeBlock.startCol)) {
+                                  return null;
+                                }
+                                const cellRowSpan = mergeBlock ? (mergeBlock.endRow - mergeBlock.startRow + 1) : 1;
+                                const cellColSpan = mergeBlock ? (mergeBlock.endCol - mergeBlock.startCol + 1) : 1;
+
+                                const cellCustomBg = tbl.cellBgColors?.[cellImgKey];
+                                const effectiveCellBg = cellCustomBg || (isHeader ? (tbl.headerBgColor || '#f1f5f9') : (tbl.cellBgColor || undefined));
 
                                 const cellProps = tbl.cellImageProps?.[cellImgKey];
                                 const cellFilters = [
@@ -9896,6 +10474,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                 return (
                                   <td
                                     key={cIdx}
+                                    rowSpan={cellRowSpan}
+                                    colSpan={cellColSpan}
                                     onContextMenu={(e) => {
                                       e.preventDefault();
                                       e.stopPropagation();
@@ -9914,10 +10494,40 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                         tableCol: cIdx,
                                       });
                                     }}
+                                    onMouseDown={(e) => {
+                                      if (e.button !== 0) return;
+                                      const target = e.target as HTMLElement;
+                                      if (target.getAttribute('data-resizer') === 'true') return;
+                                      e.stopPropagation();
+                                      setSelectedTableId(tbl.id);
+                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                      setSelectedTableRange({ tableId: tbl.id, startRow: rIdx, startCol: cIdx, endRow: rIdx, endCol: cIdx });
+                                      setTableSelectionStart({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                      setIsTableSelecting(true);
+                                    }}
+                                    onMouseEnter={() => {
+                                      if (isTableSelecting && tableSelectionStart && tableSelectionStart.tableId === tbl.id) {
+                                        setSelectedTableRange({
+                                          tableId: tbl.id,
+                                          startRow: tableSelectionStart.row,
+                                          startCol: tableSelectionStart.col,
+                                          endRow: rIdx,
+                                          endCol: cIdx,
+                                        });
+                                      }
+                                    }}
+                                    onTouchStart={(e) => {
+                                      if (e.touches.length !== 1) return;
+                                      const target = e.target as HTMLElement;
+                                      if (target.getAttribute('data-resizer') === 'true') return;
+                                      setSelectedTableId(tbl.id);
+                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                      setSelectedTableRange({ tableId: tbl.id, startRow: rIdx, startCol: cIdx, endRow: rIdx, endCol: cIdx });
+                                      setTableSelectionStart({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                      setIsTableSelecting(true);
+                                    }}
                                     style={{
-                                      backgroundColor: isHeader
-                                        ? (tbl.headerBgColor || '#f1f5f9')
-                                        : (tbl.cellBgColor || undefined),
+                                      backgroundColor: effectiveCellBg,
                                       borderColor: tbl.borderColor || '#000000',
                                       borderWidth: `${tbl.borderWidth || 1}px`,
                                       borderStyle: tbl.borderStyle || 'solid',
@@ -9930,8 +10540,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                       overflow: 'visible',
                                       boxSizing: 'border-box',
                                     }}
-                                    className={`relative ${
-                                      isCellSelected ? 'ring-2 ring-indigo-400 inset-0' : ''
+                                    className={`relative transition-colors ${
+                                      isCellSelected ? 'ring-2 ring-indigo-500 bg-indigo-500/20' : ''
                                     }`}
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -10688,16 +11298,47 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 .map((stroke) => {
                   const pts = stroke.points;
                   if (!pts || pts.length === 0) return null;
+                  const isSelected = selectedStrokeId === stroke.id;
+                  const isInteractable = activeTool === 'view' || activeTool === 'edit-text';
                   if (pts.length === 1) {
                     return (
-                      <circle
+                      <g
                         key={stroke.id}
-                        cx={pts[0].x}
-                        cy={pts[0].y}
-                        r={stroke.thickness / 2}
-                        fill={stroke.color}
-                        opacity={stroke.opacity || 1}
-                      />
+                        className={isInteractable ? 'cursor-pointer' : ''}
+                        onClick={(e) => {
+                          if (isInteractable) {
+                            e.stopPropagation();
+                            setSelectedStrokeId(stroke.id);
+                            setSelectedOverlayId(null);
+                            setSelectedShapeId(null);
+                            setSelectedTableId(null);
+                            setSelectedTableRange(null);
+                          }
+                        }}
+                      >
+                        {isSelected && (
+                          <circle
+                            cx={pts[0].x}
+                            cy={pts[0].y}
+                            r={stroke.thickness / 2 + 5}
+                            fill="none"
+                            stroke="#3b82f6"
+                            strokeWidth={2}
+                            strokeDasharray="3 3"
+                            style={{ pointerEvents: 'none' }}
+                          />
+                        )}
+                        <circle
+                          cx={pts[0].x}
+                          cy={pts[0].y}
+                          r={stroke.thickness / 2}
+                          fill={stroke.color}
+                          opacity={stroke.opacity || 1}
+                          style={{
+                            pointerEvents: isInteractable ? 'all' : 'none',
+                          }}
+                        />
+                      </g>
                     );
                   }
                   let d = `M ${pts[0].x} ${pts[0].y}`;
@@ -10710,17 +11351,60 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   }
                   d += ` T ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
                   return (
-                    <path
+                    <g
                       key={stroke.id}
-                      d={d}
-                      fill="none"
-                      stroke={stroke.color}
-                      strokeWidth={stroke.thickness}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      opacity={stroke.opacity || 1}
-                      style={stroke.blendMode === 'multiply' ? { mixBlendMode: 'multiply' } : undefined}
-                    />
+                      className={isInteractable ? 'cursor-pointer' : ''}
+                      onClick={(e) => {
+                        if (isInteractable) {
+                          e.stopPropagation();
+                          setSelectedStrokeId(stroke.id);
+                          setSelectedOverlayId(null);
+                          setSelectedShapeId(null);
+                          setSelectedTableId(null);
+                          setSelectedTableRange(null);
+                        }
+                      }}
+                    >
+                      {/* Invisible wider hit region for easy tap/click selection */}
+                      {isInteractable && (
+                        <path
+                          d={d}
+                          fill="none"
+                          stroke="transparent"
+                          strokeWidth={Math.max(stroke.thickness + 12, 16)}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{ pointerEvents: 'stroke' }}
+                        />
+                      )}
+                      {/* Blue dashed halo when selected */}
+                      {isSelected && (
+                        <path
+                          d={d}
+                          fill="none"
+                          stroke="#3b82f6"
+                          strokeWidth={stroke.thickness + 6}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeDasharray="4 4"
+                          opacity={0.8}
+                          style={{ pointerEvents: 'none' }}
+                        />
+                      )}
+                      <path
+                        d={d}
+                        fill="none"
+                        stroke={stroke.color}
+                        strokeWidth={stroke.thickness}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        opacity={stroke.opacity || 1}
+                        style={{
+                          pointerEvents: isInteractable ? 'stroke' : 'none',
+                          ...(stroke.blendMode === 'multiply' ? { mixBlendMode: 'multiply' } : {}),
+                        }}
+                      />
+                    </g>
                   );
                 })}
 
@@ -10761,6 +11445,110 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })()}
             </svg>
+
+            {/* Floating Quick Action Toolbar for Selected Drawing Stroke */}
+            {(() => {
+              if (!selectedStrokeId) return null;
+              const stroke = drawings.find((s) => s.id === selectedStrokeId && s.pageIndex === pageIdx);
+              if (!stroke || !stroke.points || stroke.points.length === 0) return null;
+              let minX = stroke.points[0].x;
+              let minY = stroke.points[0].y;
+              for (const p of stroke.points) {
+                if (p.x < minX) minX = p.x;
+                if (p.y < minY) minY = p.y;
+              }
+              const floatLeft = Math.max(10, minX * zoomScale);
+              const floatTop = Math.max(10, minY * zoomScale - 42);
+
+              return (
+                <div
+                  className="absolute z-50 flex items-center gap-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-xl rounded-xl px-2.5 py-1.5 text-xs animate-fade-in pointer-events-auto select-none"
+                  style={{ left: `${floatLeft}px`, top: `${floatTop}px` }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="font-bold text-[11px] text-zinc-500 uppercase">
+                    {stroke.tool || 'Drawing'}
+                  </span>
+                  {/* Color Picker Swatches */}
+                  <div className="flex items-center gap-1 border-l border-zinc-200 dark:border-zinc-700 pl-1.5">
+                    <input
+                      type="color"
+                      value={stroke.color}
+                      onChange={(e) => {
+                        const newColor = e.target.value;
+                        setDrawings((prev) =>
+                          prev.map((s) => (s.id === stroke.id ? { ...s, color: newColor } : s))
+                        );
+                      }}
+                      className="w-4 h-4 rounded border border-zinc-300 dark:border-zinc-600 cursor-pointer p-0"
+                      title="Custom Color"
+                    />
+                    {['#000000', '#2563eb', '#dc2626', '#16a34a', '#f97316', '#eab308', '#9333ea'].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => {
+                          setDrawings((prev) =>
+                            prev.map((s) => (s.id === stroke.id ? { ...s, color: c } : s))
+                          );
+                        }}
+                        style={{ backgroundColor: c }}
+                        className={`w-3.5 h-3.5 rounded-full border cursor-pointer hover:scale-125 transition-transform ${
+                          stroke.color === c ? 'ring-2 ring-indigo-500 scale-110' : 'border-zinc-300 dark:border-zinc-600'
+                        }`}
+                        title={c}
+                      />
+                    ))}
+                  </div>
+                  {/* Thickness */}
+                  <div className="flex items-center gap-1 border-l border-zinc-200 dark:border-zinc-700 pl-1.5">
+                    {[1, 2, 4, 8, 14, 24].map((th) => (
+                      <button
+                        key={th}
+                        type="button"
+                        onClick={() => {
+                          setDrawings((prev) =>
+                            prev.map((s) => (s.id === stroke.id ? { ...s, thickness: th } : s))
+                          );
+                        }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer transition-colors ${
+                          stroke.thickness === th
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200'
+                        }`}
+                      >
+                        {th}px
+                      </button>
+                    ))}
+                  </div>
+                  {/* Delete Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDrawings((prev) => {
+                        const next = prev.filter((s) => s.id !== stroke.id);
+                        pushSnapshot({ drawings: next });
+                        return next;
+                      });
+                      setSelectedStrokeId(null);
+                    }}
+                    className="p-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-md transition-colors cursor-pointer border-l border-zinc-200 dark:border-zinc-700 pl-1.5"
+                    title="Delete Stroke (Delete Key)"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                  {/* Close/Deselect Button */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStrokeId(null)}
+                    className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-md transition-colors cursor-pointer"
+                    title="Deselect"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })()}
 
             {/* Interactive Drawing Pointer Capture Layer */}
             {['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) && (
@@ -13103,9 +13891,23 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             type="range"
             min="0.25"
             max="3.5"
-            step="0.05"
+            step="0.02"
             value={zoomScale}
-            onChange={(e) => setZoomScale(parseFloat(e.target.value))}
+            onChange={(e) => {
+              const next = parseFloat(e.target.value);
+              const visualRatio = next / zoomScaleRef.current;
+              if (pagesContainerRef.current) {
+                pagesContainerRef.current.style.transform = `scale(${visualRatio})`;
+                pagesContainerRef.current.style.transformOrigin = '50% 0';
+              }
+              if (sliderZoomTimeoutRef.current) clearTimeout(sliderZoomTimeoutRef.current);
+              sliderZoomTimeoutRef.current = setTimeout(() => {
+                if (pagesContainerRef.current) {
+                  pagesContainerRef.current.style.transform = 'none';
+                }
+                setZoomScale(next);
+              }, 100);
+            }}
             className="w-20 sm:w-32 accent-emerald-600 h-1.5 cursor-pointer flex-shrink-0"
           />
 
@@ -13482,6 +14284,82 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       </div>
                     </div>
                     <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                      Layer Order / Arrange
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableId(tbl.id);
+                        handleLayerOrder('front');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
+                    >
+                      <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-indigo-500" /> Bring to Front</span>
+                      <span className="text-[10px] text-zinc-400">Ctrl+]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableId(tbl.id);
+                        handleLayerOrder('back');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
+                    >
+                      <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-zinc-500" /> Send to Back</span>
+                      <span className="text-[10px] text-zinc-400">Ctrl+[</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableId(tbl.id);
+                        handleLayerOrder('forward');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Bring Forward</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableId(tbl.id);
+                        handleLayerOrder('backward');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Send Backward</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableId(tbl.id);
+                        handleLayerOrder('behindText');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Behind Text</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTableId(tbl.id);
+                        handleLayerOrder('inFrontOfText');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>In Front of Text</span>
+                    </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
                     <button
                       type="button"
                       onClick={() => {
@@ -13599,6 +14477,83 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       <Copy className="w-3.5 h-3.5 text-blue-500" />
                       <span>Duplicate Shape</span>
                     </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                      Layer Order / Arrange
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedShapeId(shp.id);
+                        handleLayerOrder('front');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
+                    >
+                      <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-indigo-500" /> Bring to Front</span>
+                      <span className="text-[10px] text-zinc-400">Ctrl+]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedShapeId(shp.id);
+                        handleLayerOrder('back');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
+                    >
+                      <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-zinc-500" /> Send to Back</span>
+                      <span className="text-[10px] text-zinc-400">Ctrl+[</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedShapeId(shp.id);
+                        handleLayerOrder('forward');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Bring Forward</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedShapeId(shp.id);
+                        handleLayerOrder('backward');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Send Backward</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedShapeId(shp.id);
+                        handleLayerOrder('behindText');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Behind Text</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedShapeId(shp.id);
+                        handleLayerOrder('inFrontOfText');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>In Front of Text</span>
+                    </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
                     <button
                       type="button"
                       onClick={() => {
@@ -13766,6 +14721,83 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       <Copy className="w-3.5 h-3.5 text-blue-500" />
                       <span>Duplicate Picture</span>
                     </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                    <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                      Layer Order / Arrange
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOverlayId(img.id);
+                        handleLayerOrder('front');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
+                    >
+                      <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-indigo-500" /> Bring to Front</span>
+                      <span className="text-[10px] text-zinc-400">Ctrl+]</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOverlayId(img.id);
+                        handleLayerOrder('back');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
+                    >
+                      <span className="flex items-center gap-2"><Layers className="w-3.5 h-3.5 text-zinc-500" /> Send to Back</span>
+                      <span className="text-[10px] text-zinc-400">Ctrl+[</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOverlayId(img.id);
+                        handleLayerOrder('forward');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Bring Forward</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOverlayId(img.id);
+                        handleLayerOrder('backward');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                      <span>Send Backward</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOverlayId(img.id);
+                        handleLayerOrder('behindText');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-amber-500" />
+                      <span>Behind Text</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOverlayId(img.id);
+                        handleLayerOrder('inFrontOfText');
+                        closeMenu();
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>In Front of Text</span>
+                    </button>
+                    <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
                     <button
                       type="button"
                       onClick={() => {

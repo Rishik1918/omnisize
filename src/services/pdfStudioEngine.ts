@@ -32,6 +32,8 @@ export interface TextOverlay {
   isStrikethrough?: boolean;
   isSuperscript?: boolean;
   isSubscript?: boolean;
+  zIndex?: number;
+  behindText?: boolean;
 }
 
 export interface ImageOverlay {
@@ -58,6 +60,8 @@ export interface ImageOverlay {
   flipH?: boolean;
   flipV?: boolean;
   opacity?: number;
+  zIndex?: number;
+  behindText?: boolean;
 }
 
 export interface ExistingTextItem {
@@ -129,6 +133,8 @@ export interface ShapeOverlay {
   strokeStyle?: 'solid' | 'dashed' | 'dotted';
   opacity?: number;
   rotation?: number; // 0 to 360
+  zIndex?: number;
+  behindText?: boolean;
 }
 
 export interface TableOverlay {
@@ -179,7 +185,11 @@ export interface TableOverlay {
     cols: number;
     cells: string[][];
   }>;
+  cellBgColors?: Record<string, string>; // `${row}_${col}` -> hex
+  mergedCells?: Array<{ startRow: number; startCol: number; endRow: number; endCol: number }>;
   rotation?: number;
+  zIndex?: number;
+  behindText?: boolean;
 }
 
 export interface InsertBlankPageSpec {
@@ -763,15 +773,45 @@ export class PdfStudioEngine {
             let cellX = table.x;
             for (let c = 0; c < cols; c++) {
               const cellW = colWidths[c];
+              const cellCustomHex = table.cellBgColors?.[`${r}_${c}`];
+              const customBg = cellCustomHex ? this.parseHexColor(cellCustomHex) : undefined;
+              const cellEffectiveBg = customBg || bg;
+
+              // Check if cell is covered by a merge block
+              const mergeBlock = (table.mergedCells || []).find(
+                (m) => r >= m.startRow && r <= m.endRow && c >= m.startCol && c <= m.endCol
+              );
+
+              // If covered by merge and not the top-left cell, skip drawing
+              if (mergeBlock && (r !== mergeBlock.startRow || c !== mergeBlock.startCol)) {
+                cellX += cellW;
+                continue;
+              }
+
+              let drawW = cellW;
+              let drawH = rowH;
+              let drawY = cellY;
+
+              if (mergeBlock && r === mergeBlock.startRow && c === mergeBlock.startCol) {
+                drawW = 0;
+                for (let mc = mergeBlock.startCol; mc <= mergeBlock.endCol; mc++) {
+                  drawW += colWidths[mc] || 0;
+                }
+                drawH = 0;
+                for (let mr = mergeBlock.startRow; mr <= mergeBlock.endRow; mr++) {
+                  drawH += rowHeights[mr] || 0;
+                }
+                drawY = currentTop - (drawH - rowH);
+              }
 
               page.drawRectangle({
                 x: cellX,
-                y: cellY,
-                width: cellW,
-                height: rowH,
+                y: drawY,
+                width: drawW,
+                height: drawH,
                 borderColor: borderClr,
                 borderWidth: borderW,
-                color: bg,
+                color: cellEffectiveBg,
               });
 
               const cellImgKey = `${r}_${c}`;
@@ -1504,6 +1544,44 @@ export class PdfStudioEngine {
       return items;
     } catch (err) {
       console.error('Failed to extract page text items:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Extract existing hyperlink annotations from a PDF page
+   */
+  static async extractPageAnnotations(
+    pdfBufferOrProxy: ArrayBuffer | any,
+    pageNumber: number
+  ): Promise<HyperlinkOverlay[]> {
+    try {
+      const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
+        ? pdfBufferOrProxy
+        : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
+      const page = await proxy.getPage(pageNumber);
+      const annotations = await page.getAnnotations();
+      const pageIndex = pageNumber - 1;
+      const links: HyperlinkOverlay[] = [];
+
+      for (const annot of annotations) {
+        if (annot.subtype === 'Link' && (annot.url || annot.unsafeUrl)) {
+          const rect = annot.rect || [0, 0, 100, 20];
+          const [x1, y1, x2, y2] = rect;
+          links.push({
+            id: `link_pdf_${pageIndex}_${links.length}_${Date.now()}`,
+            pageIndex,
+            url: annot.url || annot.unsafeUrl,
+            x: Math.min(x1, x2),
+            y: Math.min(y1, y2),
+            width: Math.max(12, Math.abs(x2 - x1)),
+            height: Math.max(10, Math.abs(y2 - y1)),
+          });
+        }
+      }
+      return links;
+    } catch (err) {
+      console.warn('Failed to extract page annotations:', err);
       return [];
     }
   }
