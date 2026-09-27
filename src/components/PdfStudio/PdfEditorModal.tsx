@@ -109,6 +109,8 @@ import { WatermarkModal } from './WatermarkModal';
 import { PageNumberModal } from './PageNumberModal';
 import { PageBorderModal } from './PageBorderModal';
 import { InsertPageModal } from './InsertPageModal';
+import { ColorWheelPicker } from './ColorWheelPicker';
+import { snapStrokeWithDollarP } from '../../utils/dollarPRecognizer';
 import {
   saveActivePdfSession,
   loadActivePdfSession,
@@ -425,8 +427,8 @@ const sampleCanvasBgColor = (
     const cw = Math.round(cssW * pixelRatioX);
     const ch = Math.round(cssH * pixelRatioY);
 
-    const marginX = Math.max(2, Math.round(3 * pixelRatioX));
-    const marginY = Math.max(2, Math.round(3 * pixelRatioY));
+    const marginX = Math.max(1, Math.round(2 * pixelRatioX));
+    const marginY = Math.max(1, Math.round(2 * pixelRatioY));
 
     const samples: { r: number; g: number; b: number }[] = [];
     const sampleAt = (x: number, y: number) => {
@@ -438,28 +440,62 @@ const sampleCanvasBgColor = (
       }
     };
 
-    // Top & Bottom perimeter border lines
+    // 1. Top & Bottom perimeter border lines
     const stepX = Math.max(1, Math.floor(cw / 10));
     for (let x = cx; x <= cx + cw; x += stepX) {
       sampleAt(x, cy - marginY);
       sampleAt(x, cy + ch + marginY);
+      // Also sample just inside the top/bottom boundary
+      sampleAt(x, cy + 1);
+      sampleAt(x, cy + ch - 1);
     }
-    // Left & Right perimeter border lines
+    // 2. Left & Right perimeter border lines
     const stepY = Math.max(1, Math.floor(ch / 6));
     for (let y = cy; y <= cy + ch; y += stepY) {
       sampleAt(cx - marginX, y);
       sampleAt(cx + cw + marginX, y);
+      // Also sample just inside left/right boundary
+      sampleAt(cx + 1, y);
+      sampleAt(cx + cw - 1, y);
     }
 
+    // 3. Four inner corners (safe from center glyph ink)
+    sampleAt(cx + 2, cy + 2);
+    sampleAt(cx + cw - 2, cy + 2);
+    sampleAt(cx + 2, cy + ch - 2);
+    sampleAt(cx + cw - 2, cy + ch - 2);
+
     if (samples.length > 0) {
-      // Use median per channel to reject dark glyph strokes or border edge pixels
-      const rVals = samples.map((s) => s.r).sort((a, b) => a - b);
-      const gVals = samples.map((s) => s.g).sort((a, b) => a - b);
-      const bVals = samples.map((s) => s.b).sort((a, b) => a - b);
-      const mid = Math.floor(samples.length / 2);
-      let r = rVals[mid];
-      let g = gVals[mid];
-      let b = bVals[mid];
+      // Find the dominant color cluster (background color of the container/page)
+      // Group samples into buckets with 8-bit quantization
+      const colorBuckets = new Map<string, { r: number; g: number; b: number; count: number }>();
+      for (const s of samples) {
+        const qr = Math.round(s.r / 6) * 6;
+        const qg = Math.round(s.g / 6) * 6;
+        const qb = Math.round(s.b / 6) * 6;
+        const key = `${qr}_${qg}_${qb}`;
+        const existing = colorBuckets.get(key);
+        if (existing) {
+          existing.count++;
+          existing.r = (existing.r * (existing.count - 1) + s.r) / existing.count;
+          existing.g = (existing.g * (existing.count - 1) + s.g) / existing.count;
+          existing.b = (existing.b * (existing.count - 1) + s.b) / existing.count;
+        } else {
+          colorBuckets.set(key, { r: s.r, g: s.g, b: s.b, count: 1 });
+        }
+      }
+
+      // Pick the bucket with the highest count (dominant background color)
+      let bestBucket: { r: number; g: number; b: number; count: number } | null = null;
+      for (const bucket of colorBuckets.values()) {
+        if (!bestBucket || bucket.count > bestBucket.count) {
+          bestBucket = bucket;
+        }
+      }
+
+      let r = Math.round(bestBucket ? bestBucket.r : 255);
+      let g = Math.round(bestBucket ? bestBucket.g : 255);
+      let b = Math.round(bestBucket ? bestBucket.b : 255);
 
       // Only snap to pure #ffffff if it is genuinely neutral pure white (> 250 on all channels with delta <= 3)
       if (
@@ -899,6 +935,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [eraserCursorPos, setEraserCursorPos] = useState<{ x: number; y: number } | null>(null);
   const [isDrawingMouseDown, setIsDrawingMouseDown] = useState<boolean>(false);
   const [showDrawDropdown, setShowDrawDropdown] = useState<boolean>(false);
+  const [showPenColorWheel, setShowPenColorWheel] = useState<boolean>(false);
+  const [showPencilColorWheel, setShowPencilColorWheel] = useState<boolean>(false);
   const drawBtnRef = useRef<HTMLButtonElement | null>(null);
 
   // Watermark Feature State
@@ -1333,7 +1371,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Dragging & Resizing Canvas State
   const [draggingItem, setDraggingItem] = useState<{
     id: string;
-    type: 'overlay' | 'image' | 'shape' | 'table';
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item';
     startX: number;
     startY: number;
     origX: number;
@@ -1342,7 +1380,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   const [resizingItem, setResizingItem] = useState<{
     id: string;
-    type: 'overlay' | 'image' | 'shape' | 'table';
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item';
     handle: string;
     startX: number;
     startY: number;
@@ -1358,7 +1396,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Interactive On-Canvas Rotation Pointer State (MS Word Style)
   const [rotatingItem, setRotatingItem] = useState<{
     id: string;
-    type: 'overlay' | 'image' | 'shape' | 'table';
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item';
     centerX: number;
     centerY: number;
     startAngle: number;
@@ -2539,6 +2577,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               }
             } catch (linkErr) {
               console.warn('Annotation/link extraction note:', linkErr);
+            }
+
+            // Extract existing embedded PDF photos and images for this page so they are selectable and editable
+            try {
+              const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage);
+              if (isMounted && extractedImgs.length > 0) {
+                setImageOverlays((prev) => {
+                  const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
+                  const newImgs = extractedImgs.filter((i) => !existingKeys.has(`${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
+                  return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
+                });
+              }
+            } catch (imgErr) {
+              console.warn('Page image extraction note:', imgErr);
             }
           } catch (e) {
             console.warn('Text item extraction warning:', e);
@@ -4199,7 +4251,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Render 8 Resize Handles and MS Word-Style Rotation Handle on selected Element
   const renderResizeHandles = (
     id: string,
-    type: 'overlay' | 'image' | 'shape' | 'table',
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item',
     origX: number,
     origY: number,
     origW: number,
@@ -4239,6 +4291,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 initialRot = imageOverlays.find((i) => i.id === id)?.rotation || 0;
               } else if (type === 'overlay') {
                 initialRot = textOverlays.find((t) => t.id === id)?.rotation || 0;
+              } else if (type === 'text-item') {
+                initialRot = modifiedTexts[id]?.rotation || 0;
               }
               setRotatingItem({
                 id,
@@ -4269,6 +4323,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   initialRot = imageOverlays.find((i) => i.id === id)?.rotation || 0;
                 } else if (type === 'overlay') {
                   initialRot = textOverlays.find((t) => t.id === id)?.rotation || 0;
+                } else if (type === 'text-item') {
+                  initialRot = modifiedTexts[id]?.rotation || 0;
                 }
                 setRotatingItem({
                   id,
@@ -4292,6 +4348,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 else if (type === 'table') r = tables.find((t) => t.id === id)?.rotation || 0;
                 else if (type === 'image') r = imageOverlays.find((i) => i.id === id)?.rotation || 0;
                 else if (type === 'overlay') r = textOverlays.find((t) => t.id === id)?.rotation || 0;
+                else if (type === 'text-item') r = modifiedTexts[id]?.rotation || 0;
                 return `${Math.round(r)}°`;
               })()}
             </div>
@@ -4400,6 +4457,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           setImageOverlays((prev) => prev.map((i) => (i.id === rotatingItem.id ? { ...i, rotation: newRot } : i)));
         } else if (rotatingItem.type === 'overlay') {
           setTextOverlays((prev) => prev.map((t) => (t.id === rotatingItem.id ? { ...t, rotation: newRot } : t)));
+        } else if (rotatingItem.type === 'text-item') {
+          setModifiedTexts((prev) => {
+            const item = prev[rotatingItem.id] || detectedTextItems.find((t) => t.id === rotatingItem.id);
+            if (!item) return prev;
+            return {
+              ...prev,
+              [rotatingItem.id]: {
+                ...item,
+                rotation: newRot,
+                isModified: true,
+              },
+            };
+          });
         }
         return;
       }
@@ -4458,6 +4528,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           } else if (draggingItem.type === 'overlay') {
             const tx = textOverlays.find((t) => t.id === draggingItem.id);
             if (tx) { itemW = 120; itemH = 30; }
+          } else if (draggingItem.type === 'text-item') {
+            const item = modifiedTexts[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
+            if (item) { itemW = item.width || 80; itemH = item.height || 24; }
           }
 
           // Calculate coordinates relative to this page, strictly clamped within page boundaries so nothing is ever in the gap
@@ -4474,6 +4547,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : i)));
           } else if (draggingItem.type === 'overlay') {
             setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
+          } else if (draggingItem.type === 'text-item') {
+            setModifiedTexts((prev) => {
+              const item = prev[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
+              if (!item) return prev;
+              return {
+                ...prev,
+                [draggingItem.id]: {
+                  ...item,
+                  pageIndex: targetPageIndex,
+                  x: clampedX,
+                  y: clampedY,
+                  isModified: true,
+                },
+              };
+            });
           }
           if (currentPage !== targetPage) {
             setCurrentPage(targetPage);
@@ -4495,6 +4583,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, x: newX, y: newY } : i)));
         } else if (draggingItem.type === 'overlay') {
           setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
+        } else if (draggingItem.type === 'text-item') {
+          setModifiedTexts((prev) => {
+            const item = prev[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
+            if (!item) return prev;
+            return {
+              ...prev,
+              [draggingItem.id]: {
+                ...item,
+                x: newX,
+                y: newY,
+                isModified: true,
+              },
+            };
+          });
         }
       } else if (resizingItem) {
         // Delta in screen points:
@@ -4565,6 +4667,28 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               i.id === resizingItem.id ? { ...i, x: nextX, y: nextY, width: nextW, height: nextH } : i
             )
           );
+        } else if (resizingItem.type === 'overlay') {
+          setTextOverlays((prev) =>
+            prev.map((t) =>
+              t.id === resizingItem.id ? { ...t, x: nextX, y: nextY } : t
+            )
+          );
+        } else if (resizingItem.type === 'text-item') {
+          setModifiedTexts((prev) => {
+            const item = prev[resizingItem.id] || detectedTextItems.find((t) => t.id === resizingItem.id);
+            if (!item) return prev;
+            return {
+              ...prev,
+              [resizingItem.id]: {
+                ...item,
+                x: nextX,
+                y: nextY,
+                width: nextW,
+                height: nextH,
+                isModified: true,
+              },
+            };
+          });
         }
       }
     };
@@ -4822,7 +4946,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     let finalPoints = currentStroke.points;
     if (snapToShape) {
-      finalPoints = snapStrokeToGeometricShape(currentStroke.points);
+      finalPoints = snapStrokeWithDollarP(currentStroke.points);
     }
 
     const completedStroke: DrawingStroke = {
@@ -5742,6 +5866,106 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         }
       }
 
+      // Keyboard Navigation & Nudging / Resizing / Table cell navigation
+      if (!isEditable && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+        // Table cell navigation
+        if (selectedTableCell) {
+          e.preventDefault();
+          const targetTable = tables.find((t) => t.id === selectedTableCell.tableId);
+          if (targetTable) {
+            let nextRow = selectedTableCell.row;
+            let nextCol = selectedTableCell.col;
+            if (e.key === 'ArrowUp') nextRow = Math.max(0, nextRow - 1);
+            if (e.key === 'ArrowDown') nextRow = Math.min(targetTable.rows - 1, nextRow + 1);
+            if (e.key === 'ArrowLeft') nextCol = Math.max(0, nextCol - 1);
+            if (e.key === 'ArrowRight') nextCol = Math.min(targetTable.cols - 1, nextCol + 1);
+
+            if (e.shiftKey) {
+              const startR = selectedTableRange ? selectedTableRange.startRow : selectedTableCell.row;
+              const startC = selectedTableRange ? selectedTableRange.startCol : selectedTableCell.col;
+              setSelectedTableRange({
+                tableId: targetTable.id,
+                startRow: startR,
+                startCol: startC,
+                endRow: nextRow,
+                endCol: nextCol,
+              });
+            } else {
+              setSelectedTableCell({ tableId: targetTable.id, row: nextRow, col: nextCol });
+              setSelectedTableRange({
+                tableId: targetTable.id,
+                startRow: nextRow,
+                startCol: nextCol,
+                endRow: nextRow,
+                endCol: nextCol,
+              });
+            }
+          }
+          return;
+        }
+
+        // Element nudging (Arrow keys) or resizing (Shift + Arrow keys)
+        const step = isCtrlOrMeta ? 10 : 1;
+        if (e.shiftKey) {
+          // Resize element
+          e.preventDefault();
+          const dW = (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0);
+          const dH = (e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0);
+          if (selectedShapeId) {
+            setShapes((prev) => prev.map((s) => s.id === selectedShapeId ? { ...s, width: Math.max(10, s.width + dW), height: Math.max(10, s.height + dH) } : s));
+          } else if (selectedTableId) {
+            setTables((prev) => prev.map((t) => t.id === selectedTableId ? { ...t, width: Math.max(20, t.width + dW), height: Math.max(20, t.height + dH) } : t));
+          } else if (selectedOverlayId) {
+            setImageOverlays((prev) => prev.map((i) => i.id === selectedOverlayId ? { ...i, width: Math.max(10, i.width + dW), height: Math.max(10, i.height + dH) } : i));
+          } else if (selectedTextItemId) {
+            setModifiedTexts((prev) => {
+              const item = prev[selectedTextItemId] || detectedTextItems.find((t) => t.id === selectedTextItemId);
+              if (!item) return prev;
+              return {
+                ...prev,
+                [selectedTextItemId]: {
+                  ...item,
+                  width: Math.max(10, (item.width || 50) + dW),
+                  height: Math.max(10, (item.height || 20) + dH),
+                  isModified: true,
+                },
+              };
+            });
+          }
+          return;
+        } else {
+          // Nudge element position
+          const dX = (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0);
+          const dY = (e.key === 'ArrowDown' ? -step : e.key === 'ArrowUp' ? step : 0);
+          if (selectedShapeId) {
+            e.preventDefault();
+            setShapes((prev) => prev.map((s) => s.id === selectedShapeId ? { ...s, x: s.x + dX, y: s.y + dY } : s));
+          } else if (selectedTableId) {
+            e.preventDefault();
+            setTables((prev) => prev.map((t) => t.id === selectedTableId ? { ...t, x: t.x + dX, y: t.y + dY } : t));
+          } else if (selectedOverlayId) {
+            e.preventDefault();
+            setImageOverlays((prev) => prev.map((i) => i.id === selectedOverlayId ? { ...i, x: i.x + dX, y: i.y + dY } : i));
+            setTextOverlays((prev) => prev.map((t) => t.id === selectedOverlayId ? { ...t, x: t.x + dX, y: t.y + dY } : t));
+          } else if (selectedTextItemId) {
+            e.preventDefault();
+            setModifiedTexts((prev) => {
+              const item = prev[selectedTextItemId] || detectedTextItems.find((t) => t.id === selectedTextItemId);
+              if (!item) return prev;
+              return {
+                ...prev,
+                [selectedTextItemId]: {
+                  ...item,
+                  x: (item.x || 0) + dX,
+                  y: (item.y || 0) + dY,
+                  isModified: true,
+                },
+              };
+            });
+          }
+        }
+      }
+
       // Escape: clear selection / cancel edit / close popups
       if (e.key === 'Escape') {
         setActiveEditingId(null);
@@ -5751,6 +5975,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setSelectedTableId(null);
         setSelectedTableCell(null);
         setSelectedBorderPage(null);
+        setSelectedStrokeId(null);
+        setSelectedTableRange(null);
         setCropImageId(null);
         setShowWatermarkModal(false);
         setShowBorderModal(false);
@@ -5760,6 +5986,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setShowWatermarkDropdown(false);
         setShowInsertPageDropdown(false);
         setShowPageNumberDropdown(false);
+        setShowPenColorWheel(false);
+        setShowPencilColorWheel(false);
         if (['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool)) {
           setActiveTool('view');
         }
@@ -5781,11 +6009,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     selectedShapeId,
     selectedTableId,
     selectedTableCell,
+    selectedStrokeId,
+    selectedTableRange,
     selectedBorderPage,
     tables,
     shapes,
     imageOverlays,
     textOverlays,
+    drawings,
+    multiSelectedIds,
     currentPage,
     detectedTextItems,
     modifiedTexts,
@@ -6315,10 +6547,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
             }`}
-            title="Edit Text - Click any text on page to edit in-place naturally"
+            title="Edit Mode - Select & edit any element: text in-place, photos, shapes, tables, and drawings"
           >
             <Edit3 className="w-3.5 h-3.5" />
-            <span>Edit Text</span>
+            <span>Edit</span>
           </button>
 
           <button
@@ -6672,7 +6904,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[46vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    className="fixed w-72 sm:w-80 max-w-[calc(100vw-24px)] max-h-[min(480px,80vh)] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2 px-1">
@@ -6806,7 +7038,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-56 max-w-[calc(100vw-24px)] max-h-[46vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    className="fixed w-72 sm:w-80 max-w-[calc(100vw-24px)] max-h-[min(480px,80vh)] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5 px-1">
@@ -7174,7 +7406,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-80 max-w-[calc(100vw-24px)] max-h-[45vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    className="fixed w-72 sm:w-80 max-w-[calc(100vw-24px)] max-h-[min(480px,80vh)] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header with Enable Switch */}
@@ -7496,7 +7728,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-80 max-w-[calc(100vw-24px)] max-h-[45vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    className="fixed w-72 sm:w-80 max-w-[calc(100vw-24px)] max-h-[min(480px,80vh)] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {/* Header with Enable Switch */}
@@ -7821,7 +8053,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[46vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    className="fixed w-72 sm:w-80 max-w-[calc(100vw-24px)] max-h-[min(480px,80vh)] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800 mb-2">
@@ -8608,6 +8840,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       title={c}
                     />
                   ))}
+                  {/* Visual Color Wheel Picker Button */}
+                  <div className="relative ml-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowPenColorWheel((prev) => !prev)}
+                      className="w-4 h-4 rounded-full border border-black/30 dark:border-white/30 shadow-xs hover:scale-125 transition-transform"
+                      style={{
+                        background: 'conic-gradient(from 0deg, red, yellow, lime, aqua, blue, magenta, red)',
+                      }}
+                      title="Open Visual Color Wheel"
+                    />
+                    {showPenColorWheel && (
+                      <div className="absolute top-7 left-0 z-50 animate-fade-in shadow-2xl">
+                        <ColorWheelPicker
+                          color={drawingColor}
+                          onChange={(c) => setDrawingColor(c)}
+                          onClose={() => setShowPenColorWheel(false)}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -8690,6 +8943,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       title={c}
                     />
                   ))}
+                  {/* Visual Color Wheel Picker Button */}
+                  <div className="relative ml-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowPencilColorWheel((prev) => !prev)}
+                      className="w-4 h-4 rounded-full border border-black/30 dark:border-white/30 shadow-xs hover:scale-125 transition-transform"
+                      style={{
+                        background: 'conic-gradient(from 0deg, red, yellow, lime, aqua, blue, magenta, red)',
+                      }}
+                      title="Open Visual Color Wheel"
+                    />
+                    {showPencilColorWheel && (
+                      <div className="absolute top-7 left-0 z-50 animate-fade-in shadow-2xl">
+                        <ColorWheelPicker
+                          color={drawingColor}
+                          onChange={(c) => setDrawingColor(c)}
+                          onClose={() => setShowPencilColorWheel(false)}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -9538,14 +9812,23 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const scale = zoomScale;
                 const cluster = textItemLineClusters.get(item.id);
                 const baselineY = cluster ? cluster.baselineCssY : (viewportDims.height - item.y * scale);
-                const boxY = cluster ? cluster.boxTop : (baselineY - (itemFontSize * scale * 0.82));
-                const boxH = cluster ? cluster.boxHeight : Math.max(12, itemFontSize * scale * 1.15);
-                const boxX = item.x * scale;
-                const boxW = Math.max(8, item.width * scale);
+
+                const itemW = (currentItem.width !== undefined ? currentItem.width : item.width);
+                const itemH = (currentItem.height !== undefined ? currentItem.height : (cluster ? (cluster.boxHeight / scale) : (itemFontSize * 1.15)));
+                const itemX = (currentItem.x !== undefined ? currentItem.x : item.x);
+                const itemY = (currentItem.y !== undefined ? currentItem.y : item.y);
+
+                const boxW = Math.max(8, itemW * scale);
+                const boxH = Math.max(12, itemH * scale);
+                const boxX = itemX * scale;
+                const boxY = (currentItem.x !== undefined && currentItem.y !== undefined && currentItem.isModified)
+                  ? (viewportDims.height - itemY * scale - itemH * scale)
+                  : (cluster ? cluster.boxTop : (baselineY - (itemFontSize * scale * 0.82)));
 
                 const cssFontFamily = resolveCssFontFamily(itemFontFamily);
-                const sampledBg = sampleCanvasBgColor(canvasRef.current, boxX, boxY, boxW, boxH, currentItem.bgColorHex || item.bgColorHex);
-                const sampledFg = sampleCanvasTextColor(canvasRef.current, boxX, boxY, boxW, boxH, sampledBg.rgb);
+                const targetPageCanvas = pageCanvasesRef.current.get(pageNum) || canvasRef.current;
+                const sampledBg = sampleCanvasBgColor(targetPageCanvas, boxX, boxY, boxW, boxH, currentItem.bgColorHex || item.bgColorHex);
+                const sampledFg = sampleCanvasTextColor(targetPageCanvas, boxX, boxY, boxW, boxH, sampledBg.rgb);
                 const effectiveBgHex = currentItem.bgColorHex || item.bgColorHex || sampledBg.hex;
                 const textColor = currentItem.color || item.color || sampledFg;
 
@@ -9591,22 +9874,22 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         ? 'border-[1.5px] border-blue-500 ring-2 ring-blue-500/20 z-40'
                         : isSelected
                         ? 'border-[1.5px] border-blue-500 ring-1 ring-blue-500/10 z-30'
-                        : 'border border-transparent hover:border-blue-400/40'
+                        : isItemModified
+                        ? 'border-0 outline-none z-20'
+                        : 'border border-transparent hover:border-blue-400/40 z-10'
                     }`}
                   >
-                    {/* 8 Wondershare PDFelement boundary selection handles */}
-                    {(isEditing || isSelected) && (
-                      <>
-                        <span className="absolute -top-1 -left-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute -top-1 -right-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute top-1/2 -translate-y-1/2 -left-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute top-1/2 -translate-y-1/2 -right-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute -bottom-1 -left-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                        <span className="absolute -bottom-1 -right-1 w-2 h-2 bg-white border border-blue-600 rounded-full z-50 pointer-events-none" />
-                      </>
-                    )}
+                    {/* Active 8-Handle Resizing, Rotation, and 4-Direction Move Handle */}
+                    {(isEditing || isSelected) &&
+                      renderResizeHandles(
+                        item.id,
+                        'text-item',
+                        itemX,
+                        itemY,
+                        itemW,
+                        itemH
+                      )
+                    }
 
                     {isEditing ? (
                       <input
@@ -9615,11 +9898,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         value={currentTextVal}
                         onChange={(e) => {
                           const updatedText = e.target.value;
+                          const charCount = updatedText.length;
+                          // Dynamically auto-expand or shrink width as text is typed or deleted
+                          const dynamicContentWidth = Math.max(item.width, Math.round(charCount * itemFontSize * 0.62 + 6));
                           setModifiedTexts((prev) => ({
                             ...prev,
                             [item.id]: {
                               ...item,
                               currentText: updatedText,
+                              width: dynamicContentWidth,
                               fontFamily: itemFontFamily,
                               fontSize: itemFontSize,
                               isBold: itemIsBold,
@@ -9707,7 +9994,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             {/* Transparent Selectable Text Layer in Read Mode (I-Beam Cursor & Selection) */}
             {isCurrentPage && activeTool === 'view' && (
-              <div className="absolute inset-0 z-20 pointer-events-auto select-text cursor-text">
+              <div className="absolute inset-0 z-20 pointer-events-auto select-text cursor-text pdf-text-selection-layer">
+                <style>{`
+                  .pdf-text-selection-layer ::selection {
+                    background: rgba(59, 130, 246, 0.35) !important;
+                    color: transparent !important;
+                    -webkit-text-fill-color: transparent !important;
+                    caret-color: transparent !important;
+                    text-shadow: none !important;
+                  }
+                `}</style>
                 {detectedTextItems.map((item) => {
                   const cluster = textItemLineClusters.get(item.id);
                   const scale = zoomScale;
@@ -9729,10 +10025,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         fontFamily: resolveCssFontFamily(item.fontFamily || 'Calibri'),
                         lineHeight: `${boxH}px`,
                         color: 'transparent',
+                        WebkitTextFillColor: 'transparent',
                         userSelect: 'text',
                         whiteSpace: 'pre',
                       }}
-                      className="selection:bg-blue-500/30 selection:text-transparent select-text"
+                      className="select-text"
                     >
                       {item.originalText}
                     </span>
@@ -10558,6 +10855,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                       }
                                     }}
                                   >
+                                    {isCellSelected && (
+                                      <div className="absolute inset-0 z-30 pointer-events-none border-2 border-blue-600 bg-blue-500/35 ring-1 ring-white shadow-xs" />
+                                    )}
                                     {hasCellImg ? (
                                       <div
                                         className={`relative w-full h-full flex items-center justify-center p-1 group/cellimg min-h-[16px] ${

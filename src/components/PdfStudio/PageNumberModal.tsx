@@ -8,7 +8,9 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Check,
-  Info
+  Info,
+  ZoomIn,
+  ZoomOut
 } from 'lucide-react';
 import {
   PageNumberConfig,
@@ -55,6 +57,7 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
   const [specificPages, setSpecificPages] = useState<string>(config.specificPages || '');
 
   const [previewPage, setPreviewPage] = useState<number>(initialPage || 1);
+  const [previewZoom, setPreviewZoom] = useState<number>(1.0);
   const [addToTemplate, setAddToTemplate] = useState<boolean>(false);
 
   // Collapsible sections
@@ -444,52 +447,86 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
           {/* Right Live Document Page Preview */}
           <div className="flex-1 bg-[#12151b] flex flex-col items-center justify-between p-4 min-h-0 overflow-hidden">
             <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-auto p-2">
-              <div className="bg-white shadow-2xl rounded-xs overflow-hidden border border-zinc-300/40 dark:border-zinc-800">
+              <div
+                className="bg-white shadow-2xl rounded-xs overflow-hidden border border-zinc-300/40 dark:border-zinc-800 transition-transform origin-center"
+                style={{ transform: `scale(${previewZoom})` }}
+              >
                 <canvas ref={previewCanvasRef} className="block max-h-[64vh] object-contain" />
               </div>
             </div>
 
-            {/* Pagination controls at the bottom of preview */}
-            <div className="flex items-center gap-1.5 bg-[#1a1d24] border border-zinc-800 rounded-lg px-3 py-1 shadow-md shrink-0">
-              <button
-                type="button"
-                onClick={() => setPreviewPage(1)}
-                disabled={previewPage <= 1}
-                className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
-                title="First Page"
-              >
-                <ChevronsLeft className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
-                disabled={previewPage <= 1}
-                className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
-                title="Previous Page"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <span className="font-mono text-xs px-2 text-zinc-300">
-                {previewPage} / {totalPages || 1}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPreviewPage((p) => Math.min(totalPages || 1, p + 1))}
-                disabled={previewPage >= totalPages}
-                className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
-                title="Next Page"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPreviewPage(totalPages || 1)}
-                disabled={previewPage >= totalPages}
-                className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
-                title="Last Page"
-              >
-                <ChevronsRight className="w-3.5 h-3.5" />
-              </button>
+            {/* Bottom Controls: Zoom + Pagination */}
+            <div className="flex items-center gap-3 bg-[#1a1d24] border border-zinc-800 rounded-lg px-3 py-1 shadow-md shrink-0">
+              {/* Zoom Controls */}
+              <div className="flex items-center gap-1 border-r border-zinc-700 pr-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom((z) => Math.max(0.4, Math.round((z - 0.15) * 100) / 100))}
+                  className="p-1 rounded text-zinc-400 hover:text-white"
+                  title="Zoom Out (-)"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom(1.0)}
+                  className="font-mono text-[11px] text-zinc-300 hover:text-white px-1 font-semibold"
+                  title="Reset Zoom to 100%"
+                >
+                  {Math.round(previewZoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewZoom((z) => Math.min(2.5, Math.round((z + 0.15) * 100) / 100))}
+                  className="p-1 rounded text-zinc-400 hover:text-white"
+                  title="Zoom In (+)"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Pagination controls */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage(1)}
+                  disabled={previewPage <= 1}
+                  className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
+                  title="First Page"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                  disabled={previewPage <= 1}
+                  className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
+                  title="Previous Page"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="font-mono text-xs px-2 text-zinc-300">
+                  {previewPage} / {totalPages || 1}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage((p) => Math.min(totalPages || 1, p + 1))}
+                  disabled={previewPage >= totalPages}
+                  className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
+                  title="Next Page"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewPage(totalPages || 1)}
+                  disabled={previewPage >= totalPages}
+                  className="p-1 rounded text-zinc-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none"
+                  title="Last Page"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -1587,6 +1587,98 @@ export class PdfStudioEngine {
   }
 
   /**
+   * Extract embedded images from a PDF page into interactive ImageOverlay items
+   */
+  static async extractPageImages(
+    pdfBufferOrProxy: ArrayBuffer | any,
+    pageNumber: number
+  ): Promise<ImageOverlay[]> {
+    try {
+      const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
+        ? pdfBufferOrProxy
+        : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
+      const page = await proxy.getPage(pageNumber);
+      const opList = await page.getOperatorList();
+      const pageIndex = pageNumber - 1;
+      const images: ImageOverlay[] = [];
+
+      let currentMatrix = [1, 0, 0, 1, 0, 0];
+      const matrixStack: number[][] = [];
+
+      const multiplyMatrices = (m1: number[], m2: number[]) => [
+        m1[0] * m2[0] + m1[2] * m2[1],
+        m1[1] * m2[0] + m1[3] * m2[1],
+        m1[0] * m2[2] + m1[2] * m2[3],
+        m1[1] * m2[2] + m1[3] * m2[3],
+        m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+        m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+      ];
+
+      for (let i = 0; i < opList.fnArray.length; i++) {
+        const fn = opList.fnArray[i];
+        const args = opList.argsArray[i];
+
+        if (fn === 10) {
+          matrixStack.push([...currentMatrix]);
+        } else if (fn === 11) {
+          if (matrixStack.length > 0) currentMatrix = matrixStack.pop()!;
+        } else if (fn === 12 && Array.isArray(args)) {
+          currentMatrix = multiplyMatrices(currentMatrix, args);
+        } else if ((fn === 82 || fn === 85) && args && args[0]) {
+          const imgName = args[0];
+          const obj = (page.objs && page.objs.get(imgName)) || (page.commonObjs && page.commonObjs.get(imgName));
+          if (obj && obj.data && obj.width && obj.height) {
+            const canvas = document.createElement('canvas');
+            canvas.width = obj.width;
+            canvas.height = obj.height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              const imgData = ctx.createImageData(obj.width, obj.height);
+              if (obj.data.length === obj.width * obj.height * 4) {
+                imgData.data.set(obj.data);
+              } else if (obj.data.length === obj.width * obj.height * 3) {
+                for (let p = 0, q = 0; p < obj.data.length; p += 3, q += 4) {
+                  imgData.data[q] = obj.data[p];
+                  imgData.data[q + 1] = obj.data[p + 1];
+                  imgData.data[q + 2] = obj.data[p + 2];
+                  imgData.data[q + 3] = 255;
+                }
+              } else {
+                continue;
+              }
+              ctx.putImageData(imgData, 0, 0);
+              const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
+              if (blob) {
+                const buf = await blob.arrayBuffer();
+                const imgW = Math.max(16, Math.round(Math.abs(currentMatrix[0]) || obj.width));
+                const imgH = Math.max(16, Math.round(Math.abs(currentMatrix[3]) || obj.height));
+                const imgX = Math.round(currentMatrix[4] || 0);
+                const imgY = Math.round(currentMatrix[5] || 0);
+                images.push({
+                  id: `img_extracted_${pageIndex}_${images.length}_${Date.now()}`,
+                  pageIndex,
+                  imageData: buf,
+                  imageType: 'png',
+                  x: imgX,
+                  y: imgY,
+                  width: imgW,
+                  height: imgH,
+                  rotation: 0,
+                  opacity: 1,
+                });
+              }
+            }
+          }
+        }
+      }
+      return images;
+    } catch (err) {
+      console.warn('Image extraction note:', err);
+      return [];
+    }
+  }
+
+  /**
    * Helper to parse string ranges like "1-3, 5, 8-10" into 0-indexed page indices
    */
   private static parsePageRanges(rangeStr: string, totalPages: number): number[] {
