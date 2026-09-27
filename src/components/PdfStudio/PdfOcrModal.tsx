@@ -148,14 +148,11 @@ export const PdfOcrModal: React.FC<PdfOcrModalProps> = ({
   };
 
   const handleOpenInEditor = async () => {
-    if (!file || pageResults.length === 0) return;
+    if (!file) return;
     try {
       setIsExporting(true);
-      const baseName = file.name.replace(/\.[^/.]+$/, '');
-      const pdfBlob = await OcrEngine.exportToPdf(pageResults);
-      const ocrFile = new File([pdfBlob], `${baseName}_ocr.pdf`, { type: 'application/pdf' });
       if (onOpenInEditor) {
-        onOpenInEditor(ocrFile);
+        onOpenInEditor(file);
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to open in editor.');

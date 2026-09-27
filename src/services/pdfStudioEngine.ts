@@ -84,6 +84,7 @@ export interface ExistingTextItem {
   rotation?: number;
   color?: string;
   backgroundColor?: { r: number; g: number; b: number };
+  bgColorHex?: string;
   isModified?: boolean;
 }
 
@@ -249,6 +250,52 @@ export interface PageNumberConfig {
   offsetY?: number;
 }
 
+export interface DrawingPoint {
+  x: number;
+  y: number;
+  pressure?: number;
+}
+
+export interface DrawingStroke {
+  id: string;
+  pageIndex: number; // 0-indexed
+  tool: 'pen' | 'pencil' | 'highlighter';
+  color: string;
+  width?: number;
+  thickness: number;
+  points: DrawingPoint[];
+  opacity?: number;
+  blendMode?: 'source-over' | 'multiply';
+  isSnappedShape?: boolean;
+}
+
+export interface WatermarkConfig {
+  enabled: boolean;
+  type: 'text' | 'file';
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  isBold: boolean;
+  isItalic: boolean;
+  isUnderline: boolean;
+  proportionOfPages: boolean;
+  proportionPercent: number;
+  position: 'top-left' | 'top-center' | 'top-right' | 'middle-left' | 'center' | 'middle-right' | 'bottom-left' | 'bottom-center' | 'bottom-right';
+  xOffsetCm: number;
+  yOffsetCm: number;
+  tile: boolean;
+  tileSpacingXCm: number;
+  tileSpacingYCm: number;
+  rotation: number;
+  opacity: number;
+  layer: 'front' | 'behind';
+  pageScope: 'all' | 'custom' | 'odd' | 'even';
+  customRange: string;
+  fileDataUrl?: string;
+  fileType?: string;
+}
+
 export interface PdfEditPayload {
   rotations?: Record<number, number>; // pageIndex -> degrees (90, 180, 270)
   deletedPages?: number[]; // list of 0-indexed page numbers to remove
@@ -261,6 +308,8 @@ export interface PdfEditPayload {
   hyperlinks?: HyperlinkOverlay[];
   pageBorders?: Record<number, PageBorderConfig>;
   pageNumberConfig?: PageNumberConfig;
+  drawings?: DrawingStroke[];
+  watermarkConfig?: WatermarkConfig;
 }
 
 export class PdfStudioEngine {
@@ -331,6 +380,50 @@ export class PdfStudioEngine {
    * Apply rich edits: font/weight matched text replacement, inserted text,
    * photos, blank page insertions, page deletions, rotations, and hyperlinks
    */
+  /**
+   * Insert pages from another PDF document at the specified position
+   */
+  static async insertPagesFromOtherPdf(
+    targetBuffer: ArrayBuffer,
+    sourceBuffer: ArrayBuffer,
+    insertPosition: 'before' | 'after' | 'start' | 'end',
+    targetPageIndex: number, // 0-indexed
+    sourcePageIndices?: number[]
+  ): Promise<{ buffer: ArrayBuffer; newTotalPages: number }> {
+    const targetDoc = await PDFDocument.load(targetBuffer, { ignoreEncryption: true });
+    const sourceDoc = await PDFDocument.load(sourceBuffer, { ignoreEncryption: true });
+
+    const indicesToCopy =
+      sourcePageIndices && sourcePageIndices.length > 0
+        ? sourcePageIndices.filter((idx) => idx >= 0 && idx < sourceDoc.getPageCount())
+        : sourceDoc.getPageIndices();
+
+    const copiedPages = await targetDoc.copyPages(sourceDoc, indicesToCopy);
+
+    let insertIndex = 0;
+    const currentTotal = targetDoc.getPageCount();
+    if (insertPosition === 'start') {
+      insertIndex = 0;
+    } else if (insertPosition === 'end') {
+      insertIndex = currentTotal;
+    } else if (insertPosition === 'before') {
+      insertIndex = Math.max(0, Math.min(currentTotal, targetPageIndex));
+    } else {
+      // 'after'
+      insertIndex = Math.max(0, Math.min(currentTotal, targetPageIndex + 1));
+    }
+
+    for (let i = 0; i < copiedPages.length; i++) {
+      targetDoc.insertPage(insertIndex + i, copiedPages[i]);
+    }
+
+    const savedBytes = await targetDoc.save();
+    return {
+      buffer: savedBytes.buffer.slice(savedBytes.byteOffset, savedBytes.byteOffset + savedBytes.byteLength),
+      newTotalPages: targetDoc.getPageCount(),
+    };
+  }
+
   static async applyEdits(
     file: File | Blob,
     payload: PdfEditPayload,
@@ -438,11 +531,26 @@ export class PdfStudioEngine {
           const eraseHeight = Math.max(rep.height + descenderPt + ascenderPt, size * 1.35);
           const eraseWidth = rep.width + 4;
 
-          const rawBg = rep.backgroundColor || { r: 1, g: 1, b: 1 };
-          // If background is near-white (>= 0.88), snap to pure 1.0 white to prevent muddy gray boxes
-          const bg = (rawBg.r >= 0.88 && rawBg.g >= 0.88 && rawBg.b >= 0.88)
-            ? { r: 1, g: 1, b: 1 }
-            : rawBg;
+          let bg: { r: number; g: number; b: number } = { r: 1, g: 1, b: 1 };
+          if (rep.bgColorHex && /^#[0-9a-fA-F]{6}$/.test(rep.bgColorHex)) {
+            const r = parseInt(rep.bgColorHex.slice(1, 3), 16) / 255;
+            const g = parseInt(rep.bgColorHex.slice(3, 5), 16) / 255;
+            const b = parseInt(rep.bgColorHex.slice(5, 7), 16) / 255;
+            bg = { r, g, b };
+          } else if (rep.backgroundColor) {
+            bg = rep.backgroundColor;
+          }
+
+          // Only snap to 1.0 if strictly neutral and practically pure white (>0.985 with <0.01 delta)
+          if (
+            bg.r >= 0.985 &&
+            bg.g >= 0.985 &&
+            bg.b >= 0.985 &&
+            Math.abs(bg.r - bg.g) <= 0.01 &&
+            Math.abs(bg.r - bg.b) <= 0.01
+          ) {
+            bg = { r: 1, g: 1, b: 1 };
+          }
 
           page.drawRectangle({
             x: Math.max(0, rep.x - 2),
@@ -1030,11 +1138,144 @@ export class PdfStudioEngine {
       }
     }
 
+    // 9. Apply Freehand Drawing Strokes (Pen, Pencil, Highlighter)
+    if (payload.drawings && payload.drawings.length > 0) {
+      for (const stroke of payload.drawings) {
+        if (stroke.pageIndex >= 0 && stroke.pageIndex < doc.getPageCount() && stroke.points.length >= 2) {
+          const page = doc.getPage(stroke.pageIndex);
+          const color = this.parseHexColor(stroke.color || '#000000');
+          const isHighlighter = stroke.tool === 'highlighter';
+          const strokeWidth = stroke.thickness || stroke.width || (isHighlighter ? 18 : 2);
+          const opacity = isHighlighter ? (stroke.opacity ?? 0.35) : (stroke.opacity ?? 1.0);
+
+          for (let i = 0; i < stroke.points.length - 1; i++) {
+            page.drawLine({
+              start: stroke.points[i],
+              end: stroke.points[i + 1],
+              thickness: strokeWidth,
+              color,
+              opacity,
+            });
+          }
+        }
+      }
+    }
+
+    // 10. Apply Watermark (Images 1 & 2 design)
+    if (payload.watermarkConfig && payload.watermarkConfig.enabled) {
+      const wm = payload.watermarkConfig;
+      const totalP = doc.getPageCount();
+      const targetIndices: number[] = [];
+
+      for (let p = 0; p < totalP; p++) {
+        const pageNum = p + 1;
+        if (wm.pageScope === 'all') {
+          targetIndices.push(p);
+        } else if (wm.pageScope === 'odd' && pageNum % 2 !== 0) {
+          targetIndices.push(p);
+        } else if (wm.pageScope === 'even' && pageNum % 2 === 0) {
+          targetIndices.push(p);
+        } else if (wm.pageScope === 'custom' && wm.customRange) {
+          const ranges = this.parsePageRanges(wm.customRange, totalP);
+          if (ranges.includes(p)) targetIndices.push(p);
+        }
+      }
+
+      const wmFont = selectFont(wm.fontFamily || 'Helvetica', wm.isBold, wm.isItalic);
+      const wmColor = this.parseHexColor(wm.color || '#888888');
+      const opacity = Math.max(0.01, Math.min(1.0, (wm.opacity ?? 50) / 100));
+      const rot = degrees(wm.rotation ?? -45);
+
+      for (const pIdx of targetIndices) {
+        const page = doc.getPage(pIdx);
+        const { width: pW, height: pH } = page.getSize();
+        const ptPerCm = 28.3465;
+        const xOffsetPt = (wm.xOffsetCm || 0) * ptPerCm;
+        const yOffsetPt = (wm.yOffsetCm || 0) * ptPerCm;
+
+        let baseSize = wm.fontSize || 36;
+        if (wm.proportionOfPages && wm.proportionPercent) {
+          baseSize = Math.max(12, Math.round((pW * (wm.proportionPercent / 100)) / Math.max(1, (wm.text || 'CONFIDENTIAL').length * 0.6)));
+        }
+
+        const wmText = wm.text || 'CONFIDENTIAL';
+        const textWidth = wmFont.widthOfTextAtSize(wmText, baseSize);
+
+        if (wm.tile) {
+          const stepX = Math.max(textWidth + 40, (wm.tileSpacingXCm || 6) * ptPerCm);
+          const stepY = Math.max(baseSize + 40, (wm.tileSpacingYCm || 6) * ptPerCm);
+          for (let tx = 0; tx < pW + 100; tx += stepX) {
+            for (let ty = 0; ty < pH + 100; ty += stepY) {
+              page.drawText(wmText, {
+                x: tx + xOffsetPt,
+                y: ty + yOffsetPt,
+                font: wmFont,
+                size: baseSize,
+                color: wmColor,
+                opacity,
+                rotate: rot,
+              });
+            }
+          }
+        } else {
+          let x = pW / 2 - textWidth / 2;
+          let y = pH / 2;
+
+          const pos = wm.position || 'center';
+          if (pos.includes('left')) x = 36;
+          else if (pos.includes('right')) x = pW - textWidth - 36;
+          else x = pW / 2 - textWidth / 2;
+
+          if (pos.includes('top')) y = pH - 72;
+          else if (pos.includes('bottom')) y = 72;
+          else y = pH / 2;
+
+          x += xOffsetPt;
+          y += yOffsetPt;
+
+          page.drawText(wmText, {
+            x,
+            y,
+            font: wmFont,
+            size: baseSize,
+            color: wmColor,
+            opacity,
+            rotate: rot,
+          });
+        }
+      }
+    }
+
     onProgress?.(85);
     const pdfBytes = await doc.save();
     onProgress?.(100);
     const array = new Uint8Array(pdfBytes);
     return new Blob([array], { type: 'application/pdf' });
+  }
+
+  static parsePageRange(rangeStr: string, totalPages: number): number[] {
+    const pages: Set<number> = new Set();
+    const parts = rangeStr.split(/[,;\s]+/);
+    for (const part of parts) {
+      if (!part.trim()) continue;
+      if (part.includes('-')) {
+        const [startStr, endStr] = part.split('-');
+        const start = parseInt(startStr, 10);
+        const end = parseInt(endStr, 10);
+        if (!isNaN(start) && !isNaN(end)) {
+          const min = Math.max(1, Math.min(start, end));
+          const max = Math.min(totalPages, Math.max(start, end));
+          for (let p = min; p <= max; p++) pages.add(p);
+        }
+      } else if (part.includes('/')) {
+        const p = parseInt(part.split('/')[0], 10);
+        if (!isNaN(p) && p >= 1 && p <= totalPages) pages.add(p);
+      } else {
+        const p = parseInt(part, 10);
+        if (!isNaN(p) && p >= 1 && p <= totalPages) pages.add(p);
+      }
+    }
+    return Array.from(pages).sort((a, b) => a - b);
   }
 
   private static toRoman(num: number, upper = true): string {

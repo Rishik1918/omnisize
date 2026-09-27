@@ -60,7 +60,16 @@ import {
   Settings,
   Copy,
   Square,
-  Hash
+  Hash,
+  Pen,
+  Highlighter,
+  Eraser,
+  PenTool,
+  Stamp,
+  Layers,
+  Spline,
+  FileUp,
+  FilePlus2
 } from 'lucide-react';
 import {
   PdfStudioEngine,
@@ -77,7 +86,10 @@ import {
   PageNumberConfig,
   PageNumberPosition,
   PageNumberFormat,
-  PageNumberFilter
+  PageNumberFilter,
+  DrawingStroke,
+  DrawingPoint,
+  WatermarkConfig
 } from '../../services/pdfStudioEngine';
 import {
   PdfSignatureEngine,
@@ -93,6 +105,10 @@ import { PdfOcrModal } from './PdfOcrModal';
 import { SignatureCertificateModal } from './SignatureCertificateModal';
 import { PdfPasswordPromptModal } from '../PdfPasswordPromptModal';
 import { PdfUnlocker } from '../../services/pdfUnlocker';
+import { WatermarkModal } from './WatermarkModal';
+import { PageNumberModal } from './PageNumberModal';
+import { PageBorderModal } from './PageBorderModal';
+import { InsertPageModal } from './InsertPageModal';
 import {
   saveActivePdfSession,
   loadActivePdfSession,
@@ -339,6 +355,8 @@ export interface EditorTabItem {
   name: string;
   file: File;
   modifiedTexts: Record<string, ExistingTextItem>;
+  detectedTextItems?: ExistingTextItem[];
+  pageOcrCache?: Record<number, ExistingTextItem[]>;
   textOverlays: TextOverlay[];
   imageOverlays: ImageOverlay[];
   shapes: ShapeOverlay[];
@@ -354,6 +372,9 @@ export interface EditorTabItem {
   hasUnsavedEdits: boolean;
   pageBorders?: Record<number, PageBorderConfig>;
   pageNumberConfig?: PageNumberConfig;
+  drawings?: DrawingStroke[];
+  watermarkConfig?: WatermarkConfig;
+  autoSaveEnabled?: boolean;
 }
 
 interface EditorSnapshot {
@@ -368,6 +389,8 @@ interface EditorSnapshot {
   insertedBlankPages: InsertBlankPageSpec[];
   pageBorders?: Record<number, PageBorderConfig>;
   pageNumberConfig?: PageNumberConfig;
+  drawings?: DrawingStroke[];
+  watermarkConfig?: WatermarkConfig;
 }
 
 const sampleCanvasBgColor = (
@@ -375,8 +398,17 @@ const sampleCanvasBgColor = (
   cssX: number,
   cssY: number,
   cssW: number,
-  cssH: number
+  cssH: number,
+  preferItemBg?: string
 ): { hex: string; rgb: { r: number; g: number; b: number }; isDark: boolean } => {
+  if (preferItemBg && /^#[0-9a-fA-F]{6}$/.test(preferItemBg)) {
+    const r = parseInt(preferItemBg.slice(1, 3), 16);
+    const g = parseInt(preferItemBg.slice(3, 5), 16);
+    const b = parseInt(preferItemBg.slice(5, 7), 16);
+    const isDark = (r * 0.299 + g * 0.587 + b * 0.114) < 128;
+    return { hex: preferItemBg, rgb: { r: r / 255, g: g / 255, b: b / 255 }, isDark };
+  }
+
   if (!canvas) return { hex: '#ffffff', rgb: { r: 1, g: 1, b: 1 }, isDark: false };
   try {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -388,40 +420,56 @@ const sampleCanvasBgColor = (
     const pixelRatioX = canvas.width / styleW;
     const pixelRatioY = canvas.height / styleH;
 
-    const cx = cssX * pixelRatioX;
-    const cy = cssY * pixelRatioY;
-    const cw = cssW * pixelRatioX;
-    const ch = cssH * pixelRatioY;
+    const cx = Math.round(cssX * pixelRatioX);
+    const cy = Math.round(cssY * pixelRatioY);
+    const cw = Math.round(cssW * pixelRatioX);
+    const ch = Math.round(cssH * pixelRatioY);
 
-    // Sample pixels outside the text box perimeter
-    const points = [
-      { x: Math.max(2, cx - 6 * pixelRatioX), y: Math.max(2, cy - 4 * pixelRatioY) },
-      { x: Math.max(2, cx + cw / 2), y: Math.max(2, cy - 4 * pixelRatioY) },
-      { x: Math.min(canvas.width - 3, cx + cw + 6 * pixelRatioX), y: Math.max(2, cy - 4 * pixelRatioY) },
-      { x: Math.max(2, cx - 6 * pixelRatioX), y: Math.min(canvas.height - 3, cy + ch + 4 * pixelRatioY) },
-      { x: Math.min(canvas.width - 3, cx + cw + 6 * pixelRatioX), y: Math.min(canvas.height - 3, cy + ch + 4 * pixelRatioY) },
-    ];
+    const marginX = Math.max(2, Math.round(3 * pixelRatioX));
+    const marginY = Math.max(2, Math.round(3 * pixelRatioY));
 
-    let rSum = 0, gSum = 0, bSum = 0, valid = 0;
-    for (const pt of points) {
-      if (pt.x >= 0 && pt.x < canvas.width && pt.y >= 0 && pt.y < canvas.height) {
-        const d = ctx.getImageData(Math.round(pt.x), Math.round(pt.y), 1, 1).data;
-        if (d[3] > 30) {
-          rSum += d[0];
-          gSum += d[1];
-          bSum += d[2];
-          valid++;
-        }
+    const samples: { r: number; g: number; b: number }[] = [];
+    const sampleAt = (x: number, y: number) => {
+      const sx = Math.max(0, Math.min(canvas.width - 1, Math.round(x)));
+      const sy = Math.max(0, Math.min(canvas.height - 1, Math.round(y)));
+      const d = ctx.getImageData(sx, sy, 1, 1).data;
+      if (d[3] > 40) {
+        samples.push({ r: d[0], g: d[1], b: d[2] });
       }
+    };
+
+    // Top & Bottom perimeter border lines
+    const stepX = Math.max(1, Math.floor(cw / 10));
+    for (let x = cx; x <= cx + cw; x += stepX) {
+      sampleAt(x, cy - marginY);
+      sampleAt(x, cy + ch + marginY);
+    }
+    // Left & Right perimeter border lines
+    const stepY = Math.max(1, Math.floor(ch / 6));
+    for (let y = cy; y <= cy + ch; y += stepY) {
+      sampleAt(cx - marginX, y);
+      sampleAt(cx + cw + marginX, y);
     }
 
-    if (valid > 0) {
-      let r = Math.round(rSum / valid);
-      let g = Math.round(gSum / valid);
-      let b = Math.round(bSum / valid);
+    if (samples.length > 0) {
+      // Use median per channel to reject dark glyph strokes or border edge pixels
+      const rVals = samples.map((s) => s.r).sort((a, b) => a - b);
+      const gVals = samples.map((s) => s.g).sort((a, b) => a - b);
+      const bVals = samples.map((s) => s.b).sort((a, b) => a - b);
+      const mid = Math.floor(samples.length / 2);
+      let r = rVals[mid];
+      let g = gVals[mid];
+      let b = bVals[mid];
 
-      // On standard white/light document papers (RGB >= 215), snap to pure #ffffff to prevent dirty gray boxes!
-      if (r >= 215 && g >= 215 && b >= 215) {
+      // Only snap to pure #ffffff if it is genuinely neutral pure white (> 250 on all channels with delta <= 3)
+      if (
+        r >= 250 &&
+        g >= 250 &&
+        b >= 250 &&
+        Math.abs(r - g) <= 3 &&
+        Math.abs(r - b) <= 3 &&
+        Math.abs(g - b) <= 3
+      ) {
         r = 255;
         g = 255;
         b = 255;
@@ -599,6 +647,123 @@ export function hsvToHex(h: number, s: number, v: number): string {
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
+/**
+ * Geometric shape recognizer for freehand drawing strokes
+ * Snaps hand-drawn curves to clean straight lines, circles, ellipses, triangles, and rectangles
+ */
+export function snapStrokeToGeometricShape(points: DrawingPoint[]): DrawingPoint[] {
+  if (points.length < 5) return points;
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let totalLength = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+    if (i > 0) {
+      const prev = points[i - 1];
+      totalLength += Math.hypot(p.x - prev.x, p.y - prev.y);
+    }
+  }
+
+  const pStart = points[0];
+  const pEnd = points[points.length - 1];
+  const chordDist = Math.hypot(pEnd.x - pStart.x, pEnd.y - pStart.y);
+  const bboxW = Math.max(1, maxX - minX);
+  const bboxH = Math.max(1, maxY - minY);
+  const diag = Math.hypot(bboxW, bboxH);
+
+  // 1. Straight line check: chord length is almost equal to total contour length
+  if (totalLength > 10 && chordDist / totalLength > 0.88) {
+    return [pStart, pEnd];
+  }
+
+  // 2. Closed shape check: end point is close to start point
+  const isClosed = chordDist < Math.max(30, 0.30 * totalLength);
+  if (isClosed) {
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const rx = bboxW / 2;
+    const ry = bboxH / 2;
+
+    // Radius variance test from center
+    const distances = points.map((p) => Math.hypot(p.x - cx, p.y - cy));
+    const avgR = distances.reduce((a, b) => a + b, 0) / distances.length;
+    const variance = distances.reduce((acc, d) => acc + Math.pow(d - avgR, 2), 0) / distances.length;
+    const stdDev = Math.sqrt(variance);
+
+    // If low variance from center -> Circle or Ellipse
+    if (stdDev / avgR < 0.28) {
+      const circlePoints: DrawingPoint[] = [];
+      const numSteps = 40;
+      for (let i = 0; i <= numSteps; i++) {
+        const theta = (i / numSteps) * 2 * Math.PI;
+        circlePoints.push({
+          x: cx + rx * Math.cos(theta),
+          y: cy + ry * Math.sin(theta),
+        });
+      }
+      return circlePoints;
+    }
+
+    // Douglas-Peucker polygon corner reduction
+    const simplified = ramerDouglasPeucker(points, Math.max(8, diag * 0.07));
+    const vertexCount = Math.max(0, simplified.length - 1); // exclude closing point
+
+    // Triangle: 3 vertices
+    if (vertexCount === 3) {
+      return [...simplified.slice(0, 3), simplified[0]];
+    }
+
+    // Rectangle or Square: 4-5 vertices
+    if (vertexCount >= 4 && vertexCount <= 5) {
+      return [
+        { x: minX, y: minY },
+        { x: maxX, y: minY },
+        { x: maxX, y: maxY },
+        { x: minX, y: maxY },
+        { x: minX, y: minY },
+      ];
+    }
+  }
+
+  return points;
+}
+
+function ramerDouglasPeucker(points: DrawingPoint[], epsilon: number): DrawingPoint[] {
+  if (points.length <= 2) return points;
+  let dmax = 0;
+  let index = 0;
+  const start = points[0];
+  const end = points[points.length - 1];
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = perpendicularDistance(points[i], start, end);
+    if (d > dmax) {
+      index = i;
+      dmax = d;
+    }
+  }
+
+  if (dmax > epsilon) {
+    const recResults1 = ramerDouglasPeucker(points.slice(0, index + 1), epsilon);
+    const recResults2 = ramerDouglasPeucker(points.slice(index), epsilon);
+    return recResults1.slice(0, -1).concat(recResults2);
+  } else {
+    return [start, end];
+  }
+}
+
+function perpendicularDistance(p: DrawingPoint, p1: DrawingPoint, p2: DrawingPoint): number {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return Math.hypot(p.x - p1.x, p.y - p1.y);
+  return Math.abs(dy * p.x - dx * p.y + p2.x * p1.y - p2.y * p1.x) / len;
+}
+
 export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose, initialFile, initialFiles }) => {
   if (!isOpen) return null;
 
@@ -685,8 +850,62 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [currentPage, setCurrentPage] = useState<number>(1); // 1-indexed
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [activeTool, setActiveTool] = useState<
-    'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image' | 'add-shape' | 'add-table'
+    'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image' | 'add-shape' | 'add-table' | 'pen' | 'pencil' | 'highlighter' | 'eraser'
   >('view');
+
+  // Freehand Drawing Tools (Pen, Pencil, Highlighter, Eraser)
+  const [drawings, setDrawings] = useState<DrawingStroke[]>([]);
+  const [drawingColor, setDrawingColor] = useState<string>('#000000');
+  const [penThickness, setPenThickness] = useState<number>(3);
+  const [pencilThickness, setPencilThickness] = useState<number>(1.5);
+  const [highlighterColor, setHighlighterColor] = useState<string>('#f97316');
+  const [highlighterThickness, setHighlighterThickness] = useState<number>(14);
+  const [eraserRadius, setEraserRadius] = useState<number>(12); // radius in px
+  const [snapToShape, setSnapToShape] = useState<boolean>(false);
+  const [currentStroke, setCurrentStroke] = useState<DrawingStroke | null>(null);
+  const [eraserCursorPos, setEraserCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [isDrawingMouseDown, setIsDrawingMouseDown] = useState<boolean>(false);
+  const [showDrawDropdown, setShowDrawDropdown] = useState<boolean>(false);
+  const drawBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Watermark Feature State
+  const DEFAULT_WATERMARK_CONFIG: WatermarkConfig = {
+    enabled: true,
+    type: 'text',
+    text: 'CONFIDENTIAL',
+    fontFamily: 'Calibri',
+    fontSize: 48,
+    color: '#dc2626',
+    isBold: true,
+    isItalic: false,
+    isUnderline: false,
+    proportionOfPages: false,
+    proportionPercent: 50,
+    position: 'center',
+    xOffsetCm: 0,
+    yOffsetCm: 0,
+    tile: false,
+    tileSpacingXCm: 2,
+    tileSpacingYCm: 2,
+    rotation: -45,
+    opacity: 35,
+    layer: 'front',
+    pageScope: 'all',
+    customRange: '',
+  };
+  const [watermarkConfig, setWatermarkConfig] = useState<WatermarkConfig | null>(null);
+  const [showWatermarkModal, setShowWatermarkModal] = useState<boolean>(false);
+  const [showWatermarkDropdown, setShowWatermarkDropdown] = useState<boolean>(false);
+  const watermarkBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Insert Page & Dialog States (Desktop popup modal vs Android dropdown)
+  const [showInsertPageModal, setShowInsertPageModal] = useState<boolean>(false);
+  const [insertPageInitialMode, setInsertPageInitialMode] = useState<'blank' | 'other-pdf'>('blank');
+  const [showInsertPageDropdown, setShowInsertPageDropdown] = useState<boolean>(false);
+  const [showBorderModal, setShowBorderModal] = useState<boolean>(false);
+  const [showPageNumberDropdown, setShowPageNumberDropdown] = useState<boolean>(false);
+  const insertPageBtnRef = useRef<HTMLButtonElement | null>(null);
+  const donorPdfInputRef = useRef<HTMLInputElement | null>(null);
 
   // Shapes & Tables State
   const [shapes, setShapes] = useState<ShapeOverlay[]>([]);
@@ -1304,8 +1523,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [lineSpacing, setLineSpacing] = useState<number>(1.15);
   const [characterSpacing, setCharacterSpacing] = useState<number>(0);
   const [paragraphSpacing, setParagraphSpacing] = useState<number>(0);
-  const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('left');
   const [textColor, setTextColor] = useState<string>('#000000');
+  const [itemBgColor, setItemBgColor] = useState<string>('#ffffff');
+  const [alignment, setAlignment] = useState<'left' | 'center' | 'right' | 'justify'>('left');
+  const isSwitchingTabsRef = useRef<boolean>(false);
+  const activeTabIdRef = useRef<string>(activeTabId);
+  activeTabIdRef.current = activeTabId;
 
   // Multi-selection, in-place text editing, and Link modal states
   const [editingOverlayId, setEditingOverlayId] = useState<string | null>(null);
@@ -1405,6 +1628,92 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     };
   }, [file, arrayBuffer, currentPage, pageRotations, deletedPages, insertedBlankPages, textOverlays, imageOverlays, shapes, tables, modifiedTexts, hyperlinks]);
 
+  // Active Debounced Auto-Save (2s) when autoSaveEnabled is true
+  useEffect(() => {
+    if (!autoSaveEnabled || !file || !arrayBuffer) return;
+    const isDirty =
+      Object.keys(modifiedTexts).length > 0 ||
+      textOverlays.length > 0 ||
+      imageOverlays.length > 0 ||
+      shapes.length > 0 ||
+      tables.length > 0 ||
+      hyperlinks.length > 0 ||
+      Object.keys(pageRotations).length > 0 ||
+      deletedPages.length > 0 ||
+      insertedBlankPages.length > 0;
+
+    if (!isDirty) return;
+
+    const timer = setTimeout(() => {
+      if (activeTabId) {
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === activeTabId
+              ? {
+                  ...t,
+                  modifiedTexts: { ...modifiedTexts },
+                  detectedTextItems: [...detectedTextItems],
+                  pageOcrCache: { ...pageOcrCache.current },
+                  textOverlays: [...textOverlays],
+                  imageOverlays: [...imageOverlays],
+                  shapes: [...shapes],
+                  tables: [...tables],
+                  hyperlinks: [...hyperlinks],
+                  pageRotations: { ...pageRotations },
+                  deletedPages: [...deletedPages],
+                  insertedBlankPages: [...insertedBlankPages],
+                  currentPage,
+                  zoomScale,
+                  history: [...history],
+                  historyIndex,
+                  hasUnsavedEdits: false,
+                  pageBorders: { ...pageBorders },
+                  pageNumberConfig: pageNumberConfig ? { ...pageNumberConfig } : undefined,
+                }
+              : t
+          )
+        );
+      }
+      saveActivePdfSession({
+        fileName: file.name,
+        fileType: file.type || 'application/pdf',
+        fileBuffer: arrayBuffer,
+        currentPage,
+        pageRotations,
+        deletedPages,
+        insertedBlankPages,
+        textOverlays,
+        imageOverlays,
+        shapes,
+        tables,
+        modifiedTexts: Object.values(modifiedTexts),
+        hyperlinks,
+        updatedAt: Date.now(),
+      });
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [
+    autoSaveEnabled,
+    file,
+    arrayBuffer,
+    activeTabId,
+    modifiedTexts,
+    detectedTextItems,
+    textOverlays,
+    imageOverlays,
+    shapes,
+    tables,
+    hyperlinks,
+    pageRotations,
+    deletedPages,
+    insertedBlankPages,
+    currentPage,
+    zoomScale,
+    pageBorders,
+    pageNumberConfig,
+  ]);
+
   const handleItemSelect = (
     id: string,
     type: 'overlay' | 'image' | 'shape' | 'table' | 'text',
@@ -1457,7 +1766,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   );
   const [propertiesTouchStartY, setPropertiesTouchStartY] = useState<number | null>(null);
   const [showColorPickerModal, setShowColorPickerModal] = useState<boolean>(false);
-  const [colorTarget, setColorTarget] = useState<'text' | 'image-border' | 'table-border' | 'table-fill' | 'shape-stroke' | 'shape-fill'>('text');
+  const [colorTarget, setColorTarget] = useState<'text' | 'text-bg' | 'image-border' | 'table-border' | 'table-fill' | 'shape-stroke' | 'shape-fill'>('text');
   const lastPageSwitchRef = useRef<number>(0);
   const [activeColorStudioTab, setActiveColorStudioTab] = useState<'palette' | 'wheel' | 'sliders'>('palette');
   const [hexInput, setHexInput] = useState<string>('#000000');
@@ -1549,6 +1858,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setShapes((prev) =>
         prev.map((s) => (s.id === selectedShapeId ? { ...s, fillColor: color } : s))
       );
+    } else if (colorTarget === 'text-bg') {
+      setItemBgColor(color);
+      updateActiveTextItemProps({ bgColorHex: color });
     } else {
       setTextColor(color);
       updateActiveTextItemProps({ color });
@@ -1631,7 +1943,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     deletedPages.length > 0 ||
     insertedBlankPages.length > 0 ||
     Object.values(pageBorders).some((b) => b?.enabled) ||
-    pageNumberConfig.enabled;
+    pageNumberConfig.enabled ||
+    drawings.length > 0 ||
+    Boolean(watermarkConfig?.enabled);
 
   // Toggle Auto-Save
   const toggleAutoSave = () => {
@@ -1657,6 +1971,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         insertedBlankPages: newSnapshot.insertedBlankPages ?? insertedBlankPages,
         pageBorders: newSnapshot.pageBorders ?? pageBorders,
         pageNumberConfig: newSnapshot.pageNumberConfig ?? pageNumberConfig,
+        drawings: newSnapshot.drawings ?? drawings,
+        watermarkConfig: newSnapshot.watermarkConfig !== undefined ? newSnapshot.watermarkConfig : (watermarkConfig || undefined),
       };
 
       setHistory((prev) => {
@@ -1679,6 +1995,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       insertedBlankPages,
       pageBorders,
       pageNumberConfig,
+      drawings,
+      watermarkConfig,
     ]
   );
 
@@ -1869,6 +2187,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setInsertedBlankPages(targetState.insertedBlankPages);
       if (targetState.pageBorders) setPageBorders(targetState.pageBorders);
       if (targetState.pageNumberConfig) setPageNumberConfig(targetState.pageNumberConfig);
+      if (targetState.drawings) setDrawings(targetState.drawings);
+      if (targetState.watermarkConfig !== undefined) setWatermarkConfig(targetState.watermarkConfig);
       setHistoryIndex(targetIndex);
     }
   }, [historyIndex, history]);
@@ -1889,6 +2209,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setInsertedBlankPages(targetState.insertedBlankPages);
       if (targetState.pageBorders) setPageBorders(targetState.pageBorders);
       if (targetState.pageNumberConfig) setPageNumberConfig(targetState.pageNumberConfig);
+      if (targetState.drawings) setDrawings(targetState.drawings);
+      if (targetState.watermarkConfig !== undefined) setWatermarkConfig(targetState.watermarkConfig);
       setHistoryIndex(targetIndex);
     }
   }, [historyIndex, history]);
@@ -1968,29 +2290,33 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           setZoomScale(Number(optimalScale.toFixed(2)));
         }
 
-        setModifiedTexts({});
-        setTextOverlays([]);
-        setImageOverlays([]);
-        setShapes([]);
-        setTables([]);
-        setHyperlinks([]);
-        setPageRotations({});
-        setDeletedPages([]);
-        setInsertedBlankPages([]);
-        setHistory([
-          {
-            modifiedTexts: {},
-            textOverlays: [],
-            imageOverlays: [],
-            shapes: [],
-            tables: [],
-            hyperlinks: [],
-            pageRotations: {},
-            deletedPages: [],
-            insertedBlankPages: [],
-          },
-        ]);
-        setHistoryIndex(0);
+        if (!isSwitchingTabsRef.current) {
+          setModifiedTexts({});
+          setTextOverlays([]);
+          setImageOverlays([]);
+          setShapes([]);
+          setTables([]);
+          setHyperlinks([]);
+          setPageRotations({});
+          setDeletedPages([]);
+          setInsertedBlankPages([]);
+          setHistory([
+            {
+              modifiedTexts: {},
+              textOverlays: [],
+              imageOverlays: [],
+              shapes: [],
+              tables: [],
+              hyperlinks: [],
+              pageRotations: {},
+              deletedPages: [],
+              insertedBlankPages: [],
+            },
+          ]);
+          setHistoryIndex(0);
+        } else {
+          isSwitchingTabsRef.current = false;
+        }
       } catch (err: any) {
         if (!isMounted) return;
         const msg = String(err?.message || err || '');
@@ -2074,10 +2400,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               const scaleX = targetCanvas.width / (cssWidth / zoomScale);
               const scaleY = targetCanvas.height / (cssHeight / zoomScale);
               for (const item of itemsToInpaint) {
-                const bg = item.backgroundColor || { r: 1, g: 1, b: 1 };
-                const r = Math.round(bg.r * 255);
-                const g = Math.round(bg.g * 255);
-                const b = Math.round(bg.b * 255);
+                let r = 255;
+                let g = 255;
+                let b = 255;
+                if (item.bgColorHex) {
+                  const clean = item.bgColorHex.replace('#', '');
+                  if (clean.length === 6) {
+                    r = parseInt(clean.substring(0, 2), 16);
+                    g = parseInt(clean.substring(2, 4), 16);
+                    b = parseInt(clean.substring(4, 6), 16);
+                  }
+                } else if (item.backgroundColor) {
+                  r = Math.round(item.backgroundColor.r * 255);
+                  g = Math.round(item.backgroundColor.g * 255);
+                  b = Math.round(item.backgroundColor.b * 255);
+                }
                 ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                 const canvasX = item.x * scaleX;
                 const canvasY = targetCanvas.height - (item.y + item.height) * scaleY;
@@ -2199,6 +2536,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         hyperlinks,
         pageBorders,
         pageNumberConfig,
+        drawings,
+        watermarkConfig: watermarkConfig || undefined,
       });
 
       const baseName = file.name.replace(/\.pdf$/i, '');
@@ -2231,53 +2570,64 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const switchTab = (targetTabId: string) => {
     if (targetTabId === activeTabId) return;
 
-    // Snapshot current active tab state into tabs array
-    setTabs((prev) =>
-      prev.map((t) =>
-        t.id === activeTabId
-          ? {
-              ...t,
-              file: file!,
-              modifiedTexts,
-              textOverlays,
-              imageOverlays,
-              shapes,
-              tables,
-              hyperlinks,
-              pageRotations,
-              deletedPages,
-              insertedBlankPages,
-              currentPage,
-              zoomScale,
-              history,
-              historyIndex,
-              hasUnsavedEdits,
-              pageBorders,
-              pageNumberConfig,
-            }
-          : t
-      )
+    // Snapshot current active tab state into tabs array synchronously
+    const updatedTabs = tabs.map((t) =>
+      t.id === activeTabId
+        ? {
+            ...t,
+            file: file!,
+            modifiedTexts: { ...modifiedTexts },
+            detectedTextItems: [...detectedTextItems],
+            pageOcrCache: { ...pageOcrCache.current },
+            textOverlays: [...textOverlays],
+            imageOverlays: [...imageOverlays],
+            shapes: [...shapes],
+            tables: [...tables],
+            hyperlinks: [...hyperlinks],
+            pageRotations: { ...pageRotations },
+            deletedPages: [...deletedPages],
+            insertedBlankPages: [...insertedBlankPages],
+            currentPage,
+            zoomScale,
+            history: [...history],
+            historyIndex,
+            hasUnsavedEdits,
+            pageBorders: { ...pageBorders },
+            pageNumberConfig: pageNumberConfig ? { ...pageNumberConfig } : undefined,
+            drawings: [...drawings],
+            watermarkConfig: watermarkConfig ? { ...watermarkConfig } : undefined,
+          }
+        : t
     );
+    setTabs(updatedTabs);
 
-    const target = tabs.find((t) => t.id === targetTabId);
+    const target = updatedTabs.find((t) => t.id === targetTabId);
     if (!target) return;
 
+    // Mark tab switching so file loader effect does not reset our working state
+    isSwitchingTabsRef.current = true;
+
     setActiveTabId(target.id);
+    activeTabIdRef.current = target.id;
     setFile(target.file);
-    setModifiedTexts(target.modifiedTexts);
-    setTextOverlays(target.textOverlays);
-    setImageOverlays(target.imageOverlays);
+    setModifiedTexts(target.modifiedTexts || {});
+    setDetectedTextItems(target.detectedTextItems || []);
+    pageOcrCache.current = target.pageOcrCache ? { ...target.pageOcrCache } : {};
+    setTextOverlays(target.textOverlays || []);
+    setImageOverlays(target.imageOverlays || []);
     setShapes(target.shapes || []);
     setTables(target.tables || []);
-    setHyperlinks(target.hyperlinks);
-    setPageRotations(target.pageRotations);
-    setDeletedPages(target.deletedPages);
-    setInsertedBlankPages(target.insertedBlankPages);
+    setHyperlinks(target.hyperlinks || []);
+    setPageRotations(target.pageRotations || {});
+    setDeletedPages(target.deletedPages || []);
+    setInsertedBlankPages(target.insertedBlankPages || []);
     setCurrentPage(target.currentPage || 1);
     setZoomScale(target.zoomScale || 1.0);
-    setHistory(target.history);
-    setHistoryIndex(target.historyIndex);
+    setHistory(target.history && target.history.length > 0 ? target.history : []);
+    setHistoryIndex(target.historyIndex || 0);
     setPageBorders(target.pageBorders || {});
+    setDrawings(target.drawings || []);
+    setWatermarkConfig(target.watermarkConfig || null);
     setPageNumberConfig(
       target.pageNumberConfig || {
         enabled: false,
@@ -2300,6 +2650,40 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (!e.target.files || e.target.files.length === 0) return;
     const selectedFiles = Array.from(e.target.files);
 
+    // Save active tab state before creating and activating any new tabs!
+    let currentTabs = tabs;
+    if (activeTabId && file) {
+      currentTabs = currentTabs.map((t) =>
+        t.id === activeTabId
+          ? {
+              ...t,
+              file: file!,
+              modifiedTexts: { ...modifiedTexts },
+              detectedTextItems: [...detectedTextItems],
+              pageOcrCache: { ...pageOcrCache.current },
+              textOverlays: [...textOverlays],
+              imageOverlays: [...imageOverlays],
+              shapes: [...shapes],
+              tables: [...tables],
+              hyperlinks: [...hyperlinks],
+              pageRotations: { ...pageRotations },
+              deletedPages: [...deletedPages],
+              insertedBlankPages: [...insertedBlankPages],
+              currentPage,
+              zoomScale,
+              history: [...history],
+              historyIndex,
+              hasUnsavedEdits,
+              pageBorders: { ...pageBorders },
+              pageNumberConfig: pageNumberConfig ? { ...pageNumberConfig } : undefined,
+              drawings: [...drawings],
+              watermarkConfig: watermarkConfig ? { ...watermarkConfig } : undefined,
+            }
+          : t
+      );
+    }
+
+    const newlyCreatedTabs: EditorTabItem[] = [];
     for (let i = 0; i < selectedFiles.length; i++) {
       const rawFile = selectedFiles[i];
       try {
@@ -2310,6 +2694,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           name: rawFile.name,
           file: pdfFile,
           modifiedTexts: {},
+          detectedTextItems: [],
+          pageOcrCache: {},
           textOverlays: [],
           imageOverlays: [],
           shapes: [],
@@ -2334,26 +2720,33 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           historyIndex: 0,
           hasUnsavedEdits: false,
         };
-
-        setTabs((prev) => [...prev, newTab]);
-        if (i === selectedFiles.length - 1) {
-          setActiveTabId(newTabId);
-          setFile(pdfFile);
-          setModifiedTexts({});
-          setTextOverlays([]);
-          setImageOverlays([]);
-          setShapes([]);
-          setTables([]);
-          setHyperlinks([]);
-          setPageRotations({});
-          setDeletedPages([]);
-          setInsertedBlankPages([]);
-          setCurrentPage(1);
-          setShowInitialPrompt(false);
-        }
+        newlyCreatedTabs.push(newTab);
       } catch (err: any) {
         setError(err?.message || 'Failed to open document.');
       }
+    }
+
+    if (newlyCreatedTabs.length > 0) {
+      const allTabs = [...currentTabs, ...newlyCreatedTabs];
+      setTabs(allTabs);
+      const lastTab = newlyCreatedTabs[newlyCreatedTabs.length - 1];
+      isSwitchingTabsRef.current = false;
+      setActiveTabId(lastTab.id);
+      activeTabIdRef.current = lastTab.id;
+      setFile(lastTab.file);
+      setModifiedTexts({});
+      setDetectedTextItems([]);
+      pageOcrCache.current = {};
+      setTextOverlays([]);
+      setImageOverlays([]);
+      setShapes([]);
+      setTables([]);
+      setHyperlinks([]);
+      setPageRotations({});
+      setDeletedPages([]);
+      setInsertedBlankPages([]);
+      setCurrentPage(1);
+      setShowInitialPrompt(false);
     }
     e.target.value = '';
   };
@@ -2383,19 +2776,26 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     if (tabId === activeTabId) {
       const nextActive = remaining[0];
+      isSwitchingTabsRef.current = true;
       setActiveTabId(nextActive.id);
+      activeTabIdRef.current = nextActive.id;
       setFile(nextActive.file);
-      setModifiedTexts(nextActive.modifiedTexts);
-      setTextOverlays(nextActive.textOverlays);
-      setImageOverlays(nextActive.imageOverlays);
-      setHyperlinks(nextActive.hyperlinks);
-      setPageRotations(nextActive.pageRotations);
-      setDeletedPages(nextActive.deletedPages);
-      setInsertedBlankPages(nextActive.insertedBlankPages);
+      setModifiedTexts(nextActive.modifiedTexts || {});
+      setDetectedTextItems(nextActive.detectedTextItems || []);
+      pageOcrCache.current = nextActive.pageOcrCache ? { ...nextActive.pageOcrCache } : {};
+      setTextOverlays(nextActive.textOverlays || []);
+      setImageOverlays(nextActive.imageOverlays || []);
+      setShapes(nextActive.shapes || []);
+      setTables(nextActive.tables || []);
+      setHyperlinks(nextActive.hyperlinks || []);
+      setPageRotations(nextActive.pageRotations || {});
+      setDeletedPages(nextActive.deletedPages || []);
+      setInsertedBlankPages(nextActive.insertedBlankPages || []);
       setCurrentPage(nextActive.currentPage || 1);
       setZoomScale(nextActive.zoomScale || 1.0);
-      setHistory(nextActive.history);
-      setHistoryIndex(nextActive.historyIndex);
+      setHistory(nextActive.history || []);
+      setHistoryIndex(nextActive.historyIndex || 0);
+      setPageBorders(nextActive.pageBorders || {});
     }
   };
 
@@ -2923,11 +3323,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setShowRotationPopover(false);
     setShowBulletsDropdown(false);
     setShowPageNumberModal(false);
+    setShowPageNumberDropdown(false);
   };
 
   const togglePageNumberModal = () => {
-    if (showPageNumberModal) {
-      setShowPageNumberModal(false);
+    if (showPageNumberDropdown) {
+      setShowPageNumberDropdown(false);
       return;
     }
     const rect = pageNumberBtnRef.current?.getBoundingClientRect();
@@ -2937,7 +3338,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         left: Math.max(8, Math.min(rect.left, window.innerWidth - 360)),
       });
     }
-    setShowPageNumberModal(true);
+    setShowPageNumberDropdown(true);
+    setShowPageNumberModal(false);
     setShowBorderDropdown(false);
     setShowMarginDropdown(false);
     setShowPageSizeDropdown(false);
@@ -4190,6 +4592,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       return;
     }
 
+    if (['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool)) {
+      return;
+    }
+
     if (activeTool !== 'add-text' && activeTool !== 'add-link') {
       setSelectedTableId(null);
       setSelectedTableCell(null);
@@ -4220,7 +4626,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         isBold,
         isItalic,
         isUnderline,
-        alignment,
+        alignment: alignment === 'justify' ? 'left' : alignment,
       };
       const nextOverlays = [...textOverlays, newOverlay];
       setTextOverlays(nextOverlays);
@@ -4243,6 +4649,210 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setSelectedOverlayId(newLink.id);
         pushSnapshot({ hyperlinks: nextLinks });
       }
+    }
+  };
+
+  // Drawing Event Handlers (Pen, Pencil, Highlighter, Eraser)
+  const handleDrawingStart = (e: React.PointerEvent<HTMLDivElement>, pageIndex: number) => {
+    e.stopPropagation();
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch (_) {}
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+    const x = clientX / zoomScale;
+    const y = clientY / zoomScale;
+
+    setIsDrawingMouseDown(true);
+
+    if (activeTool === 'eraser') {
+      setEraserCursorPos({ x: clientX, y: clientY });
+      eraseStrokesAtPoint(pageIndex, x, y, eraserRadius / zoomScale);
+      return;
+    }
+
+    let thickness = penThickness;
+    let color = drawingColor;
+    let opacity = 1;
+    let blendMode: 'source-over' | 'multiply' = 'source-over';
+
+    if (activeTool === 'pencil') {
+      thickness = pencilThickness;
+      color = drawingColor;
+      opacity = 0.85;
+    } else if (activeTool === 'highlighter') {
+      thickness = highlighterThickness;
+      color = highlighterColor;
+      opacity = 0.45;
+      blendMode = 'multiply';
+    }
+
+    const newStroke: DrawingStroke = {
+      id: `stroke_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      tool: activeTool as any,
+      pageIndex,
+      points: [{ x, y, pressure: e.pressure || 0.5 }],
+      color,
+      thickness,
+      opacity,
+      blendMode,
+    };
+
+    setCurrentStroke(newStroke);
+  };
+
+  const handleDrawingMove = (e: React.PointerEvent<HTMLDivElement>, pageIndex: number) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clientX = e.clientX - rect.left;
+    const clientY = e.clientY - rect.top;
+    const x = clientX / zoomScale;
+    const y = clientY / zoomScale;
+
+    if (activeTool === 'eraser') {
+      setEraserCursorPos({ x: clientX, y: clientY });
+      if (isDrawingMouseDown) {
+        eraseStrokesAtPoint(pageIndex, x, y, eraserRadius / zoomScale);
+      }
+      return;
+    }
+
+    if (!isDrawingMouseDown || !currentStroke) return;
+
+    setCurrentStroke((prev) => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        points: [...prev.points, { x, y, pressure: e.pressure || 0.5 }],
+      };
+    });
+  };
+
+  const handleDrawingEnd = (e?: React.PointerEvent<HTMLDivElement>) => {
+    if (e) {
+      try {
+        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch (_) {}
+    }
+
+    setIsDrawingMouseDown(false);
+
+    if (activeTool === 'eraser') {
+      return;
+    }
+
+    if (!currentStroke || currentStroke.points.length < 2) {
+      setCurrentStroke(null);
+      return;
+    }
+
+    let finalPoints = currentStroke.points;
+    if (snapToShape) {
+      finalPoints = snapStrokeToGeometricShape(currentStroke.points);
+    }
+
+    const completedStroke: DrawingStroke = {
+      ...currentStroke,
+      points: finalPoints,
+    };
+
+    const nextDrawings = [...drawings, completedStroke];
+    setDrawings(nextDrawings);
+    setCurrentStroke(null);
+    pushSnapshot({ drawings: nextDrawings });
+  };
+
+  const eraseStrokesAtPoint = (pageIndex: number, x: number, y: number, radius: number) => {
+    setDrawings((prev) => {
+      const remaining = prev.filter((stroke) => {
+        if (stroke.pageIndex !== pageIndex) return true;
+        const hit = stroke.points.some((p) => {
+          const dx = p.x - x;
+          const dy = p.y - y;
+          const strThick = stroke.thickness || stroke.width || 2;
+          return Math.hypot(dx, dy) <= radius + strThick / 2;
+        });
+        return !hit;
+      });
+      if (remaining.length !== prev.length) {
+        pushSnapshot({ drawings: remaining });
+      }
+      return remaining;
+    });
+  };
+
+  // Insert Pages from Other PDF
+  const handleInsertPagesFromOtherPdf = async (
+    donorFile: File,
+    position: 'before' | 'after' | 'start' | 'end',
+    rangeString?: string
+  ) => {
+    if (!file) return;
+    try {
+      setIsSaving(true);
+      const targetBuffer = arrayBuffer || (await file.arrayBuffer());
+      const donorBuffer = await donorFile.arrayBuffer();
+
+      let pageIndices: number[] | undefined = undefined;
+      if (rangeString && rangeString.trim() !== '') {
+        const indices: number[] = [];
+        const parts = rangeString.split(',').map((p) => p.trim());
+        for (const part of parts) {
+          if (part.includes('-')) {
+            const [start, end] = part.split('-').map((s) => parseInt(s.trim(), 10));
+            if (!isNaN(start) && !isNaN(end)) {
+              for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+                indices.push(i - 1);
+              }
+            }
+          } else {
+            const p = parseInt(part, 10);
+            if (!isNaN(p)) indices.push(p - 1);
+          }
+        }
+        if (indices.length > 0) {
+          pageIndices = Array.from(new Set(indices));
+        }
+      }
+
+      const targetIdx = currentPage - 1;
+      const { buffer, newTotalPages } = await PdfStudioEngine.insertPagesFromOtherPdf(
+        targetBuffer,
+        donorBuffer,
+        position,
+        targetIdx,
+        pageIndices
+      );
+
+      const mergedBlob = new Blob([buffer], { type: 'application/pdf' });
+      const mergedFile = new File([mergedBlob], file.name, { type: 'application/pdf' });
+
+      setArrayBuffer(buffer);
+      setFile(mergedFile);
+      setTotalPages(newTotalPages);
+
+      let nextCurrent = currentPage;
+      if (position === 'start') nextCurrent = 1;
+      else if (position === 'after') nextCurrent = currentPage + 1;
+      else if (position === 'end') nextCurrent = newTotalPages;
+      setCurrentPage(Math.min(nextCurrent, newTotalPages));
+
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+    } catch (err: any) {
+      console.error('Failed to insert pages from other PDF:', err);
+      setError('Failed to insert pages: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDonorFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const donorFile = e.target.files[0];
+      await handleInsertPagesFromOtherPdf(donorFile, 'after');
+      e.target.value = '';
+      setShowInsertPageDropdown(false);
     }
   };
 
@@ -4342,6 +4952,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         tables,
         textReplacements: Object.values(modifiedTexts),
         hyperlinks,
+        pageBorders,
+        pageNumberConfig,
+        drawings,
+        watermarkConfig: watermarkConfig || undefined,
       });
 
       const isMobileNative = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
@@ -4869,7 +5483,82 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         }
       }
 
-      // Escape: clear selection / cancel edit
+      const activeEl = document.activeElement;
+      const tag = (activeEl?.tagName || '').toLowerCase();
+      const isEditable = tag === 'input' || tag === 'textarea' || (activeEl as HTMLElement)?.isContentEditable;
+
+      if (!isEditable) {
+        // Drawing tools shortcuts
+        if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            setActiveTool('pencil');
+          } else {
+            setActiveTool('pen');
+          }
+          return;
+        }
+        if ((e.key === 'h' || e.key === 'H') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+          e.preventDefault();
+          setActiveTool('highlighter');
+          return;
+        }
+        if ((e.key === 'e' || e.key === 'E') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+          e.preventDefault();
+          setActiveTool('eraser');
+          return;
+        }
+        if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+          e.preventDefault();
+          setSnapToShape((prev) => !prev);
+          return;
+        }
+
+        // Alt shortcuts for dialogs
+        if (e.altKey && (e.key === 'w' || e.key === 'W')) {
+          e.preventDefault();
+          const isAndroid = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+          if (isAndroid) {
+            setShowWatermarkDropdown((prev) => !prev);
+          } else {
+            setShowWatermarkModal(true);
+          }
+          return;
+        }
+        if (e.altKey && (e.key === 'n' || e.key === 'N')) {
+          e.preventDefault();
+          const isAndroid = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+          if (isAndroid) {
+            setShowPageNumberDropdown((prev) => !prev);
+          } else {
+            setShowPageNumberModal(true);
+          }
+          return;
+        }
+        if (e.altKey && (e.key === 'b' || e.key === 'B')) {
+          e.preventDefault();
+          const isAndroid = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+          if (isAndroid) {
+            setShowBorderDropdown((prev) => !prev);
+          } else {
+            setShowBorderModal(true);
+          }
+          return;
+        }
+        if (e.altKey && (e.key === 'i' || e.key === 'I')) {
+          e.preventDefault();
+          const isAndroid = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+          if (isAndroid) {
+            setShowInsertPageDropdown((prev) => !prev);
+          } else {
+            setInsertPageInitialMode('blank');
+            setShowInsertPageModal(true);
+          }
+          return;
+        }
+      }
+
+      // Escape: clear selection / cancel edit / close popups
       if (e.key === 'Escape') {
         setActiveEditingId(null);
         setSelectedTextItemId(null);
@@ -4879,6 +5568,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setSelectedTableCell(null);
         setSelectedBorderPage(null);
         setCropImageId(null);
+        setShowWatermarkModal(false);
+        setShowBorderModal(false);
+        setShowInsertPageModal(false);
+        setShowPageNumberModal(false);
+        setShowDrawDropdown(false);
+        setShowWatermarkDropdown(false);
+        setShowInsertPageDropdown(false);
+        setShowPageNumberDropdown(false);
+        if (['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool)) {
+          setActiveTool('view');
+        }
       }
     };
 
@@ -5517,42 +6217,88 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               )}
           </div>
 
-          {/* Blank Page Dropdown */}
+          {/* Hidden File Input for Inserting Pages from Other PDF */}
+          <input
+            ref={donorPdfInputRef}
+            type="file"
+            accept="application/pdf"
+            onChange={handleDonorFileSelected}
+            className="hidden"
+          />
+
+          {/* Insert Page Button & Dropdown */}
           <div className="flex-shrink-0">
             <button
-              ref={blankPageBtnRef}
-              onClick={toggleBlankPageDropdown}
+              ref={insertPageBtnRef}
+              onClick={() => {
+                const isAndroidApp = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+                if (!isAndroidApp) {
+                  setInsertPageInitialMode('blank');
+                  setShowInsertPageModal(true);
+                } else {
+                  const rect = insertPageBtnRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    setDropdownCoords({
+                      top: rect.bottom + 4,
+                      left: Math.max(8, Math.min(rect.left, window.innerWidth - 300)),
+                    });
+                  }
+                  setShowInsertPageDropdown(!showInsertPageDropdown);
+                  setShowShapesDropdown(false);
+                  setShowTableDropdown(false);
+                }
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
-                showBlankPageDropdown
+                showInsertPageDropdown || showInsertPageModal
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Insert Blank Page (Same dimensions or MS Word Page Sizes catalogue)"
+              title="Insert Page: Blank Page or Insert from Other PDF (Alt+I)"
             >
-              <Plus className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Blank Page</span>
+              <FilePlus2 className="w-3.5 h-3.5 text-indigo-500" />
+              <span>Insert Page</span>
               <ChevronDown className="w-2.5 h-2.5 opacity-60" />
             </button>
-            {showBlankPageDropdown &&
+            {showInsertPageDropdown &&
               createPortal(
                 <div
                   className="fixed inset-0"
                   style={{ zIndex: 2147483647 }}
-                  onClick={() => setShowBlankPageDropdown(false)}
+                  onClick={() => setShowInsertPageDropdown(false)}
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
-                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[42vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[46vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2.5 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-2 px-1">
+                      Insert Page Options
+                    </div>
+                    {/* Insert From Other PDF */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        donorPdfInputRef.current?.click();
+                      }}
+                      className="w-full flex items-center justify-between px-2.5 py-2 mb-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-700 dark:text-indigo-300 font-semibold text-xs text-left transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <FileUp className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span>Insert from Other PDF...</span>
+                      </div>
+                    </button>
+
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5 px-1 border-t border-zinc-100 dark:border-zinc-800 pt-2">
                       Insert Blank Page
                     </div>
                     <div className="space-y-1 mb-2">
                       <button
                         type="button"
-                        onClick={() => handleInsertBlankPage('after', 'same')}
-                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200 dark:border-indigo-800/60 text-indigo-700 dark:text-indigo-300 font-semibold text-xs text-left transition-colors"
+                        onClick={() => {
+                          handleInsertBlankPage('after', 'same');
+                          setShowInsertPageDropdown(false);
+                        }}
+                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 font-medium text-xs text-left transition-colors"
                       >
                         <span>Insert After (Same Size)</span>
                         <span className="text-[10px] font-mono opacity-70">
@@ -5561,14 +6307,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleInsertBlankPage('before', 'same')}
+                        onClick={() => {
+                          handleInsertBlankPage('before', 'same');
+                          setShowInsertPageDropdown(false);
+                        }}
                         className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 font-medium text-xs text-left transition-colors"
                       >
                         <span>Insert Before (Same Size)</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleInsertBlankPage('end', 'same')}
+                        onClick={() => {
+                          handleInsertBlankPage('end', 'same');
+                          setShowInsertPageDropdown(false);
+                        }}
                         className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200 font-medium text-xs text-left transition-colors"
                       >
                         <span>Insert at End (Same Size)</span>
@@ -5583,13 +6335,152 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         <button
                           key={spec.id}
                           type="button"
-                          onClick={() => handleInsertBlankPage('after', spec.id)}
+                          onClick={() => {
+                            handleInsertBlankPage('after', spec.id);
+                            setShowInsertPageDropdown(false);
+                          }}
                           className="w-full flex flex-col items-start px-2 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-left transition-colors"
                         >
                           <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200">{spec.name}</span>
                           <span className="text-[10px] text-zinc-500">{spec.description}</span>
                         </button>
                       ))}
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+        </div>
+
+        {/* GROUP: DRAW */}
+        <div className="flex items-center bg-white dark:bg-zinc-800/80 p-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 gap-0.5 shadow-2xs flex-shrink-0">
+          <span className="text-[9px] font-extrabold text-zinc-400 dark:text-zinc-500 uppercase px-1.5 select-none tracking-wider">
+            DRAW
+          </span>
+
+          <div className="flex-shrink-0">
+            <button
+              ref={drawBtnRef}
+              onClick={() => {
+                const rect = drawBtnRef.current?.getBoundingClientRect();
+                if (rect) {
+                  setDropdownCoords({
+                    top: rect.bottom + 4,
+                    left: Math.max(8, Math.min(rect.left, window.innerWidth - 240)),
+                  });
+                }
+                setShowDrawDropdown(!showDrawDropdown);
+              }}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                ['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) || showDrawDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Drawing Tools (Pen, Pencil, Highlighter, Eraser)"
+            >
+              {activeTool === 'pencil' ? (
+                <PenTool className="w-3.5 h-3.5 text-amber-400" />
+              ) : activeTool === 'highlighter' ? (
+                <Highlighter className="w-3.5 h-3.5 text-orange-400" />
+              ) : activeTool === 'eraser' ? (
+                <Eraser className="w-3.5 h-3.5 text-rose-400" />
+              ) : (
+                <Pen className="w-3.5 h-3.5 text-indigo-400" />
+              )}
+              <span className="capitalize">
+                {['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) ? activeTool : 'Draw'}
+              </span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showDrawDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowDrawDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-56 max-w-[calc(100vw-24px)] max-h-[46vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-2 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5 px-1">
+                      Drawing Tools
+                    </div>
+                    <div className="space-y-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTool('pen');
+                          setShowDrawDropdown(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          activeTool === 'pen'
+                            ? 'bg-indigo-600 text-white'
+                            : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Pen className="w-3.5 h-3.5" />
+                          <span>Pen</span>
+                        </div>
+                        <span className="text-[10px] opacity-70">P</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTool('pencil');
+                          setShowDrawDropdown(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          activeTool === 'pencil'
+                            ? 'bg-indigo-600 text-white'
+                            : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <PenTool className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Pencil</span>
+                        </div>
+                        <span className="text-[10px] opacity-70">Shift+P</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTool('highlighter');
+                          setShowDrawDropdown(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          activeTool === 'highlighter'
+                            ? 'bg-indigo-600 text-white'
+                            : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Highlighter className="w-3.5 h-3.5 text-orange-500" />
+                          <span>Highlighter</span>
+                        </div>
+                        <span className="text-[10px] opacity-70">H</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTool('eraser');
+                          setShowDrawDropdown(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          activeTool === 'eraser'
+                            ? 'bg-indigo-600 text-white'
+                            : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Eraser className="w-3.5 h-3.5 text-rose-500" />
+                          <span>Eraser</span>
+                        </div>
+                        <span className="text-[10px] opacity-70">E</span>
+                      </button>
                     </div>
                   </div>
                 </div>,
@@ -5849,15 +6740,22 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           <div className="flex-shrink-0">
             <button
               ref={borderBtnRef}
-              onClick={toggleBorderDropdown}
+              onClick={() => {
+                const isAndroidApp = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+                if (!isAndroidApp) {
+                  setShowBorderModal(true);
+                } else {
+                  toggleBorderDropdown();
+                }
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
-                showBorderDropdown
+                showBorderDropdown || showBorderModal
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : pageBorders[currentPage - 1]?.enabled
                   ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-300 dark:border-indigo-700'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Page Border Suite (Weights, Colors, Corners, Double, Frame, Resizing)"
+              title="Page Border Suite (Alt+B)"
             >
               <Square className="w-3.5 h-3.5 text-indigo-400" />
               <span>Borders</span>
@@ -6165,24 +7063,32 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           <div className="flex-shrink-0">
             <button
               ref={pageNumberBtnRef}
-              onClick={togglePageNumberModal}
+              onClick={() => {
+                const isAndroidApp = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+                if (!isAndroidApp) {
+                  setShowPageNumberModal(true);
+                  setShowPageNumberDropdown(false);
+                } else {
+                  togglePageNumberModal();
+                }
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
-                showPageNumberModal || pageNumberConfig.enabled
+                showPageNumberModal || showPageNumberDropdown || pageNumberConfig.enabled
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Page Number Suite (Top/Bottom, Odds/Evens, Start Number, Custom Range)"
+              title="Page Number Suite (Top/Bottom, Odds/Evens, Start Number, Custom Range) (Alt+N)"
             >
               <Hash className="w-3.5 h-3.5 text-indigo-400" />
               <span>Page #</span>
               <ChevronDown className="w-2.5 h-2.5 opacity-60" />
             </button>
-            {showPageNumberModal &&
+            {showPageNumberDropdown &&
               createPortal(
                 <div
                   className="fixed inset-0"
                   style={{ zIndex: 2147483647 }}
-                  onClick={() => setShowPageNumberModal(false)}
+                  onClick={() => setShowPageNumberDropdown(false)}
                 >
                   <div
                     style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
@@ -6461,6 +7367,148 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       >
                         <Trash2 className="w-3 h-3" />
                         <span>Remove Page Numbers</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
+          </div>
+
+          {/* Watermark Button & Dropdown */}
+          <div className="flex-shrink-0">
+            <button
+              ref={watermarkBtnRef}
+              onClick={() => {
+                const isAndroidApp = typeof navigator !== 'undefined' && (/android/i.test(navigator.userAgent) || window.innerWidth < 768);
+                if (!isAndroidApp) {
+                  setShowWatermarkModal(true);
+                } else {
+                  const rect = watermarkBtnRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    setDropdownCoords({
+                      top: rect.bottom + 4,
+                      left: Math.max(8, Math.min(rect.left, window.innerWidth - 300)),
+                    });
+                  }
+                  setShowWatermarkDropdown(!showWatermarkDropdown);
+                  setShowBorderDropdown(false);
+                  setShowPageNumberModal(false);
+                  setShowPageNumberDropdown(false);
+                }
+              }}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
+                watermarkConfig || showWatermarkModal || showWatermarkDropdown
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Page Watermark (Text/Image watermark, 3x3 position, tiling, opacity, rotation) (Alt+W)"
+            >
+              <Stamp className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Watermark</span>
+              <ChevronDown className="w-2.5 h-2.5 opacity-60" />
+            </button>
+            {showWatermarkDropdown &&
+              createPortal(
+                <div
+                  className="fixed inset-0"
+                  style={{ zIndex: 2147483647 }}
+                  onClick={() => setShowWatermarkDropdown(false)}
+                >
+                  <div
+                    style={{ top: dropdownCoords.top, left: dropdownCoords.left }}
+                    className="fixed w-72 max-w-[calc(100vw-24px)] max-h-[46vh] overflow-y-auto bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl p-3 animate-fade-in select-none text-zinc-900 dark:text-zinc-100 overscroll-contain"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800 mb-2">
+                      <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Watermark</span>
+                      {watermarkConfig && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWatermarkConfig(null);
+                            pushSnapshot({ watermarkConfig: undefined });
+                            setShowWatermarkDropdown(false);
+                          }}
+                          className="text-[10px] text-rose-500 font-semibold hover:underline"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2 text-xs">
+                      <div>
+                        <label className="text-[9px] font-bold text-zinc-400 block mb-0.5">Text</label>
+                        <input
+                          type="text"
+                          value={watermarkConfig?.text || 'CONFIDENTIAL'}
+                          onChange={(e) => {
+                            const updated: WatermarkConfig = {
+                              ...(watermarkConfig || DEFAULT_WATERMARK_CONFIG),
+                              enabled: true,
+                              text: e.target.value,
+                            };
+                            setWatermarkConfig(updated);
+                            pushSnapshot({ watermarkConfig: updated });
+                          }}
+                          className="w-full px-2 py-1 text-xs rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-400 block mb-0.5">Opacity</label>
+                          <input
+                            type="range"
+                            min="5"
+                            max="100"
+                            value={watermarkConfig?.opacity ?? 35}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              const updated: WatermarkConfig = {
+                                ...(watermarkConfig || DEFAULT_WATERMARK_CONFIG),
+                                enabled: true,
+                                opacity: val,
+                              };
+                              setWatermarkConfig(updated);
+                              pushSnapshot({ watermarkConfig: updated });
+                            }}
+                            className="w-full accent-indigo-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-bold text-zinc-400 block mb-0.5">Rotation</label>
+                          <div className="flex gap-1">
+                            {[-45, 0, 45].map((deg) => (
+                              <button
+                                key={deg}
+                                type="button"
+                                onClick={() => {
+                                  const updated: WatermarkConfig = {
+                                    ...(watermarkConfig || DEFAULT_WATERMARK_CONFIG),
+                                    enabled: true,
+                                    rotation: deg,
+                                  };
+                                  setWatermarkConfig(updated);
+                                  pushSnapshot({ watermarkConfig: updated });
+                                }}
+                                className={`flex-1 py-0.5 text-[10px] rounded border ${
+                                  (watermarkConfig?.rotation ?? -45) === deg
+                                    ? 'bg-indigo-600 text-white border-indigo-600 font-bold'
+                                    : 'border-zinc-300 dark:border-zinc-700'
+                                }`}
+                              >
+                                {deg}°
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowWatermarkDropdown(false)}
+                        className="w-full py-1.5 bg-indigo-600 text-white rounded-lg font-semibold text-xs mt-1"
+                      >
+                        Apply Watermark
                       </button>
                     </div>
                   </div>
@@ -6970,9 +8018,67 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </button>
             <button
               type="button"
-              onClick={() => setShowColorPickerModal(true)}
+              onClick={() => {
+                setColorTarget('text');
+                setHexInput(textColor);
+                setShowColorPickerModal(true);
+              }}
               className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 transition-colors"
               title="Open Color Studio (Color Wheel, Eyedropper, Palette, HEX/RGB)"
+            >
+              <Palette className="w-3 h-3" />
+              <span>Studio</span>
+            </button>
+          </div>
+
+          {/* Text Background Fill Color Picker, Eyedropper & Studio Trigger */}
+          <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 border border-slate-300 dark:border-zinc-700 rounded-lg px-2 py-1 shadow-xs shrink-0">
+            <label className="text-[10px] font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider select-none">Bg Fill</label>
+            <input
+              type="color"
+              value={itemBgColor}
+              onChange={(e) => {
+                const newBg = e.target.value;
+                setItemBgColor(newBg);
+                updateActiveTextItemProps({ bgColorHex: newBg });
+              }}
+              className="w-5 h-5 rounded cursor-pointer border border-slate-300 dark:border-zinc-600 bg-transparent p-0"
+              title="Pick Text Background Erase / Inpaint Color"
+            />
+            {['#ffffff', '#fef9c3', '#e0e7ff', '#ede9fe', '#fce7f3', '#dcfce7', '#f1f5f9'].map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => {
+                  setItemBgColor(c);
+                  updateActiveTextItemProps({ bgColorHex: c });
+                }}
+                style={{ backgroundColor: c }}
+                className="w-3.5 h-3.5 rounded-full border border-black/15 dark:border-white/20 transition-transform hover:scale-125"
+                title={c}
+              />
+            ))}
+            <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+            <button
+              type="button"
+              onClick={() => {
+                setColorTarget('text-bg');
+                handleOpenEyedropper();
+              }}
+              className="p-1 rounded text-slate-700 dark:text-zinc-300 hover:bg-slate-100 dark:hover:bg-zinc-700 transition-colors"
+              title="Sample Exact Background Color from Document (Eyedropper)"
+            >
+              <Pipette className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setColorTarget('text-bg');
+                setHexInput(itemBgColor);
+                setShowColorPickerModal(true);
+              }}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 transition-colors"
+              title="Open Color Studio for Text Background Fill"
             >
               <Palette className="w-3 h-3" />
               <span>Studio</span>
@@ -7008,6 +8114,374 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 : 'Click any text on the page to edit in-place'
               : 'Tap anywhere on the page to place formatted text'}
           </span>
+        </div>
+      )}
+
+      {/* Freehand Drawing Tools Property Bar (Pen, Pencil, Highlighter, Eraser) */}
+      {['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) && (
+        <div className="bg-slate-50 dark:bg-zinc-900 border-b border-slate-200 dark:border-zinc-800 px-3 py-1.5 flex items-center gap-2 sm:gap-3 flex-wrap text-xs shadow-2xs z-20 animate-fade-in select-none">
+          {/* Tool Selector Buttons */}
+          <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 p-0.5 rounded-lg border border-slate-200 dark:border-zinc-700 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setActiveTool('pen')}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold transition-all ${
+                activeTool === 'pen'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Pen Tool (P) - Default Color Black (#000000)"
+            >
+              <Pen className="w-3.5 h-3.5" />
+              <span>Pen</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTool('pencil')}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold transition-all ${
+                activeTool === 'pencil'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Pencil Tool (Shift+P) - Fine Graphite"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Pencil</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTool('highlighter')}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold transition-all ${
+                activeTool === 'highlighter'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Highlighter Tool (H) - Default Color Orange (#f97316)"
+            >
+              <Highlighter className="w-3.5 h-3.5" />
+              <span>Highlighter</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTool('eraser')}
+              className={`flex items-center gap-1 px-2 py-1 rounded-md font-semibold transition-all ${
+                activeTool === 'eraser'
+                  ? 'bg-rose-600 text-white shadow-xs'
+                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+              }`}
+              title="Eraser Tool (E) - Interactive Circular Eraser"
+            >
+              <Eraser className="w-3.5 h-3.5" />
+              <span>Eraser</span>
+            </button>
+          </div>
+
+          <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+          {/* Contextual Properties: Pen */}
+          {activeTool === 'pen' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Pen Color */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Color:</span>
+                <input
+                  type="color"
+                  value={drawingColor}
+                  onChange={(e) => setDrawingColor(e.target.value)}
+                  className="w-5 h-5 rounded border border-slate-300 dark:border-zinc-700 cursor-pointer p-0"
+                  title="Choose Custom Pen Color"
+                />
+                <div className="flex items-center gap-1">
+                  {['#000000', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#d97706', '#ffffff'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setDrawingColor(c)}
+                      style={{ backgroundColor: c }}
+                      className={`w-3.5 h-3.5 rounded-full border transition-transform hover:scale-125 ${
+                        drawingColor === c ? 'ring-2 ring-indigo-500 scale-110' : 'border-black/20 dark:border-white/20'
+                      }`}
+                      title={c}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Pen Thickness Slider & Presets */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Thickness:</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="20"
+                  value={penThickness}
+                  onChange={(e) => setPenThickness(parseInt(e.target.value, 10) || 1)}
+                  className="w-16 accent-indigo-600"
+                />
+                <span className="font-mono text-[11px] font-bold text-indigo-600 dark:text-indigo-400 w-6">
+                  {penThickness}px
+                </span>
+                <div className="flex items-center gap-1">
+                  {[1, 2, 3, 5, 8].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setPenThickness(t)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        penThickness === t
+                          ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 text-indigo-600 dark:text-indigo-300'
+                          : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Snap to Shape Toggle */}
+              <button
+                type="button"
+                onClick={() => setSnapToShape(!snapToShape)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold text-xs border transition-all ${
+                  snapToShape
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                }`}
+                title="Snap to Shape (S): Automatically snaps freehand strokes into neat geometric shapes (Circle, Rectangle, Triangle, Line)"
+              >
+                <Shapes className="w-3.5 h-3.5" />
+                <span>Snap to Shape: {snapToShape ? 'ON' : 'OFF'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Contextual Properties: Pencil */}
+          {activeTool === 'pencil' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Pencil Color */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Color:</span>
+                <input
+                  type="color"
+                  value={drawingColor}
+                  onChange={(e) => setDrawingColor(e.target.value)}
+                  className="w-5 h-5 rounded border border-slate-300 dark:border-zinc-700 cursor-pointer p-0"
+                  title="Choose Pencil Graphite Shade"
+                />
+                <div className="flex items-center gap-1">
+                  {['#334155', '#0f172a', '#64748b', '#2563eb'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setDrawingColor(c)}
+                      style={{ backgroundColor: c }}
+                      className={`w-3.5 h-3.5 rounded-full border transition-transform hover:scale-125 ${
+                        drawingColor === c ? 'ring-2 ring-indigo-500 scale-110' : 'border-black/20 dark:border-white/20'
+                      }`}
+                      title={c}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Pencil Thickness Slider */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Lead:</span>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="6"
+                  step="0.5"
+                  value={pencilThickness}
+                  onChange={(e) => setPencilThickness(parseFloat(e.target.value) || 1)}
+                  className="w-16 accent-indigo-600"
+                />
+                <span className="font-mono text-[11px] font-bold text-indigo-600 dark:text-indigo-400 w-8">
+                  {pencilThickness}px
+                </span>
+                <div className="flex items-center gap-1">
+                  {[0.5, 1, 1.5, 2.5].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setPencilThickness(t)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        pencilThickness === t
+                          ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 text-indigo-600 dark:text-indigo-300'
+                          : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Snap to Shape Toggle */}
+              <button
+                type="button"
+                onClick={() => setSnapToShape(!snapToShape)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold text-xs border transition-all ${
+                  snapToShape
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                }`}
+                title="Snap to Shape (S)"
+              >
+                <Shapes className="w-3.5 h-3.5" />
+                <span>Snap to Shape: {snapToShape ? 'ON' : 'OFF'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Contextual Properties: Highlighter */}
+          {activeTool === 'highlighter' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Highlighter Color Presets */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Color:</span>
+                <input
+                  type="color"
+                  value={highlighterColor}
+                  onChange={(e) => setHighlighterColor(e.target.value)}
+                  className="w-5 h-5 rounded border border-slate-300 dark:border-zinc-700 cursor-pointer p-0"
+                  title="Choose Highlighter Color"
+                />
+                <div className="flex items-center gap-1">
+                  {[
+                    { hex: '#f97316', name: 'Orange' },
+                    { hex: '#eab308', name: 'Yellow' },
+                    { hex: '#22c55e', name: 'Green' },
+                    { hex: '#ec4899', name: 'Pink' },
+                    { hex: '#3b82f6', name: 'Blue' },
+                    { hex: '#a855f7', name: 'Purple' },
+                  ].map((c) => (
+                    <button
+                      key={c.hex}
+                      type="button"
+                      onClick={() => setHighlighterColor(c.hex)}
+                      style={{ backgroundColor: c.hex }}
+                      className={`w-4 h-4 rounded-full border transition-transform hover:scale-125 ${
+                        highlighterColor === c.hex ? 'ring-2 ring-indigo-500 scale-110' : 'border-black/20 dark:border-white/20'
+                      }`}
+                      title={`${c.name} Highlighter`}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Highlighter Thickness */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Thickness:</span>
+                <input
+                  type="range"
+                  min="6"
+                  max="40"
+                  value={highlighterThickness}
+                  onChange={(e) => setHighlighterThickness(parseInt(e.target.value, 10) || 14)}
+                  className="w-16 accent-amber-500"
+                />
+                <span className="font-mono text-[11px] font-bold text-amber-600 dark:text-amber-400 w-7">
+                  {highlighterThickness}px
+                </span>
+                <div className="flex items-center gap-1">
+                  {[8, 12, 14, 20, 28].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setHighlighterThickness(t)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        highlighterThickness === t
+                          ? 'bg-amber-50 dark:bg-amber-950/50 border-amber-400 text-amber-700 dark:text-amber-300'
+                          : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <span className="text-[10px] text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded">
+                Multiply blend mode
+              </span>
+            </div>
+          )}
+
+          {/* Contextual Properties: Eraser */}
+          {activeTool === 'eraser' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Eraser Thickness / Radius Slider & Dynamic Circle Preview */}
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Eraser Size:</span>
+                <input
+                  type="range"
+                  min="4"
+                  max="50"
+                  value={eraserRadius}
+                  onChange={(e) => setEraserRadius(parseInt(e.target.value, 10) || 12)}
+                  className="w-24 accent-rose-600"
+                />
+                {/* Dynamic circle radius indicator */}
+                <div className="flex items-center gap-1.5 bg-white dark:bg-zinc-800 px-2 py-0.5 rounded-lg border border-slate-200 dark:border-zinc-700">
+                  <div
+                    className="rounded-full border-2 border-rose-500 bg-rose-500/20 shrink-0"
+                    style={{
+                      width: `${Math.max(6, Math.min(26, eraserRadius * 1.5))}px`,
+                      height: `${Math.max(6, Math.min(26, eraserRadius * 1.5))}px`,
+                    }}
+                  />
+                  <span className="font-mono text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                    {eraserRadius * 2}px
+                  </span>
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              {/* Clear Page Drawings */}
+              <button
+                type="button"
+                onClick={() => {
+                  const remaining = drawings.filter((d) => d.pageIndex !== currentPage - 1);
+                  setDrawings(remaining);
+                  pushSnapshot({ drawings: remaining });
+                }}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 hover:bg-rose-100 transition-colors text-[11px] font-semibold"
+                title="Erase all strokes on current page"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear Page Strokes</span>
+              </button>
+            </div>
+          )}
+
+          {/* Right side: Exit Drawing Mode button */}
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-[11px] text-zinc-400 hidden xl:inline">
+              P: Pen • Shift+P: Pencil • H: Highlighter • E: Eraser • S: Snap • Esc: Exit
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveTool('view')}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-zinc-200 dark:bg-zinc-700 hover:bg-zinc-300 dark:hover:bg-zinc-600 text-zinc-800 dark:text-zinc-200 text-xs font-semibold transition-colors"
+              title="Exit Drawing Mode (Esc)"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Done</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -7641,8 +9115,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const boxH = cssH + ascenderExtra + descenderDepth;
 
                 const cssFontFamily = resolveCssFontFamily(itemFontFamily);
-                const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH);
+                const sampledBg = sampleCanvasBgColor(canvasRef.current, cssX, cssY, cssW, cssH, currentItem.bgColorHex || item.bgColorHex);
                 const sampledFg = sampleCanvasTextColor(canvasRef.current, cssX, cssY, cssW, cssH, sampledBg.rgb);
+                const effectiveBgHex = currentItem.bgColorHex || item.bgColorHex || sampledBg.hex;
                 const textColor = currentItem.color || item.color || sampledFg;
 
                 return (
@@ -7672,6 +9147,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       setCharacterSpacing(currentItem.characterSpacing ?? 0);
                       setAlignment(itemAlign);
                       setTextColor(textColor);
+                      setItemBgColor(effectiveBgHex);
                       setHexInput(textColor);
                     }}
                     style={{
@@ -7679,7 +9155,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${boxY}px`,
                       width: `${boxW}px`,
                       height: `${boxH}px`,
-                      backgroundColor: isEditing || isItemModified ? sampledBg.hex : 'transparent',
+                      backgroundColor: isEditing || isItemModified ? effectiveBgHex : 'transparent',
                     }}
                     className={`absolute transition-all cursor-text rounded-none ${
                       isEditing
@@ -7727,6 +9203,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                               characterSpacing: currentItem.characterSpacing ?? 0,
                               alignment: itemAlign,
                               color: textColor,
+                              bgColorHex: effectiveBgHex,
                               backgroundColor: item.backgroundColor || sampledBg.rgb,
                               isModified: true,
                             },
@@ -7757,7 +9234,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           color: textColor,
                           textAlign: itemAlign,
                           caretColor: '#2563eb',
-                          backgroundColor: sampledBg.hex,
+                          backgroundColor: effectiveBgHex,
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
                           transform: currentItem.rotation ? `rotate(${currentItem.rotation}deg)` : undefined,
@@ -7778,7 +9255,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           fontSize: `${itemFontSize * scale}px`,
                           color: textColor,
                           textAlign: itemAlign,
-                          backgroundColor: sampledBg.hex,
+                          backgroundColor: effectiveBgHex,
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: currentItem.lineSpacing ? `${currentItem.lineSpacing}` : 'normal',
                           marginBottom: currentItem.paragraphSpacing ? `${currentItem.paragraphSpacing * scale}px` : undefined,
@@ -9078,6 +10555,242 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   />
                 );
               })}
+
+            {/* Live Watermark Rendering Layer */}
+            {(() => {
+              if (!watermarkConfig || !watermarkConfig.enabled) return null;
+              const scope = watermarkConfig.pageScope || 'all';
+              let applies = true;
+              if (scope === 'odd' && pageNum % 2 === 0) applies = false;
+              if (scope === 'even' && pageNum % 2 !== 0) applies = false;
+              if (scope === 'custom') {
+                if (watermarkConfig.customRange) {
+                  const parsed = PdfStudioEngine.parsePageRange(watermarkConfig.customRange, totalPages);
+                  applies = parsed.includes(pageNum);
+                } else {
+                  applies = false;
+                }
+              }
+
+              if (!applies) return null;
+
+              const layerZ = watermarkConfig.layer === 'behind' ? 'z-0' : 'z-25';
+              const pW = (basePageDims.width || 595) * zoomScale;
+              const pH = (basePageDims.height || 842) * zoomScale;
+              const ptPerCm = 28.3465 * zoomScale;
+              const xOffset = (watermarkConfig.xOffsetCm || 0) * ptPerCm;
+              const yOffset = (watermarkConfig.yOffsetCm || 0) * ptPerCm;
+              const rot = watermarkConfig.rotation ?? -45;
+              const op = Math.max(0.05, Math.min(1, (watermarkConfig.opacity ?? 35) / 100));
+
+              if (watermarkConfig.type === 'text') {
+                const text = watermarkConfig.text || 'CONFIDENTIAL';
+                let calcSize = (watermarkConfig.fontSize || 36) * zoomScale;
+                if (watermarkConfig.proportionOfPages) {
+                  calcSize = Math.max(12, Math.round((pW * ((watermarkConfig.proportionPercent || 50) / 100)) / Math.max(1, text.length * 0.6)));
+                }
+
+                if (watermarkConfig.tile) {
+                  const stepX = Math.max(120, ((watermarkConfig.tileSpacingXCm || 2) * ptPerCm * 2));
+                  const stepY = Math.max(100, ((watermarkConfig.tileSpacingYCm || 2) * ptPerCm * 2));
+                  const tiles: { x: number; y: number }[] = [];
+                  for (let tx = 0; tx < pW + 200; tx += stepX) {
+                    for (let ty = 0; ty < pH + 200; ty += stepY) {
+                      tiles.push({ x: tx + xOffset, y: ty - yOffset });
+                    }
+                  }
+                  return (
+                    <div className={`absolute inset-0 overflow-hidden pointer-events-none ${layerZ}`}>
+                      {tiles.map((t, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            left: `${t.x}px`,
+                            top: `${t.y}px`,
+                            transform: `translate(-50%, -50%) rotate(${rot}deg)`,
+                            color: watermarkConfig.color || '#dc2626',
+                            fontFamily: watermarkConfig.fontFamily || 'Helvetica',
+                            fontSize: `${calcSize}px`,
+                            fontWeight: watermarkConfig.isBold ? 'bold' : 'normal',
+                            fontStyle: watermarkConfig.isItalic ? 'italic' : 'normal',
+                            textDecoration: watermarkConfig.isUnderline ? 'underline' : 'none',
+                            opacity: op,
+                          }}
+                          className="absolute whitespace-nowrap select-none origin-center"
+                        >
+                          {text}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+
+                let leftPct = '50%';
+                let topPct = '50%';
+                const pos = watermarkConfig.position || 'center';
+                if (pos.includes('left')) leftPct = '20%';
+                else if (pos.includes('right')) leftPct = '80%';
+                if (pos.includes('top')) topPct = '15%';
+                else if (pos.includes('bottom')) topPct = '85%';
+
+                return (
+                  <div className={`absolute inset-0 overflow-hidden pointer-events-none ${layerZ}`}>
+                    <div
+                      style={{
+                        left: leftPct,
+                        top: topPct,
+                        transform: `translate(-50%, -50%) translate(${xOffset}px, ${-yOffset}px) rotate(${rot}deg)`,
+                        color: watermarkConfig.color || '#dc2626',
+                        fontFamily: watermarkConfig.fontFamily || 'Helvetica',
+                        fontSize: `${calcSize}px`,
+                        fontWeight: watermarkConfig.isBold ? 'bold' : 'normal',
+                        fontStyle: watermarkConfig.isItalic ? 'italic' : 'normal',
+                        textDecoration: watermarkConfig.isUnderline ? 'underline' : 'none',
+                        opacity: op,
+                      }}
+                      className="absolute whitespace-nowrap select-none origin-center"
+                    >
+                      {text}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (watermarkConfig.type === 'file' && watermarkConfig.fileDataUrl) {
+                return (
+                  <div className={`absolute inset-0 overflow-hidden pointer-events-none ${layerZ} flex items-center justify-center`}>
+                    <img
+                      src={watermarkConfig.fileDataUrl}
+                      alt="Watermark"
+                      style={{
+                        maxWidth: '80%',
+                        maxHeight: '80%',
+                        transform: `translate(${xOffset}px, ${-yOffset}px) rotate(${rot}deg)`,
+                        opacity: op,
+                      }}
+                      className="select-none pointer-events-none"
+                    />
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
+            {/* Freehand Drawings SVG Layer */}
+            <svg
+              className="absolute inset-0 w-full h-full pointer-events-none z-20"
+              viewBox={`0 0 ${basePageDims.width || 595} ${basePageDims.height || 842}`}
+              preserveAspectRatio="none"
+            >
+              {/* Existing saved drawings on this page */}
+              {drawings
+                .filter((stroke) => stroke.pageIndex === pageIdx)
+                .map((stroke) => {
+                  const pts = stroke.points;
+                  if (!pts || pts.length === 0) return null;
+                  if (pts.length === 1) {
+                    return (
+                      <circle
+                        key={stroke.id}
+                        cx={pts[0].x}
+                        cy={pts[0].y}
+                        r={stroke.thickness / 2}
+                        fill={stroke.color}
+                        opacity={stroke.opacity || 1}
+                      />
+                    );
+                  }
+                  let d = `M ${pts[0].x} ${pts[0].y}`;
+                  for (let i = 1; i < pts.length; i++) {
+                    const prev = pts[i - 1];
+                    const curr = pts[i];
+                    const midX = (prev.x + curr.x) / 2;
+                    const midY = (prev.y + curr.y) / 2;
+                    d += ` Q ${prev.x} ${prev.y}, ${midX} ${midY}`;
+                  }
+                  d += ` T ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+                  return (
+                    <path
+                      key={stroke.id}
+                      d={d}
+                      fill="none"
+                      stroke={stroke.color}
+                      strokeWidth={stroke.thickness}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      opacity={stroke.opacity || 1}
+                      style={stroke.blendMode === 'multiply' ? { mixBlendMode: 'multiply' } : undefined}
+                    />
+                  );
+                })}
+
+              {/* In-progress active stroke */}
+              {currentStroke && currentStroke.pageIndex === pageIdx && currentStroke.points.length > 0 && (() => {
+                const pts = currentStroke.points;
+                if (pts.length === 1) {
+                  return (
+                    <circle
+                      cx={pts[0].x}
+                      cy={pts[0].y}
+                      r={currentStroke.thickness / 2}
+                      fill={currentStroke.color}
+                      opacity={currentStroke.opacity || 1}
+                    />
+                  );
+                }
+                let d = `M ${pts[0].x} ${pts[0].y}`;
+                for (let i = 1; i < pts.length; i++) {
+                  const prev = pts[i - 1];
+                  const curr = pts[i];
+                  const midX = (prev.x + curr.x) / 2;
+                  const midY = (prev.y + curr.y) / 2;
+                  d += ` Q ${prev.x} ${prev.y}, ${midX} ${midY}`;
+                }
+                d += ` T ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+                return (
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke={currentStroke.color}
+                    strokeWidth={currentStroke.thickness}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={currentStroke.opacity || 1}
+                    style={currentStroke.blendMode === 'multiply' ? { mixBlendMode: 'multiply' } : undefined}
+                  />
+                );
+              })()}
+            </svg>
+
+            {/* Interactive Drawing Pointer Capture Layer */}
+            {['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) && (
+              <div
+                className="absolute inset-0 z-35 touch-none"
+                style={{
+                  cursor: activeTool === 'eraser' ? 'none' : 'crosshair',
+                }}
+                onPointerDown={(e) => handleDrawingStart(e, pageIdx)}
+                onPointerMove={(e) => handleDrawingMove(e, pageIdx)}
+                onPointerUp={handleDrawingEnd}
+                onPointerLeave={() => {
+                  if (activeTool === 'eraser') setEraserCursorPos(null);
+                }}
+              />
+            )}
+
+            {/* Dynamic Circular Eraser Cursor Follower */}
+            {activeTool === 'eraser' && isCurrentPage && eraserCursorPos && (
+              <div
+                className="absolute pointer-events-none rounded-full border-2 border-rose-500 bg-rose-500/20 shadow-md z-40"
+                style={{
+                  left: `${eraserCursorPos.x}px`,
+                  top: `${eraserCursorPos.y}px`,
+                  width: `${eraserRadius * 2}px`,
+                  height: `${eraserRadius * 2}px`,
+                  transform: 'translate(-50%, -50%)',
+                }}
+              />
+            )}
 
             {/* Seamless Non-blocking Rendering Badge */}
             {isCurrentPage && isRendering && (
@@ -12491,6 +14204,120 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </div>
           </div>
         </div>
+      )}
+
+      {/* Desktop Dialog: Insert Page Suite (Blank Page + Pages from other PDF) */}
+      {showInsertPageModal && (
+        <InsertPageModal
+          isOpen={showInsertPageModal}
+          onClose={() => setShowInsertPageModal(false)}
+          onInsertBlankPage={(position, sizeSpecId) => {
+            handleInsertBlankPage(position, sizeSpecId);
+            setShowInsertPageModal(false);
+          }}
+          onInsertPdfPages={(donorFile, position, pageRange) => {
+            handleInsertPagesFromOtherPdf(donorFile, position, pageRange);
+            setShowInsertPageModal(false);
+          }}
+          pdfBufferOrProxy={arrayBuffer}
+          totalPages={totalPages}
+          currentPage={currentPage}
+          basePageDims={basePageDims}
+          pageRotations={pageRotations}
+          initialMode={insertPageInitialMode}
+        />
+      )}
+
+      {/* Desktop Dialog: Watermark Suite (Images 1 & 2 Design) */}
+      {showWatermarkModal && (
+        <WatermarkModal
+          isOpen={showWatermarkModal}
+          onClose={() => setShowWatermarkModal(false)}
+          config={watermarkConfig || DEFAULT_WATERMARK_CONFIG}
+          onApply={(updated) => {
+            setWatermarkConfig(updated);
+            pushSnapshot({ watermarkConfig: updated });
+            setShowWatermarkModal(false);
+          }}
+          pdfBufferOrProxy={arrayBuffer}
+          totalPages={totalPages}
+          currentPage={currentPage}
+          basePageDims={basePageDims}
+          pageRotations={pageRotations}
+        />
+      )}
+
+      {/* Desktop Dialog: Page Numbers Suite (Image 3 Design) */}
+      {showPageNumberModal && (
+        <PageNumberModal
+          isOpen={showPageNumberModal}
+          onClose={() => setShowPageNumberModal(false)}
+          config={pageNumberConfig || {
+            enabled: true,
+            position: 'bottom-center',
+            format: 'num',
+            fontFamily: 'Calibri',
+            fontSize: 10,
+            color: '#334155',
+            startNumber: 1,
+            scope: 'all',
+          }}
+          onApply={(updated) => {
+            setPageNumberConfig(updated);
+            pushSnapshot({ pageNumberConfig: updated });
+            setShowPageNumberModal(false);
+          }}
+          pdfBufferOrProxy={arrayBuffer}
+          totalPages={totalPages}
+          currentPage={currentPage}
+          basePageDims={basePageDims}
+          pageRotations={pageRotations}
+        />
+      )}
+
+      {/* Desktop Dialog: Page Borders Suite (Image 3 Design) */}
+      {showBorderModal && (
+        <PageBorderModal
+          isOpen={showBorderModal}
+          onClose={() => setShowBorderModal(false)}
+          config={pageBorders[currentPage - 1] || {
+            enabled: true,
+            type: 'box',
+            style: 'solid',
+            color: '#000000',
+            width: 2,
+            top: 20,
+            bottom: 20,
+            left: 20,
+            right: 20,
+          }}
+          onApply={(updated, scope) => {
+            const nextBorders = { ...pageBorders };
+            if (scope === 'all') {
+              for (let i = 0; i < totalPages; i++) {
+                nextBorders[i] = { ...updated };
+              }
+            } else if (scope === 'current') {
+              nextBorders[currentPage - 1] = { ...updated };
+            } else if (scope === 'odd') {
+              for (let i = 0; i < totalPages; i++) {
+                if (i % 2 === 0) nextBorders[i] = { ...updated };
+              }
+            } else if (scope === 'even') {
+              for (let i = 0; i < totalPages; i++) {
+                if (i % 2 !== 0) nextBorders[i] = { ...updated };
+              }
+            }
+            setPageBorders(nextBorders);
+            pushSnapshot({ pageBorders: nextBorders });
+            setShowBorderModal(false);
+          }}
+          pdfBufferOrProxy={arrayBuffer}
+          totalPages={totalPages}
+          currentPage={currentPage}
+          basePageDims={basePageDims}
+          pageRotations={pageRotations}
+        />
       )}
     </div>
   );
