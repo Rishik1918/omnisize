@@ -53,6 +53,7 @@ export interface ImageOverlay {
   origHeight?: number;
   isExtracted?: boolean;
   isModified?: boolean;
+  isDeleted?: boolean;
   borderWidth?: number;
   borderColor?: string;
   borderStyle?: 'solid' | 'dashed' | 'dotted' | 'double' | 'groove' | 'ridge';
@@ -147,6 +148,7 @@ export interface ShapeOverlay {
   origHeight?: number;
   isExtracted?: boolean;
   isModified?: boolean;
+  isDeleted?: boolean;
   zIndex?: number;
   behindText?: boolean;
 }
@@ -161,6 +163,7 @@ export interface TableOverlay {
   origHeight?: number;
   isExtracted?: boolean;
   isModified?: boolean;
+  isDeleted?: boolean;
   x: number; // PDF points
   y: number; // PDF points
   width: number; // PDF points
@@ -655,17 +658,15 @@ export class PdfStudioEngine {
     if (payload.imageOverlays && payload.imageOverlays.length > 0) {
       for (const imgOverlay of payload.imageOverlays) {
         if (imgOverlay.pageIndex >= 0 && imgOverlay.pageIndex < doc.getPageCount()) {
-          // If the image was pre-existing from the original PDF and wasn't modified or moved, keep it as is
-          if (imgOverlay.isExtracted && !imgOverlay.isModified) {
+          // If the image was pre-existing from the original PDF and wasn't modified or moved or deleted, keep it as is
+          if (imgOverlay.isExtracted && !imgOverlay.isModified && !imgOverlay.isDeleted) {
             continue;
           }
 
-          const page = doc.getPage(imgOverlay.pageIndex);
-
-          // If extracted image was moved or modified, blank out original bounding box on its original page with white
+          // If extracted image was moved, modified or deleted, blank out original bounding box on its original page with white
           if (
             imgOverlay.isExtracted &&
-            imgOverlay.isModified &&
+            (imgOverlay.isModified || imgOverlay.isDeleted) &&
             imgOverlay.origX !== undefined &&
             imgOverlay.origY !== undefined
           ) {
@@ -683,6 +684,12 @@ export class PdfStudioEngine {
               }
             } catch (_) {}
           }
+
+          if (imgOverlay.isDeleted) {
+            continue;
+          }
+
+          const page = doc.getPage(imgOverlay.pageIndex);
 
           const embeddedImage = imgOverlay.imageType === 'png'
             ? await doc.embedPng(imgOverlay.imageData)
@@ -756,13 +763,13 @@ export class PdfStudioEngine {
     if (payload.shapes && payload.shapes.length > 0) {
       for (const shape of payload.shapes) {
         if (shape.pageIndex >= 0 && shape.pageIndex < doc.getPageCount()) {
-          // If shape is pre-existing from the PDF and wasn't moved or changed, keep it
-          if (shape.isExtracted && !shape.isModified) {
+          // If shape is pre-existing from the PDF and wasn't moved or changed or deleted, keep it
+          if (shape.isExtracted && !shape.isModified && !shape.isDeleted) {
             continue;
           }
 
-          // If extracted shape was moved or modified, blank out original bounding box on its original page
-          if (shape.isExtracted && shape.isModified && shape.origX !== undefined && shape.origY !== undefined) {
+          // If extracted shape was moved, modified or deleted, blank out original bounding box on its original page
+          if (shape.isExtracted && (shape.isModified || shape.isDeleted) && shape.origX !== undefined && shape.origY !== undefined) {
             try {
               const origPageIdx = shape.origPageIndex !== undefined ? shape.origPageIndex : shape.pageIndex;
               if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
@@ -776,6 +783,10 @@ export class PdfStudioEngine {
                 });
               }
             } catch (_) {}
+          }
+
+          if (shape.isDeleted) {
+            continue;
           }
 
           const page = doc.getPage(shape.pageIndex);
@@ -807,13 +818,13 @@ export class PdfStudioEngine {
     if (payload.tables && payload.tables.length > 0) {
       for (const table of payload.tables) {
         if (table.pageIndex >= 0 && table.pageIndex < doc.getPageCount()) {
-          // If table was pre-existing and unmodified, keep it
-          if (table.isExtracted && !table.isModified) {
+          // If table was pre-existing and unmodified and not deleted, keep it
+          if (table.isExtracted && !table.isModified && !table.isDeleted) {
             continue;
           }
 
-          // If extracted table was moved or modified, blank out original bounding box on its original page
-          if (table.isExtracted && table.isModified && table.origX !== undefined && table.origY !== undefined) {
+          // If extracted table was moved, modified or deleted, blank out original bounding box on its original page
+          if (table.isExtracted && (table.isModified || table.isDeleted) && table.origX !== undefined && table.origY !== undefined) {
             try {
               const origPageIdx = table.origPageIndex !== undefined ? table.origPageIndex : table.pageIndex;
               if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
@@ -827,6 +838,10 @@ export class PdfStudioEngine {
                 });
               }
             } catch (_) {}
+          }
+
+          if (table.isDeleted) {
+            continue;
           }
 
           const page = doc.getPage(table.pageIndex);
@@ -1684,7 +1699,9 @@ export class PdfStudioEngine {
    */
   static async extractPageImages(
     pdfBufferOrProxy: ArrayBuffer | any,
-    pageNumber: number
+    pageNumber: number,
+    pageCanvas?: HTMLCanvasElement | null,
+    baseDims?: { width: number; height: number } | null
   ): Promise<ImageOverlay[]> {
     try {
       const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
@@ -1717,68 +1734,134 @@ export class PdfStudioEngine {
           if (matrixStack.length > 0) currentMatrix = matrixStack.pop()!;
         } else if (fn === 12 && Array.isArray(args)) {
           currentMatrix = multiplyMatrices(currentMatrix, args);
-        } else if ((fn === 82 || fn === 85) && args && args[0]) {
-          const imgName = args[0];
+        } else if ((fn === 82 || fn === 83 || fn === 85 || fn === 86 || fn === 88) && args && args[0]) {
+          const imgName = typeof args[0] === 'string' ? args[0] : (args[0]?.name || String(args[0]));
+          let buf: ArrayBuffer | null = null;
+          let rawW = 0;
+          let rawH = 0;
+
+          // Attempt 1: Fetch object from PDF.js objs collection with safety timeout
           const obj = await new Promise<any>((resolve) => {
+            const timer = setTimeout(() => resolve(null), 800);
             try {
               const targetCollection = (imgName.startsWith('g_') || imgName.startsWith('img_g')) ? page.commonObjs : page.objs;
               if (targetCollection && typeof targetCollection.get === 'function') {
-                targetCollection.get(imgName, (res: any) => resolve(res));
+                targetCollection.get(imgName, (res: any) => {
+                  clearTimeout(timer);
+                  resolve(res);
+                });
               } else {
+                clearTimeout(timer);
                 resolve(null);
               }
             } catch (_) {
+              clearTimeout(timer);
               resolve(null);
             }
           });
-          if (obj && obj.data && obj.width && obj.height) {
-            const canvas = document.createElement('canvas');
-            canvas.width = obj.width;
-            canvas.height = obj.height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              const imgData = ctx.createImageData(obj.width, obj.height);
-              if (obj.data.length === obj.width * obj.height * 4) {
-                imgData.data.set(obj.data);
-              } else if (obj.data.length === obj.width * obj.height * 3) {
-                for (let p = 0, q = 0; p < obj.data.length; p += 3, q += 4) {
-                  imgData.data[q] = obj.data[p];
-                  imgData.data[q + 1] = obj.data[p + 1];
-                  imgData.data[q + 2] = obj.data[p + 2];
-                  imgData.data[q + 3] = 255;
+
+          if (obj) {
+            rawW = obj.width || obj.bitmap?.width || (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap ? obj.width : 0);
+            rawH = obj.height || obj.bitmap?.height || (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap ? obj.height : 0);
+            if (rawW > 0 && rawH > 0 && typeof document !== 'undefined') {
+              try {
+                const canvas = document.createElement('canvas');
+                canvas.width = rawW;
+                canvas.height = rawH;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  if (obj.data && obj.data.length >= rawW * rawH) {
+                    const imgData = ctx.createImageData(rawW, rawH);
+                    if (obj.data.length === rawW * rawH * 4) {
+                      imgData.data.set(obj.data);
+                    } else if (obj.data.length === rawW * rawH * 3) {
+                      for (let p = 0, q = 0; p < obj.data.length; p += 3, q += 4) {
+                        imgData.data[q] = obj.data[p];
+                        imgData.data[q + 1] = obj.data[p + 1];
+                        imgData.data[q + 2] = obj.data[p + 2];
+                        imgData.data[q + 3] = 255;
+                      }
+                    } else if (obj.data.length === rawW * rawH) {
+                      for (let p = 0, q = 0; p < obj.data.length; p++, q += 4) {
+                        const v = obj.data[p];
+                        imgData.data[q] = v;
+                        imgData.data[q + 1] = v;
+                        imgData.data[q + 2] = v;
+                        imgData.data[q + 3] = 255;
+                      }
+                    }
+                    ctx.putImageData(imgData, 0, 0);
+                  } else if (obj.bitmap) {
+                    ctx.drawImage(obj.bitmap, 0, 0);
+                  } else if (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap) {
+                    ctx.drawImage(obj, 0, 0);
+                  } else if (typeof HTMLImageElement !== 'undefined' && obj instanceof HTMLImageElement) {
+                    ctx.drawImage(obj, 0, 0);
+                  } else if (typeof HTMLCanvasElement !== 'undefined' && obj instanceof HTMLCanvasElement) {
+                    ctx.drawImage(obj, 0, 0);
+                  }
+                  const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
+                  if (blob) {
+                    buf = await blob.arrayBuffer();
+                  }
                 }
-              } else {
-                continue;
-              }
-              ctx.putImageData(imgData, 0, 0);
-              const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
-              if (blob) {
-                const buf = await blob.arrayBuffer();
-                const imgW = Math.max(16, Math.round(Math.abs(currentMatrix[0]) || obj.width));
-                const imgH = Math.max(16, Math.round(Math.abs(currentMatrix[3]) || obj.height));
-                const imgX = Math.round(currentMatrix[4] || 0);
-                const imgY = Math.round(currentMatrix[5] || 0);
-                images.push({
-                  id: `img_extracted_${pageIndex}_${images.length}_${Date.now()}`,
-                  pageIndex,
-                  imageData: buf,
-                  imageType: 'png',
-                  x: imgX,
-                  y: imgY,
-                  width: imgW,
-                  height: imgH,
-                  origX: imgX,
-                  origY: imgY,
-                  origWidth: imgW,
-                  origHeight: imgH,
-                  origPageIndex: pageIndex,
-                  isExtracted: true,
-                  isModified: false,
-                  rotation: 0,
-                  opacity: 1,
-                });
-              }
+              } catch (_) {}
             }
+          }
+
+          const imgW = Math.max(16, Math.round(Math.hypot(currentMatrix[0], currentMatrix[1]) || rawW || 80));
+          const imgH = Math.max(16, Math.round(Math.hypot(currentMatrix[2], currentMatrix[3]) || rawH || 80));
+          const imgX = Math.round(currentMatrix[4] || 0);
+          const imgY = Math.round(currentMatrix[5] || 0);
+
+          // Attempt 2: If object decoding produced empty buffer, crop directly from the high-res rendered canvas
+          if (!buf && pageCanvas && baseDims && baseDims.width > 0 && baseDims.height > 0) {
+            try {
+              const canvasW = pageCanvas.width;
+              const canvasH = pageCanvas.height;
+              const scaleX = canvasW / baseDims.width;
+              const scaleY = canvasH / baseDims.height;
+              const cropX = Math.max(0, Math.round(imgX * scaleX));
+              const cropY = Math.max(0, Math.round((baseDims.height - imgY - imgH) * scaleY));
+              const cropW = Math.min(canvasW - cropX, Math.round(imgW * scaleX));
+              const cropH = Math.min(canvasH - cropY, Math.round(imgH * scaleY));
+
+              if (cropW > 4 && cropH > 4) {
+                const cropCanvas = document.createElement('canvas');
+                cropCanvas.width = cropW;
+                cropCanvas.height = cropH;
+                const cropCtx = cropCanvas.getContext('2d');
+                if (cropCtx) {
+                  cropCtx.drawImage(pageCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+                  const cropBlob = await new Promise<Blob | null>((res) => cropCanvas.toBlob(res, 'image/png'));
+                  if (cropBlob) {
+                    buf = await cropBlob.arrayBuffer();
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
+          if (buf) {
+            images.push({
+              id: `img_extracted_${pageIndex}_${images.length}_${Date.now()}`,
+              pageIndex,
+              imageData: buf,
+              imageType: 'png',
+              x: imgX,
+              y: imgY,
+              width: imgW,
+              height: imgH,
+              origX: imgX,
+              origY: imgY,
+              origWidth: imgW,
+              origHeight: imgH,
+              origPageIndex: pageIndex,
+              isExtracted: true,
+              isModified: false,
+              rotation: 0,
+              opacity: 1,
+            });
           }
         }
       }

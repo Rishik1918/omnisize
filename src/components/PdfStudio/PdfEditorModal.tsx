@@ -345,6 +345,16 @@ export const MS_WORD_MARGINS: MarginPreset[] = [
   },
 ];
 
+const imageBlobUrlCache = new WeakMap<ArrayBuffer, string>();
+function getCachedBlobUrl(buf: ArrayBuffer): string {
+  let url = imageBlobUrlCache.get(buf);
+  if (!url) {
+    url = URL.createObjectURL(new Blob([buf]));
+    imageBlobUrlCache.set(buf, url);
+  }
+  return url;
+}
+
 interface PdfEditorModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -2617,7 +2627,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             // Extract existing embedded PDF photos and images for this page so they are selectable and editable
             try {
-              const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage);
+              const currentCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
+              const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage, currentCanvas, basePageDims);
               if (isMounted && extractedImgs.length > 0) {
                 setImageOverlays((prev) => {
                   const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
@@ -2641,22 +2652,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               }
             } catch (shapeErr) {
               console.warn('Page shape extraction note:', shapeErr);
-            }
-
-            // Detect existing table structures from extracted page text items
-            try {
-              if (textItems && textItems.length >= 4) {
-                const detectedTables = PdfStudioEngine.detectPageTables(textItems, currentPage - 1);
-                if (isMounted && detectedTables.length > 0) {
-                  setTables((prev) => {
-                    const existingKeys = new Set(prev.map((t) => `${t.pageIndex}_${Math.round(t.x)}_${Math.round(t.y)}`));
-                    const newTables = detectedTables.filter((t) => !existingKeys.has(`${t.pageIndex}_${Math.round(t.x)}_${Math.round(t.y)}`));
-                    return newTables.length > 0 ? [...prev, ...newTables] : prev;
-                  });
-                }
-              }
-            } catch (tblErr) {
-              console.warn('Page table detection note:', tblErr);
             }
           } catch (e) {
             console.warn('Text item extraction warning:', e);
@@ -5894,7 +5889,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               return next;
             });
             setImageOverlays((prev) => {
-              const next = prev.filter((i) => i.id !== selectedOverlayId);
+              const next = prev.map((i) => (i.id === selectedOverlayId ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i)).filter(Boolean) as ImageOverlay[];
               pushSnapshot({ imageOverlays: next });
               return next;
             });
@@ -8912,7 +8907,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               onClick={() => {
                 if (selectedOverlayId) {
                   setTextOverlays((prev) => prev.filter((t) => t.id !== selectedOverlayId));
-                  setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
+                  setImageOverlays((prev) =>
+                    prev.map((i) => (i.id === selectedOverlayId ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i)).filter(Boolean) as ImageOverlay[]
+                  );
                   setHyperlinks((prev) => prev.filter((h) => h.id !== selectedOverlayId));
                   setSelectedOverlayId(null);
                 } else if (activeEditingId || selectedTextItemId) {
@@ -10536,16 +10533,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 );
               })}
 
-            {/* White-out background patches for extracted images that have been moved across or resized */}
+            {/* White-out background patches for extracted images that have been moved across or resized or deleted */}
             {imageOverlays
               .filter(
                 (img) =>
                   (img.origPageIndex ?? img.pageIndex) === pageNum - 1 &&
                   img.isExtracted &&
-                  img.isModified &&
-                  img.origX !== undefined &&
-                  img.origY !== undefined &&
-                  (img.x !== img.origX || img.y !== img.origY || img.width !== img.origWidth || img.height !== img.origHeight || (img.origPageIndex !== undefined && img.origPageIndex !== img.pageIndex))
+                  (img.isDeleted || (img.isModified && img.origX !== undefined && img.origY !== undefined &&
+                    (img.x !== img.origX || img.y !== img.origY || img.width !== img.origWidth || img.height !== img.origHeight || (img.origPageIndex !== undefined && img.origPageIndex !== img.pageIndex))))
               )
               .map((img) => {
                 const scale = zoomScale;
@@ -10601,7 +10596,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             {/* Render Interactive Movable, Resizable & Croppable Image Overlays */}
             {imageOverlays
-              .filter((i) => i.pageIndex === pageNum - 1)
+              .filter((i) => i.pageIndex === pageNum - 1 && !i.isDeleted)
               .map((img) => {
                 const scale = zoomScale;
                 const cssX = img.x * scale;
@@ -10610,7 +10605,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssH = img.height * scale;
                 const isSelected = selectedOverlayId === img.id;
                 const isCropping = cropImageId === img.id;
-                const url = URL.createObjectURL(new Blob([img.imageData]));
+                const url = getCachedBlobUrl(img.imageData);
                 const imgFilters = [
                   img.brightness !== undefined && img.brightness !== 100 ? `brightness(${img.brightness}%)` : '',
                   img.contrast !== undefined && img.contrast !== 100 ? `contrast(${img.contrast}%)` : '',
@@ -10708,10 +10703,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       transform: img.rotation ? `rotate(${img.rotation}deg)` : undefined,
                       borderRadius: img.borderRadius ? `${img.borderRadius * scale}px` : undefined,
                     }}
-                    className={`absolute cursor-move select-none ${
-                      isSelected ? 'ring-2 ring-emerald-500' : ''
+                    className={`absolute cursor-move select-none transition-all group ${
+                      isSelected
+                        ? 'ring-2 ring-emerald-500 shadow-xl z-30'
+                        : activeTool === 'edit-text'
+                        ? 'ring-1 ring-dashed ring-emerald-400/80 hover:ring-2 hover:ring-emerald-500 hover:bg-emerald-500/10 cursor-move'
+                        : ''
                     }`}
                   >
+                    {/* Visual indicator in Edit Mode for recognized photos/logos */}
+                    {activeTool === 'edit-text' && !isSelected && (
+                      <span className="absolute top-1 left-1 bg-emerald-600/90 text-white text-[9px] font-bold px-1.5 py-0.5 rounded shadow pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                        Photo
+                      </span>
+                    )}
+
                     <img
                       src={url}
                       alt="Overlay"
@@ -10730,11 +10736,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     {isSelected && !isCropping && (
                       <>
                         {renderResizeHandles(img.id, 'image', img.x, img.y, img.width, img.height)}
-                        {/* Quick Action Floating Badge: Crop Button */}
+                        {/* Quick Action Floating Badge: Crop, Move Page & Delete */}
                         <div
                           className={`absolute ${
                             /android/i.test(navigator.userAgent) ? '-bottom-8' : '-top-7'
-                          } left-1/2 -translate-x-1/2 flex items-center gap-1 bg-zinc-900/90 text-white rounded-md px-1.5 py-0.5 shadow-md text-[10px] z-50`}
+                          } left-1/2 -translate-x-1/2 flex items-center gap-1 bg-zinc-900/90 text-white rounded-md px-1.5 py-0.5 shadow-md text-[10px] z-50 whitespace-nowrap`}
                         >
                           <button
                             type="button"
@@ -10747,6 +10753,65 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           >
                             <Crop className="w-3 h-3 text-emerald-400" />
                             <span>Crop</span>
+                          </button>
+                          {totalPages > 1 && (
+                            <>
+                              <div className="w-px h-3 bg-zinc-700" />
+                              <button
+                                type="button"
+                                disabled={img.pageIndex <= 0}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (img.pageIndex > 0) {
+                                    const targetP = img.pageIndex;
+                                    setImageOverlays((prev) =>
+                                      prev.map((i) => (i.id === img.id ? { ...i, pageIndex: targetP - 1, isModified: true } : i))
+                                    );
+                                    setCurrentPage(targetP);
+                                    pushSnapshot({ imageOverlays });
+                                  }
+                                }}
+                                className="px-1.5 py-0.5 rounded hover:bg-zinc-700 disabled:opacity-30 text-[10px]"
+                                title="Move to Previous Page"
+                              >
+                                ◄ Prev Page
+                              </button>
+                              <button
+                                type="button"
+                                disabled={img.pageIndex >= totalPages - 1}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (img.pageIndex < totalPages - 1) {
+                                    const targetP = img.pageIndex + 2;
+                                    setImageOverlays((prev) =>
+                                      prev.map((i) => (i.id === img.id ? { ...i, pageIndex: targetP - 1, isModified: true } : i))
+                                    );
+                                    setCurrentPage(targetP);
+                                    pushSnapshot({ imageOverlays });
+                                  }
+                                }}
+                                className="px-1.5 py-0.5 rounded hover:bg-zinc-700 disabled:opacity-30 text-[10px]"
+                                title="Move to Next Page"
+                              >
+                                Next Page ►
+                              </button>
+                            </>
+                          )}
+                          <div className="w-px h-3 bg-zinc-700" />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setImageOverlays((prev) =>
+                                prev.map((i) => (i.id === img.id ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i)).filter(Boolean) as ImageOverlay[]
+                              );
+                              setSelectedOverlayId(null);
+                              pushSnapshot({ imageOverlays });
+                            }}
+                            className="p-1 rounded hover:bg-rose-900/60 text-rose-400"
+                            title="Delete Image"
+                          >
+                            <Trash2 className="w-3 h-3" />
                           </button>
                         </div>
                       </>
@@ -13331,6 +13396,39 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     </div>
                   </div>
 
+                  {/* Page Placement (Move across pages) */}
+                  {totalPages > 1 && (
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                        Page Placement (Move Across Pages)
+                      </label>
+                      <select
+                        value={img.pageIndex + 1}
+                        onChange={(e) => {
+                          const targetPage = parseInt(e.target.value, 10);
+                          if (targetPage >= 1 && targetPage <= totalPages) {
+                            setImageOverlays((prev) =>
+                              prev.map((i) =>
+                                i.id === selectedOverlayId
+                                  ? { ...i, pageIndex: targetPage - 1, isModified: true }
+                                  : i
+                              )
+                            );
+                            setCurrentPage(targetPage);
+                            pushSnapshot({ imageOverlays });
+                          }
+                        }}
+                        className="w-full px-2 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 shadow-2xs"
+                      >
+                        {Array.from({ length: totalPages }, (_, idx) => (
+                          <option key={idx} value={idx + 1}>
+                            Page {idx + 1} {idx === (img.origPageIndex ?? img.pageIndex) ? '(Original)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {/* Crop Action Button */}
                   <button
                     type="button"
@@ -13745,7 +13843,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   <button
                     type="button"
                     onClick={() => {
-                      setImageOverlays((prev) => prev.filter((i) => i.id !== selectedOverlayId));
+                      setImageOverlays((prev) =>
+                        prev.map((i) => (i.id === selectedOverlayId ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i)).filter(Boolean) as ImageOverlay[]
+                      );
                       setSelectedOverlayId(null);
                       pushSnapshot({ imageOverlays });
                     }}
@@ -15458,6 +15558,48 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       <Layers className="w-3.5 h-3.5 text-emerald-500" />
                       <span>In Front of Text</span>
                     </button>
+                    {totalPages > 1 && (
+                      <>
+                        <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
+                        <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+                          Move Across Pages
+                        </div>
+                        {img.pageIndex > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetP = img.pageIndex;
+                              setImageOverlays((prev) =>
+                                prev.map((i) => (i.id === img.id ? { ...i, pageIndex: targetP - 1, isModified: true } : i))
+                              );
+                              setCurrentPage(targetP);
+                              pushSnapshot({ imageOverlays });
+                              closeMenu();
+                            }}
+                            className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                          >
+                            <span>Move to Page {img.pageIndex}</span>
+                          </button>
+                        )}
+                        {img.pageIndex < totalPages - 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetP = img.pageIndex + 2;
+                              setImageOverlays((prev) =>
+                                prev.map((i) => (i.id === img.id ? { ...i, pageIndex: targetP - 1, isModified: true } : i))
+                              );
+                              setCurrentPage(targetP);
+                              pushSnapshot({ imageOverlays });
+                              closeMenu();
+                            }}
+                            className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
+                          >
+                            <span>Move to Page {img.pageIndex + 2}</span>
+                          </button>
+                        )}
+                      </>
+                    )}
                     <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-1" />
                     <button
                       type="button"
@@ -15473,7 +15615,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     <button
                       type="button"
                       onClick={() => {
-                        setImageOverlays((prev) => prev.filter((i) => i.id !== img.id));
+                        setImageOverlays((prev) =>
+                          prev.map((i) => (i.id === img.id ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i)).filter(Boolean) as ImageOverlay[]
+                        );
                         setSelectedOverlayId(null);
                         pushSnapshot({ imageOverlays });
                         closeMenu();
