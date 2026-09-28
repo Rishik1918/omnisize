@@ -68,6 +68,9 @@ import {
   PenTool,
   Stamp,
   Layers,
+  Maximize,
+  Minimize,
+  Maximize2,
   Spline,
   FileUp,
   FilePlus2
@@ -391,6 +394,8 @@ export interface EditorTabItem {
 }
 
 interface EditorSnapshot {
+  buffer?: ArrayBuffer;
+  totalPages?: number;
   modifiedTexts: Record<string, ExistingTextItem>;
   textOverlays: TextOverlay[];
   imageOverlays: ImageOverlay[];
@@ -1387,6 +1392,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     startY: number;
     origX: number;
     origY: number;
+    grabOffsetCssX?: number;
+    grabOffsetCssY?: number;
+    itemW?: number;
+    itemH?: number;
     multiSnapshot?: {
       [id: string]: {
         type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink';
@@ -1395,6 +1404,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       };
     };
   } | null>(null);
+
+  // Check if document has unsaved edits (set true on any user modification, reset to false on save)
+  const [hasUnsavedEdits, setHasUnsavedEdits] = useState<boolean>(false);
 
   const [resizingItem, setResizingItem] = useState<{
     id: string;
@@ -1409,6 +1421,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     aspectRatio?: number;
     initialColWidths?: number[];
     initialRowHeights?: number[];
+    initialSize?: number;
   } | null>(null);
 
   // Interactive On-Canvas Rotation Pointer State (MS Word Style)
@@ -1614,6 +1627,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   // Sidebar & Layout
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
+  const [pageThumbnails, setPageThumbnails] = useState<Record<number, string>>({});
+  const [showPageOrganizerModal, setShowPageOrganizerModal] = useState<boolean>(false);
+  const [organizerZoom, setOrganizerZoom] = useState<number>(100);
+  const [isFullscreenMode, setIsFullscreenMode] = useState<boolean>(false);
   const [viewportDims, setViewportDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [basePageDims, setBasePageDims] = useState<{ width: number; height: number }>({ width: 595.28, height: 841.89 });
   const [detectedTextItems, setDetectedTextItems] = useState<ExistingTextItem[]>([]);
@@ -1629,6 +1646,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [pageRotations, setPageRotations] = useState<Record<number, number>>({});
   const [deletedPages, setDeletedPages] = useState<number[]>([]);
   const [insertedBlankPages, setInsertedBlankPages] = useState<InsertBlankPageSpec[]>([]);
+
+  // Persistent refs for 60/120fps smooth uninterrupted pointer dragging
+  const shapesRef = useRef<ShapeOverlay[]>(shapes);
+  shapesRef.current = shapes;
+  const tablesRef = useRef<TableOverlay[]>(tables);
+  tablesRef.current = tables;
+  const imageOverlaysRef = useRef<ImageOverlay[]>(imageOverlays);
+  imageOverlaysRef.current = imageOverlays;
+  const textOverlaysRef = useRef<TextOverlay[]>(textOverlays);
+  textOverlaysRef.current = textOverlays;
+  const modifiedTextsRef = useRef<Record<string, ExistingTextItem>>(modifiedTexts);
+  modifiedTextsRef.current = modifiedTexts;
 
   // Text formatting options (for Add Text mode) - All MS Word fonts supported
   const [textValue, setTextValue] = useState<string>('Sample Text');
@@ -1702,16 +1731,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Save session when switching apps (visibilitychange / pagehide) without draining battery
   useEffect(() => {
     const handleSaveSession = () => {
-      const isDirty =
-        Object.keys(modifiedTexts).length > 0 ||
-        textOverlays.length > 0 ||
-        imageOverlays.length > 0 ||
-        shapes.length > 0 ||
-        tables.length > 0 ||
-        hyperlinks.length > 0 ||
-        Object.keys(pageRotations).length > 0 ||
-        deletedPages.length > 0 ||
-        insertedBlankPages.length > 0;
+      const isDirty = hasUnsavedEdits;
 
       if (isDirty && file && arrayBuffer) {
         saveActivePdfSession({
@@ -1747,23 +1767,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('pagehide', handleSaveSession);
     };
-  }, [file, arrayBuffer, currentPage, pageRotations, deletedPages, insertedBlankPages, textOverlays, imageOverlays, shapes, tables, modifiedTexts, hyperlinks]);
+  }, [file, arrayBuffer, currentPage, pageRotations, deletedPages, insertedBlankPages, textOverlays, imageOverlays, shapes, tables, modifiedTexts, hyperlinks, hasUnsavedEdits]);
 
   // Active Debounced Auto-Save (2s) when autoSaveEnabled is true
   useEffect(() => {
-    if (!autoSaveEnabled || !file || !arrayBuffer) return;
-    const isDirty =
-      Object.keys(modifiedTexts).length > 0 ||
-      textOverlays.length > 0 ||
-      imageOverlays.length > 0 ||
-      shapes.length > 0 ||
-      tables.length > 0 ||
-      hyperlinks.length > 0 ||
-      Object.keys(pageRotations).length > 0 ||
-      deletedPages.length > 0 ||
-      insertedBlankPages.length > 0;
-
-    if (!isDirty) return;
+    if (!autoSaveEnabled || !file || !arrayBuffer || !hasUnsavedEdits) return;
 
     const timer = setTimeout(async () => {
       setHasUnsavedEdits(false);
@@ -1965,6 +1973,50 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
     }
 
+    let itemW = 50;
+    let itemH = 50;
+    if (type === 'shape') {
+      const s = shapes.find((x) => x.id === id);
+      itemW = s?.width || 50;
+      itemH = s?.height || 50;
+    } else if (type === 'table') {
+      const t = tables.find((x) => x.id === id);
+      itemW = t?.width || 100;
+      itemH = t?.height || 50;
+    } else if (type === 'image') {
+      const i = imageOverlays.find((x) => x.id === id);
+      itemW = i?.width || 100;
+      itemH = i?.height || 100;
+    } else if (type === 'text-item') {
+      const t = modifiedTexts[id] || detectedTextItems.find((x) => x.id === id);
+      itemW = t?.width || 60;
+      itemH = t?.height || 20;
+    } else if (type === 'overlay') {
+      const o = textOverlays.find((x) => x.id === id);
+      itemW = o?.width || 100;
+      itemH = (o?.size || 14) * 1.35;
+    } else if (type === 'hyperlink') {
+      const h = hyperlinks.find((x) => x.id === id);
+      itemW = h?.width || 80;
+      itemH = h?.height || 20;
+    }
+
+    const curPageCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
+    let grabOffsetCssX = 0;
+    let grabOffsetCssY = 0;
+    if (curPageCanvas) {
+      const pageRect = curPageCanvas.getBoundingClientRect();
+      const itemCssX = origX * zoomScale;
+      let itemCssY = 0;
+      if (type === 'overlay') {
+        itemCssY = curPageCanvas.clientHeight - origY * zoomScale - ((itemH || 20) * 0.82 * zoomScale);
+      } else {
+        itemCssY = curPageCanvas.clientHeight - origY * zoomScale - itemH * zoomScale;
+      }
+      grabOffsetCssX = clientX - (pageRect.left + itemCssX);
+      grabOffsetCssY = clientY - (pageRect.top + itemCssY);
+    }
+
     setDraggingItem({
       id,
       type,
@@ -1972,6 +2024,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       startY: clientY,
       origX,
       origY,
+      grabOffsetCssX,
+      grabOffsetCssY,
+      itemW,
+      itemH,
       multiSnapshot,
     });
   };
@@ -2191,9 +2247,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [ocrLanguage, setOcrLanguage] = useState<string>('eng+hin');
   const pageOcrCache = useRef<Record<number, ExistingTextItem[]>>({});
 
-  // Check if document has unsaved edits (set true on any user modification, reset to false on save)
-  const [hasUnsavedEdits, setHasUnsavedEdits] = useState<boolean>(false);
-
   // Toggle Auto-Save
   const toggleAutoSave = () => {
     const nextVal = !autoSaveEnabled;
@@ -2215,6 +2268,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
 
       const fullSnapshot: EditorSnapshot = {
+        buffer: newSnapshot.buffer ?? (arrayBuffer || undefined),
+        totalPages: newSnapshot.totalPages ?? totalPages,
         modifiedTexts: newSnapshot.modifiedTexts ?? modifiedTexts,
         textOverlays: newSnapshot.textOverlays ?? textOverlays,
         imageOverlays: newSnapshot.imageOverlays ?? imageOverlays,
@@ -2239,6 +2294,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     },
     [
       historyIndex,
+      arrayBuffer,
+      totalPages,
       modifiedTexts,
       textOverlays,
       imageOverlays,
@@ -2431,6 +2488,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (historyIndex > 0) {
       const targetIndex = historyIndex - 1;
       const targetState = history[targetIndex];
+      if (targetState.buffer && targetState.buffer !== arrayBuffer) {
+        setArrayBuffer(targetState.buffer);
+        getDocumentProxy(new Uint8Array(targetState.buffer.slice(0))).then((proxy) => {
+          pdfProxyRef.current = proxy;
+          setTotalPages(proxy.numPages);
+        }).catch(() => {});
+      } else if (targetState.totalPages && targetState.totalPages !== totalPages) {
+        setTotalPages(targetState.totalPages);
+      }
       setModifiedTexts(targetState.modifiedTexts);
       setTextOverlays(targetState.textOverlays);
       setImageOverlays(targetState.imageOverlays);
@@ -2446,13 +2512,22 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       if (targetState.watermarkConfig !== undefined) setWatermarkConfig(targetState.watermarkConfig);
       setHistoryIndex(targetIndex);
     }
-  }, [historyIndex, history]);
+  }, [historyIndex, history, arrayBuffer, totalPages]);
 
   // Redo action
   const handleRedo = useCallback(() => {
     if (historyIndex < history.length - 1) {
       const targetIndex = historyIndex + 1;
       const targetState = history[targetIndex];
+      if (targetState.buffer && targetState.buffer !== arrayBuffer) {
+        setArrayBuffer(targetState.buffer);
+        getDocumentProxy(new Uint8Array(targetState.buffer.slice(0))).then((proxy) => {
+          pdfProxyRef.current = proxy;
+          setTotalPages(proxy.numPages);
+        }).catch(() => {});
+      } else if (targetState.totalPages && targetState.totalPages !== totalPages) {
+        setTotalPages(targetState.totalPages);
+      }
       setModifiedTexts(targetState.modifiedTexts);
       setTextOverlays(targetState.textOverlays);
       setImageOverlays(targetState.imageOverlays);
@@ -2468,7 +2543,39 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       if (targetState.watermarkConfig !== undefined) setWatermarkConfig(targetState.watermarkConfig);
       setHistoryIndex(targetIndex);
     }
-  }, [historyIndex, history]);
+  }, [historyIndex, history, arrayBuffer, totalPages]);
+
+  // Pre-generate visual thumbnails for all pages for sidebar and organizer
+  useEffect(() => {
+    if (!arrayBuffer || totalPages <= 0) return;
+    let isCancelled = false;
+
+    const prefetchThumbnails = async () => {
+      try {
+        const proxy = pdfProxyRef.current || (await getDocumentProxy(new Uint8Array(arrayBuffer.slice(0))));
+        if (isCancelled) return;
+
+        for (let p = 1; p <= totalPages; p++) {
+          if (isCancelled) break;
+          try {
+            const rot = pageRotations[p - 1] || 0;
+            const { canvas } = await PdfStudioEngine.renderPageToCanvas(proxy, p, 0.28, rot);
+            if (isCancelled) break;
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+            setPageThumbnails((prev) => (prev[p] === dataUrl ? prev : { ...prev, [p]: dataUrl }));
+          } catch (_) {}
+        }
+      } catch (err) {
+        console.warn('Could not prefetch page thumbnails:', err);
+      }
+    };
+
+    prefetchThumbnails();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [arrayBuffer, totalPages, pageRotations]);
 
   // Load PDF buffer on file selection and detect digital signatures
   useEffect(() => {
@@ -2681,6 +2788,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               }
             }
           }
+          try {
+            const thumbW = 140;
+            const thumbH = Math.max(20, Math.round((targetCanvas.height / Math.max(1, targetCanvas.width)) * thumbW));
+            const thumbCanvas = document.createElement('canvas');
+            thumbCanvas.width = thumbW;
+            thumbCanvas.height = thumbH;
+            const tCtx = thumbCanvas.getContext('2d');
+            if (tCtx) {
+              tCtx.drawImage(targetCanvas, 0, 0, thumbW, thumbH);
+              const dataUrl = thumbCanvas.toDataURL('image/jpeg', 0.7);
+              setPageThumbnails((prev) => (prev[p] === dataUrl ? prev : { ...prev, [p]: dataUrl }));
+            }
+          } catch (_) {}
         }
         if (p === currentPage) {
           const baseW = cssWidth / zoomScale;
@@ -3104,6 +3224,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     setTabs(remaining);
 
     if (remaining.length === 0) {
+      clearActivePdfSession().catch(() => {});
       onClose();
       return;
     }
@@ -3137,6 +3258,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const handleRequestClose = async () => {
     if (autoSaveEnabled && hasUnsavedEdits) {
       await handleSave();
+      await clearActivePdfSession();
       onClose();
       return;
     }
@@ -3147,6 +3269,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       return;
     }
 
+    await clearActivePdfSession();
     onClose();
   };
 
@@ -3246,6 +3369,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       });
 
       setCurrentPage(insertIndex + 1);
+      pushSnapshot({
+        buffer: newBuffer,
+        totalPages: newTotal,
+      });
       setTabs((prev) =>
         prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
       );
@@ -3329,34 +3456,40 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setTotalPages(newTotal);
 
       // Remap & filter page items
-      setTextOverlays((prev) =>
-        prev.filter((t) => t.pageIndex !== targetIdx).map((t) => (t.pageIndex > targetIdx ? { ...t, pageIndex: t.pageIndex - 1 } : t))
-      );
-      setImageOverlays((prev) =>
-        prev.filter((i) => i.pageIndex !== targetIdx).map((i) => (i.pageIndex > targetIdx ? { ...i, pageIndex: i.pageIndex - 1 } : i))
-      );
-      setShapes((prev) =>
-        prev.filter((s) => s.pageIndex !== targetIdx).map((s) => (s.pageIndex > targetIdx ? { ...s, pageIndex: s.pageIndex - 1 } : s))
-      );
-      setTables((prev) =>
-        prev.filter((t) => t.pageIndex !== targetIdx).map((t) => (t.pageIndex > targetIdx ? { ...t, pageIndex: t.pageIndex - 1 } : t))
-      );
-      setHyperlinks((prev) =>
-        prev.filter((h) => h.pageIndex !== targetIdx).map((h) => (h.pageIndex > targetIdx ? { ...h, pageIndex: h.pageIndex - 1 } : h))
-      );
+      const nextTexts = textOverlays.filter((t) => t.pageIndex !== targetIdx).map((t) => (t.pageIndex > targetIdx ? { ...t, pageIndex: t.pageIndex - 1 } : t));
+      const nextImages = imageOverlays.filter((i) => i.pageIndex !== targetIdx).map((i) => (i.pageIndex > targetIdx ? { ...i, pageIndex: i.pageIndex - 1 } : i));
+      const nextShapes = shapes.filter((s) => s.pageIndex !== targetIdx).map((s) => (s.pageIndex > targetIdx ? { ...s, pageIndex: s.pageIndex - 1 } : s));
+      const nextTables = tables.filter((t) => t.pageIndex !== targetIdx).map((t) => (t.pageIndex > targetIdx ? { ...t, pageIndex: t.pageIndex - 1 } : t));
+      const nextHyperlinks = hyperlinks.filter((h) => h.pageIndex !== targetIdx).map((h) => (h.pageIndex > targetIdx ? { ...h, pageIndex: h.pageIndex - 1 } : h));
+      const nextRotations: Record<number, number> = {};
+      Object.entries(pageRotations).forEach(([k, v]) => {
+        const idx = parseInt(k, 10);
+        if (idx < targetIdx) nextRotations[idx] = v;
+        else if (idx > targetIdx) nextRotations[idx - 1] = v;
+      });
+
+      setTextOverlays(nextTexts);
+      setImageOverlays(nextImages);
+      setShapes(nextShapes);
+      setTables(nextTables);
+      setHyperlinks(nextHyperlinks);
+      setPageRotations(nextRotations);
       setSignatures((prev) =>
         prev
           .filter((s) => s.rect?.pageIndex !== targetIdx)
           .map((s) => (s.rect && s.rect.pageIndex > targetIdx ? { ...s, rect: { ...s.rect, pageIndex: s.rect.pageIndex - 1 } } : s))
       );
-      setPageRotations((prev) => {
-        const next: Record<number, number> = {};
-        Object.entries(prev).forEach(([k, v]) => {
-          const idx = parseInt(k, 10);
-          if (idx < targetIdx) next[idx] = v;
-          else if (idx > targetIdx) next[idx - 1] = v;
-        });
-        return next;
+
+      // Record snapshot with newBuffer so Ctrl+Z can restore previous state with arrayBuffer!
+      pushSnapshot({
+        buffer: newBuffer,
+        totalPages: newTotal,
+        textOverlays: nextTexts,
+        imageOverlays: nextImages,
+        shapes: nextShapes,
+        tables: nextTables,
+        hyperlinks: nextHyperlinks,
+        pageRotations: nextRotations,
       });
 
       // Clear selected items
@@ -3436,6 +3569,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       });
 
       setCurrentPage(toPage);
+      pushSnapshot({
+        buffer: newBuffer,
+        totalPages: totalPages,
+      });
       setTabs((prev) =>
         prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
       );
@@ -4623,47 +4760,58 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           <Move className="w-3.5 h-3.5" />
         </div>
 
-        {handles.map((h) => (
-          <span
-            key={h.pos}
-            onMouseDown={(e) => {
-              e.stopPropagation();
-              setResizingItem({
-                id,
-                type,
-                handle: h.pos,
-                startX: e.clientX,
-                startY: e.clientY,
-                origX,
-                origY,
-                origW,
-                origH,
-                initialColWidths,
-                initialRowHeights,
-              });
-            }}
-            onTouchStart={(e) => {
-              e.stopPropagation();
-              if (e.touches.length > 0) {
+        {(() => {
+          let initialSize: number | undefined;
+          if (type === 'overlay') {
+            initialSize = textOverlays.find((t) => t.id === id)?.size || 12;
+          } else if (type === 'text-item') {
+            const item = modifiedTexts[id] || detectedTextItems.find((t) => t.id === id);
+            initialSize = item?.fontSize || 12;
+          }
+          return handles.map((h) => (
+            <span
+              key={h.pos}
+              onMouseDown={(e) => {
+                e.stopPropagation();
                 setResizingItem({
                   id,
                   type,
                   handle: h.pos,
-                  startX: e.touches[0].clientX,
-                  startY: e.touches[0].clientY,
+                  startX: e.clientX,
+                  startY: e.clientY,
                   origX,
                   origY,
                   origW,
                   origH,
                   initialColWidths,
                   initialRowHeights,
+                  initialSize,
                 });
-              }
-            }}
-            style={h.style as any}
-            className="absolute w-3 h-3 sm:w-2.5 sm:h-2.5 bg-white border-2 sm:border border-blue-600 rounded-xs shadow-xs z-50 pointer-events-auto touch-none before:content-[''] before:absolute before:-inset-2 sm:before:inset-0"
-          />
-        ))}
+              }}
+              onTouchStart={(e) => {
+                e.stopPropagation();
+                if (e.touches.length > 0) {
+                  setResizingItem({
+                    id,
+                    type,
+                    handle: h.pos,
+                    startX: e.touches[0].clientX,
+                    startY: e.touches[0].clientY,
+                    origX,
+                    origY,
+                    origW,
+                    origH,
+                    initialColWidths,
+                    initialRowHeights,
+                    initialSize,
+                  });
+                }
+              }}
+              style={h.style as any}
+              className="absolute w-3 h-3 sm:w-2.5 sm:h-2.5 bg-white border-2 sm:border border-blue-600 rounded-xs shadow-xs z-50 pointer-events-auto touch-none before:content-[''] before:absolute before:-inset-2 sm:before:inset-0"
+            />
+          ));
+        })()}
       </>
     );
   };
@@ -4737,15 +4885,55 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
 
       if (draggingItem) {
-        const deltaX = (clientX - draggingItem.startX) / scale;
-        const deltaY = -(clientY - draggingItem.startY) / scale;
+        // Fast page target detection without synchronous elementsFromPoint reflow
+        let targetPage = currentPage;
+        let targetPageRect: DOMRect | null = null;
+        for (const [pNum, canvas] of pageCanvasesRef.current.entries()) {
+          const rect = canvas.getBoundingClientRect();
+          if (
+            clientY >= rect.top - 20 &&
+            clientY <= rect.bottom + 20 &&
+            clientX >= rect.left - 60 &&
+            clientX <= rect.right + 60
+          ) {
+            targetPage = pNum;
+            targetPageRect = rect;
+            break;
+          }
+        }
+        if (!targetPageRect) {
+          const curCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
+          if (curCanvas) targetPageRect = curCanvas.getBoundingClientRect();
+        }
 
-        // Check if cursor moved over a page
-        const pageEl = document.elementsFromPoint(clientX, clientY).find((el) => el.hasAttribute('data-page-number'));
-        const targetPage = pageEl ? parseInt(pageEl.getAttribute('data-page-number')!, 10) : currentPage;
         const targetPageIndex = targetPage - 1;
+        const pageH = targetPageRect ? targetPageRect.height : viewportDims.height;
+
+        let newX: number;
+        let newY: number;
+
+        if (draggingItem.grabOffsetCssX !== undefined && targetPageRect) {
+          // Direct 1:1 mouse speed tracking! Element moves pixel-for-pixel at the exact speed of the mouse
+          const nextCssX = clientX - draggingItem.grabOffsetCssX - targetPageRect.left;
+          const nextCssY = clientY - (draggingItem.grabOffsetCssY ?? 0) - targetPageRect.top;
+          newX = Math.round((nextCssX / scale) * 10) / 10;
+          if (draggingItem.type === 'overlay') {
+            const h = (draggingItem.itemH || 20) * 0.82;
+            newY = Math.round(((pageH - nextCssY - h * scale) / scale) * 10) / 10;
+          } else {
+            const h = draggingItem.itemH || 50;
+            newY = Math.round(((pageH - nextCssY - h * scale) / scale) * 10) / 10;
+          }
+        } else {
+          const deltaX = (clientX - draggingItem.startX) / scale;
+          const deltaY = -(clientY - draggingItem.startY) / scale;
+          newX = Math.round((draggingItem.origX + deltaX) * 10) / 10;
+          newY = Math.round((draggingItem.origY + deltaY) * 10) / 10;
+        }
 
         if (draggingItem.multiSnapshot) {
+          const deltaX = (clientX - draggingItem.startX) / scale;
+          const deltaY = -(clientY - draggingItem.startY) / scale;
           // Translate all multi-selected items in lockstep!
           for (const [sId, sData] of Object.entries(draggingItem.multiSnapshot)) {
             const nextX = Math.round((sData.origX + deltaX) * 10) / 10;
@@ -4772,10 +4960,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             }
           }
         } else {
-          // Single item translation based on natural mouse delta from click point
-          const newX = Math.round((draggingItem.origX + deltaX) * 10) / 10;
-          const newY = Math.round((draggingItem.origY + deltaY) * 10) / 10;
-
+          // Single item translation based on exact coordinates
           if (draggingItem.type === 'shape') {
             setShapes((prev) => prev.map((s) => (s.id === draggingItem.id ? { ...s, pageIndex: targetPageIndex, x: newX, y: newY } : s)));
           } else if (draggingItem.type === 'table') {
@@ -4876,11 +5061,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             )
           );
         } else if (resizingItem.type === 'overlay') {
+          const isCorner = ['nw', 'ne', 'se', 'sw'].includes(resizingItem.handle);
           setTextOverlays((prev) =>
             prev.map((t) => {
               if (t.id !== resizingItem.id) return t;
-              const scaleRatio = resizingItem.origH > 0 ? (nextH / resizingItem.origH) : 1;
-              const newSize = Math.max(8, Math.min(144, Math.round(t.size * scaleRatio)));
+              let newSize = t.size;
+              if (isCorner && resizingItem.origH > 0 && resizingItem.initialSize) {
+                const scaleRatio = nextH / resizingItem.origH;
+                newSize = Math.max(8, Math.min(144, Math.round(resizingItem.initialSize * scaleRatio)));
+              }
               return {
                 ...t,
                 x: nextX,
@@ -4898,9 +5087,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             )
           );
         } else if (resizingItem.type === 'text-item') {
+          const isCorner = ['nw', 'ne', 'se', 'sw'].includes(resizingItem.handle);
           setModifiedTexts((prev) => {
             const item = prev[resizingItem.id] || detectedTextItems.find((t) => t.id === resizingItem.id);
             if (!item) return prev;
+            let newFontSize = item.fontSize;
+            if (isCorner && resizingItem.origH > 0 && resizingItem.initialSize) {
+              const scaleRatio = nextH / resizingItem.origH;
+              newFontSize = Math.max(6, Math.min(144, Math.round(resizingItem.initialSize * scaleRatio)));
+            }
             return {
               ...prev,
               [resizingItem.id]: {
@@ -4909,6 +5104,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 y: nextY,
                 width: nextW,
                 height: nextH,
+                fontSize: newFontSize,
                 isModified: true,
               },
             };
@@ -4929,19 +5125,37 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     const onPointerUp = () => {
       if (draggingItem) {
-        pushSnapshot({ shapes, tables, imageOverlays, textOverlays, modifiedTexts });
+        pushSnapshot({
+          shapes: shapesRef.current,
+          tables: tablesRef.current,
+          imageOverlays: imageOverlaysRef.current,
+          textOverlays: textOverlaysRef.current,
+          modifiedTexts: modifiedTextsRef.current,
+        });
         setDraggingItem(null);
       }
       if (resizingItem) {
-        pushSnapshot({ shapes, tables, imageOverlays, textOverlays, modifiedTexts });
+        pushSnapshot({
+          shapes: shapesRef.current,
+          tables: tablesRef.current,
+          imageOverlays: imageOverlaysRef.current,
+          textOverlays: textOverlaysRef.current,
+          modifiedTexts: modifiedTextsRef.current,
+        });
         setResizingItem(null);
       }
       if (rotatingItem) {
-        pushSnapshot({ shapes, tables, imageOverlays, textOverlays, modifiedTexts });
+        pushSnapshot({
+          shapes: shapesRef.current,
+          tables: tablesRef.current,
+          imageOverlays: imageOverlaysRef.current,
+          textOverlays: textOverlaysRef.current,
+          modifiedTexts: modifiedTextsRef.current,
+        });
         setRotatingItem(null);
       }
       if (resizingCol || resizingRow) {
-        pushSnapshot({ tables });
+        pushSnapshot({ tables: tablesRef.current });
         setResizingCol(null);
         setResizingRow(null);
       }
@@ -4965,10 +5179,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     resizingCol,
     resizingRow,
     zoomScale,
-    shapes,
-    tables,
-    imageOverlays,
-    textOverlays,
     pushSnapshot,
   ]);
 
@@ -5840,26 +6050,42 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           // 0.2 If multiple items are selected via Ctrl+click, delete all of them
           if (multiSelectedIds.length > 0) {
             const idsToDelete = new Set(multiSelectedIds);
-            setTextOverlays((prev) => prev.filter((t) => !idsToDelete.has(t.id)));
-            setImageOverlays((prev) =>
-              prev.map((i) =>
+            const nextTexts = textOverlays.filter((t) => !idsToDelete.has(t.id));
+            const nextImages = imageOverlays
+              .map((i) =>
                 idsToDelete.has(i.id) ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i
-              ).filter(Boolean) as ImageOverlay[]
-            );
-            setShapes((prev) => prev.filter((s) => !idsToDelete.has(s.id)));
-            setTables((prev) => prev.filter((t) => !idsToDelete.has(t.id)));
-            setHyperlinks((prev) => prev.filter((h) => !idsToDelete.has(h.id)));
-            setModifiedTexts((prev) => {
-              const next = { ...prev };
-              for (const id of idsToDelete) {
-                const item = prev[id] || detectedTextItems.find((t) => t.id === id);
-                if (item) {
-                  next[id] = { ...item, currentText: '', isDeleted: true, isModified: true };
-                }
+              )
+              .filter(Boolean) as ImageOverlay[];
+            const nextShapes = shapes.filter((s) => !idsToDelete.has(s.id));
+            const nextTables = tables.filter((t) => !idsToDelete.has(t.id));
+            const nextHyperlinks = hyperlinks.filter((h) => !idsToDelete.has(h.id));
+            const nextModified = { ...modifiedTexts };
+            for (const id of idsToDelete) {
+              const item = modifiedTexts[id] || detectedTextItems.find((t) => t.id === id);
+              if (item) {
+                nextModified[id] = { ...item, currentText: '', isDeleted: true, isModified: true };
               }
-              return next;
+            }
+
+            setTextOverlays(nextTexts);
+            setImageOverlays(nextImages);
+            setShapes(nextShapes);
+            setTables(nextTables);
+            setHyperlinks(nextHyperlinks);
+            setModifiedTexts(nextModified);
+
+            pushSnapshot({
+              textOverlays: nextTexts,
+              imageOverlays: nextImages,
+              shapes: nextShapes,
+              tables: nextTables,
+              hyperlinks: nextHyperlinks,
+              modifiedTexts: nextModified,
             });
-            pushSnapshot({ textOverlays, imageOverlays, shapes, tables, hyperlinks, modifiedTexts });
+            setTabs((prev) =>
+              prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+            );
+            setHasUnsavedEdits(true);
             setMultiSelectedIds([]);
             setSelectedOverlayId(null);
             setSelectedShapeId(null);
@@ -6058,6 +6284,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       const isEditable = tag === 'input' || tag === 'textarea' || (activeEl as HTMLElement)?.isContentEditable;
 
       if (!isEditable) {
+        // Layer order shortcuts: Ctrl+] (Front), Ctrl+[ (Back), Ctrl+Shift+] (Forward), Ctrl+Shift+[ (Backward)
+        if ((e.ctrlKey || e.metaKey) && (e.key === ']' || e.key === '[')) {
+          e.preventDefault();
+          if (e.key === ']') {
+            handleLayerOrder(e.shiftKey ? 'forward' : 'front');
+          } else {
+            handleLayerOrder(e.shiftKey ? 'backward' : 'back');
+          }
+          return;
+        }
+
         // Drawing tools shortcuts
         if ((e.key === 'p' || e.key === 'P') && !e.ctrlKey && !e.altKey && !e.metaKey) {
           e.preventDefault();
@@ -6264,6 +6501,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
       // Escape: clear selection / cancel edit / close popups
       if (e.key === 'Escape') {
+        if (isFullscreenMode) {
+          setIsFullscreenMode(false);
+          return;
+        }
+        if (showPageOrganizerModal) {
+          setShowPageOrganizerModal(false);
+          return;
+        }
         setActiveEditingId(null);
         setSelectedTextItemId(null);
         setSelectedOverlayId(null);
@@ -6488,58 +6733,75 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     pushSnapshot({ tables });
   };
 
-  const handleLayerOrder = (action: 'front' | 'back' | 'forward' | 'backward' | 'behindText' | 'inFrontOfText') => {
-    if (selectedShapeId) {
-      setShapes((prev) =>
-        prev.map((s) => {
-          if (s.id !== selectedShapeId) return s;
+  const handleLayerOrder = (
+    action: 'front' | 'back' | 'forward' | 'backward' | 'behindText' | 'inFrontOfText',
+    targetId?: string,
+    targetType?: 'image' | 'shape' | 'table' | 'overlay'
+  ) => {
+    const effectiveType = targetType || (selectedShapeId ? 'shape' : selectedTableId ? 'table' : selectedOverlayId ? 'image' : undefined);
+    const effectiveId = targetId || selectedShapeId || selectedTableId || selectedOverlayId;
+    if (!effectiveId) return;
+
+    if (effectiveType === 'shape' || (!effectiveType && shapes.some((s) => s.id === effectiveId))) {
+      setShapes((prev) => {
+        const next = prev.map((s) => {
+          if (s.id !== effectiveId) return s;
           const curZ = s.zIndex ?? 20;
           let nextZ = curZ;
           let behind = s.behindText ?? false;
-          if (action === 'front') nextZ = 50;
-          else if (action === 'back') { nextZ = 1; behind = true; }
-          else if (action === 'forward') nextZ = curZ + 1;
-          else if (action === 'backward') nextZ = Math.max(1, curZ - 1);
+          if (action === 'front') { nextZ = 50; behind = false; }
+          else if (action === 'back') { nextZ = 3; behind = true; }
+          else if (action === 'forward') { nextZ = curZ + 2; if (nextZ >= 15) behind = false; }
+          else if (action === 'backward') { nextZ = Math.max(3, curZ - 2); if (nextZ < 15) behind = true; }
           else if (action === 'behindText') { behind = true; nextZ = 5; }
-          else if (action === 'inFrontOfText') { behind = false; nextZ = 30; }
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 35; }
           return { ...s, zIndex: nextZ, behindText: behind };
-        })
-      );
-      pushSnapshot({ shapes });
-    } else if (selectedTableId) {
-      setTables((prev) =>
-        prev.map((t) => {
-          if (t.id !== selectedTableId) return t;
-          const curZ = t.zIndex ?? 20;
+        });
+        pushSnapshot({ shapes: next });
+        return next;
+      });
+      setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t)));
+      setHasUnsavedEdits(true);
+    } else if (effectiveType === 'table' || (!effectiveType && tables.some((t) => t.id === effectiveId))) {
+      setTables((prev) => {
+        const next = prev.map((t) => {
+          if (t.id !== effectiveId) return t;
+          const curZ = t.zIndex ?? 25;
           let nextZ = curZ;
           let behind = t.behindText ?? false;
-          if (action === 'front') nextZ = 50;
-          else if (action === 'back') { nextZ = 1; behind = true; }
-          else if (action === 'forward') nextZ = curZ + 1;
-          else if (action === 'backward') nextZ = Math.max(1, curZ - 1);
+          if (action === 'front') { nextZ = 50; behind = false; }
+          else if (action === 'back') { nextZ = 3; behind = true; }
+          else if (action === 'forward') { nextZ = curZ + 2; if (nextZ >= 15) behind = false; }
+          else if (action === 'backward') { nextZ = Math.max(3, curZ - 2); if (nextZ < 15) behind = true; }
           else if (action === 'behindText') { behind = true; nextZ = 5; }
-          else if (action === 'inFrontOfText') { behind = false; nextZ = 30; }
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 35; }
           return { ...t, zIndex: nextZ, behindText: behind };
-        })
-      );
-      pushSnapshot({ tables });
-    } else if (selectedOverlayId) {
-      setImageOverlays((prev) =>
-        prev.map((img) => {
-          if (img.id !== selectedOverlayId) return img;
-          const curZ = img.zIndex ?? 20;
+        });
+        pushSnapshot({ tables: next });
+        return next;
+      });
+      setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t)));
+      setHasUnsavedEdits(true);
+    } else if (effectiveType === 'image' || effectiveType === 'overlay' || (!effectiveType && imageOverlays.some((i) => i.id === effectiveId))) {
+      setImageOverlays((prev) => {
+        const next = prev.map((img) => {
+          if (img.id !== effectiveId) return img;
+          const curZ = img.zIndex ?? (img.behindText ? 5 : 25);
           let nextZ = curZ;
           let behind = img.behindText ?? false;
-          if (action === 'front') nextZ = 50;
-          else if (action === 'back') { nextZ = 1; behind = true; }
-          else if (action === 'forward') nextZ = curZ + 1;
-          else if (action === 'backward') nextZ = Math.max(1, curZ - 1);
+          if (action === 'front') { nextZ = 50; behind = false; }
+          else if (action === 'back') { nextZ = 3; behind = true; }
+          else if (action === 'forward') { nextZ = curZ + 2; if (nextZ >= 15) behind = false; }
+          else if (action === 'backward') { nextZ = Math.max(3, curZ - 2); if (nextZ < 15) behind = true; }
           else if (action === 'behindText') { behind = true; nextZ = 5; }
-          else if (action === 'inFrontOfText') { behind = false; nextZ = 30; }
-          return { ...img, zIndex: nextZ, behindText: behind };
-        })
-      );
-      pushSnapshot({ imageOverlays });
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 35; }
+          return { ...img, zIndex: nextZ, behindText: behind, isModified: true };
+        });
+        pushSnapshot({ imageOverlays: next });
+        return next;
+      });
+      setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t)));
+      setHasUnsavedEdits(true);
     }
   };
 
@@ -6557,8 +6819,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         zIndex: 999999,
       }}
     >
-      {/* TIER 0: Multi-Document Tab Bar (Always Visible Acrobat / Chrome Style) */}
-      <div className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 bg-zinc-950 border-b border-zinc-800 overflow-x-auto no-scrollbar flex-shrink-0 z-30 select-none">
+      {!isFullscreenMode && (
+        <>
+          {/* TIER 0: Multi-Document Tab Bar (Always Visible Acrobat / Chrome Style) */}
+          <div className="flex items-center gap-1.5 px-3 sm:px-4 py-1.5 bg-zinc-950 border-b border-zinc-800 overflow-x-auto no-scrollbar flex-shrink-0 z-30 select-none">
         {tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const tabHasEdits = isActive ? hasUnsavedEdits : tab.hasUnsavedEdits;
@@ -9586,14 +9850,26 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </div>
         </div>
       )}
+        </>
+      )}
 
       {/* Main Workspace Body: Sidebar + Scrollable Viewport */}
       <div className="flex-1 flex flex-col sm:flex-row min-h-0 overflow-hidden relative">
         {/* Left Thumbnail Sidebar */}
-        {showSidebar && totalPages > 0 && (
+        {showSidebar && !isFullscreenMode && totalPages > 0 && (
           <aside className="w-44 sm:w-52 bg-white dark:bg-zinc-900 border-r border-zinc-200 dark:border-zinc-800 flex flex-col z-20 flex-shrink-0 animate-fade-in shadow-xs">
             <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              <span>Pages ({totalPages})</span>
+              <div className="flex items-center gap-1.5">
+                <span>Pages ({totalPages})</span>
+                <button
+                  type="button"
+                  onClick={() => setShowPageOrganizerModal(true)}
+                  className="p-1 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                  title="Open Full Screen Page Organizer (Grid & Zoom)"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <button
                 onClick={() => handleInsertBlankPage('end')}
                 className="flex items-center gap-1 text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline"
@@ -9663,8 +9939,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     }`}
                   >
                     <div className="w-20 h-28 bg-white rounded shadow-xs border border-zinc-300/80 flex items-center justify-center text-zinc-400 font-mono text-[11px] overflow-hidden relative pointer-events-none">
-                      <div className="absolute top-1 left-1 text-[9px] font-bold text-zinc-400">{pageNum}</div>
-                      <FileText className="w-7 h-7 text-zinc-300" />
+                      <div className="absolute top-1 left-1 text-[9px] font-bold text-zinc-600 bg-white/90 backdrop-blur-xs px-1 rounded shadow-2xs z-10">{pageNum}</div>
+                      {pageThumbnails[pageNum] ? (
+                        <img
+                          src={pageThumbnails[pageNum]}
+                          alt={`Page ${pageNum}`}
+                          className="w-full h-full object-contain pointer-events-none"
+                        />
+                      ) : (
+                        <FileText className="w-7 h-7 text-zinc-300" />
+                      )}
                     </div>
                     <span className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
                       Page {pageNum}
@@ -10228,7 +10512,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                               width: `${boxW}px`,
                               height: `${boxH}px`,
                               backgroundColor: effectiveBgHex,
-                              zIndex: 15,
+                              zIndex: 2,
                               pointerEvents: 'none',
                             }}
                           />
@@ -10310,7 +10594,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${boxY}px`,
                       width: `${boxW}px`,
                       height: `${boxH}px`,
-                      backgroundColor: isEditing || isItemModified ? effectiveBgHex : 'transparent',
+                      backgroundColor: currentItem.bgColorHex || 'transparent',
                     }}
                     className={`absolute transition-all cursor-text rounded-none ${
                       isEditing
@@ -10396,7 +10680,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           color: textColor,
                           textAlign: itemAlign,
                           caretColor: '#2563eb',
-                          backgroundColor: effectiveBgHex,
+                          backgroundColor: currentItem.bgColorHex || 'transparent',
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: `${boxH}px`,
                           height: '100%',
@@ -10420,7 +10704,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           fontSize: `${itemFontSize * scale}px`,
                           color: textColor,
                           textAlign: itemAlign,
-                          backgroundColor: effectiveBgHex,
+                          backgroundColor: currentItem.bgColorHex || 'transparent',
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: `${boxH}px`,
                           height: '100%',
@@ -10634,6 +10918,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     style={{
                       left: `${cssX}px`,
                       top: `${cssY}px`,
+                      width: t.width ? `${t.width * scale}px` : undefined,
+                      height: t.height ? `${t.height * scale}px` : undefined,
                       fontSize: `${t.size * scale}px`,
                       fontFamily: t.fontFamily || 'Calibri, sans-serif',
                       fontWeight: t.isBold ? 700 : 400,
@@ -10642,6 +10928,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       color: t.color,
                       textAlign: t.alignment || 'left',
                       transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
+                      wordBreak: 'break-word',
+                      overflowWrap: 'break-word',
                     }}
                     className={`absolute cursor-move px-1 py-0.5 transition-all bg-transparent ${
                       isSelected ? 'ring-2 ring-indigo-500 rounded bg-indigo-50/20' : ''
@@ -10988,7 +11276,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     }}
                     className={`absolute cursor-move select-none transition-all group ${
                       isSelected
-                        ? 'ring-2 ring-emerald-500 shadow-xl z-30'
+                        ? 'ring-2 ring-emerald-500 shadow-xl'
                         : activeTool === 'edit-text'
                         ? 'ring-1 ring-dashed ring-emerald-400/80 hover:ring-2 hover:ring-emerald-500 hover:bg-emerald-500/10 cursor-move'
                         : ''
@@ -11277,7 +11565,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       transform: tbl.rotation ? `rotate(${tbl.rotation}deg)` : undefined,
                     }}
                     className={`absolute select-none cursor-move ${
-                      isSelected ? 'ring-2 ring-indigo-500 z-30' : ''
+                      isSelected ? 'ring-2 ring-indigo-500' : ''
                     }`}
                   >
                     {/* Floating Quick Action Bar when multiple cells or range selected */}
@@ -11372,7 +11660,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     )}
 
                     {/* Table Grid - fills the entire box 100% */}
-                    <table className="w-full h-full border-collapse table-fixed bg-white/95">
+                    <table
+                      className="w-full h-full border-collapse table-fixed"
+                      style={{ backgroundColor: tbl.cellBgColor || 'transparent' }}
+                    >
                       <colgroup>
                         {colWidths.map((w: number, ci: number) => (
                           <col key={ci} style={{ width: `${w * scale}px` }} />
@@ -12557,7 +12848,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         </main>
 
       {/* Persistent Floating Side Tab to Expand / Reopen Properties Anytime without scrolling */}
-      {(!showPropertiesPanel || isPropertiesCollapsed) && (
+      {!isFullscreenMode && (!showPropertiesPanel || isPropertiesCollapsed) && (
         <button
           type="button"
           onClick={() => {
@@ -12576,7 +12867,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       )}
 
       {/* Mobile Backdrop for Properties Sheet / Drawer */}
-      {showPropertiesPanel && (
+      {!isFullscreenMode && showPropertiesPanel && (
         <div
           className="fixed inset-0 bg-black/40 backdrop-blur-2xs z-40 md:hidden animate-fade-in"
           onClick={() => setShowPropertiesPanel(false)}
@@ -12584,7 +12875,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       )}
 
       {/* Wondershare PDFelement Right Properties Sidebar / Mobile Bottom Sheet / Landscape Drawer */}
-      {showPropertiesPanel && (
+      {!isFullscreenMode && showPropertiesPanel && (
         <aside className={`fixed inset-x-0 bottom-0 z-50 h-[40vh] max-h-[45vh] rounded-t-2xl border-t-2 border-indigo-600 shadow-2xl landscape:inset-y-0 landscape:right-0 landscape:left-auto landscape:bottom-auto landscape:w-80 landscape:max-w-[85vw] landscape:h-full landscape:max-h-none landscape:rounded-none landscape:border-l-2 landscape:border-t-0 landscape:border-indigo-600 md:static md:inset-auto ${
           isPropertiesCollapsed ? 'md:w-0 md:overflow-visible' : 'md:w-80'
         } md:h-full md:max-h-none md:rounded-none md:shadow-md md:border-l md:border-t-0 md:border-slate-300 md:dark:border-zinc-800 md:z-30 bg-white dark:bg-zinc-900 flex flex-col flex-shrink-0 animate-fade-in select-none touch-pan-y relative`}>
@@ -12678,41 +12969,60 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               <div className="text-[11px] font-bold text-slate-700 dark:text-zinc-300 uppercase tracking-wider">
                 Selection
               </div>
-              <div className="text-xs font-bold text-indigo-950 dark:text-indigo-100 px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between shadow-2xs">
-                <span className="truncate">
-                  {selectedBorderPage !== null
-                    ? `Page ${selectedBorderPage + 1} Border`
-                    : selectedShapeId
-                    ? `Shape: ${shapes.find((s) => s.id === selectedShapeId)?.type || 'Custom'}`
-                    : selectedTableId
-                    ? `Table (${tables.find((t) => t.id === selectedTableId)?.rows} Rows × ${tables.find((t) => t.id === selectedTableId)?.cols} Cols)`
-                    : activeEditingId || selectedTextItemId
-                    ? 'Document Text'
-                    : selectedOverlayId
-                    ? textOverlays.some((t) => t.id === selectedOverlayId)
-                      ? 'Text Overlay'
-                      : imageOverlays.some((i) => i.id === selectedOverlayId)
-                      ? 'Image Overlay'
-                      : 'Overlay'
-                    : `Page ${currentPage} of ${totalPages || 1}`}
-                </span>
-                {(selectedShapeId || selectedTableId || selectedOverlayId || activeEditingId || selectedTextItemId || selectedBorderPage !== null) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedShapeId(null);
-                      setSelectedTableId(null);
-                      setSelectedOverlayId(null);
-                      setActiveEditingId(null);
-                      setSelectedTextItemId(null);
-                      setSelectedBorderPage(null);
-                    }}
-                    className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 underline ml-2 shrink-0 cursor-pointer"
-                  >
-                    Deselect
-                  </button>
-                )}
-              </div>
+              {(() => {
+                const hasActiveShape = Boolean(selectedShapeId && shapes.some((s) => s.id === selectedShapeId));
+                const hasActiveTable = Boolean(selectedTableId && tables.some((t) => t.id === selectedTableId));
+                const hasActiveOverlay = Boolean(
+                  selectedOverlayId &&
+                  (textOverlays.some((t) => t.id === selectedOverlayId) ||
+                   imageOverlays.some((i) => i.id === selectedOverlayId) ||
+                   hyperlinks.some((h) => h.id === selectedOverlayId))
+                );
+                const hasActiveTextItem = Boolean(
+                  (activeEditingId && (modifiedTexts[activeEditingId] || detectedTextItems.some((t) => t.id === activeEditingId))) ||
+                  (selectedTextItemId && (modifiedTexts[selectedTextItemId] || detectedTextItems.some((t) => t.id === selectedTextItemId)))
+                );
+                const hasActiveBorder = selectedBorderPage !== null;
+                const hasAnyValidSelection = hasActiveShape || hasActiveTable || hasActiveOverlay || hasActiveTextItem || hasActiveBorder;
+
+                return (
+                  <div className="text-xs font-bold text-indigo-950 dark:text-indigo-100 px-3 py-2 bg-indigo-50/80 dark:bg-indigo-950/40 rounded-xl border border-indigo-200 dark:border-indigo-800/60 flex items-center justify-between shadow-2xs">
+                    <span className="truncate">
+                      {hasActiveBorder
+                        ? `Page ${selectedBorderPage! + 1} Border`
+                        : hasActiveShape
+                        ? `Shape: ${shapes.find((s) => s.id === selectedShapeId)?.type || 'Custom'}`
+                        : hasActiveTable
+                        ? `Table (${tables.find((t) => t.id === selectedTableId)?.rows} Rows × ${tables.find((t) => t.id === selectedTableId)?.cols} Cols)`
+                        : hasActiveTextItem
+                        ? 'Document Text'
+                        : hasActiveOverlay
+                        ? textOverlays.some((t) => t.id === selectedOverlayId)
+                          ? 'Text Overlay'
+                          : imageOverlays.some((i) => i.id === selectedOverlayId)
+                          ? 'Image Overlay'
+                          : 'Overlay'
+                        : `Page ${currentPage} of ${totalPages || 1}`}
+                    </span>
+                    {hasAnyValidSelection && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedShapeId(null);
+                          setSelectedTableId(null);
+                          setSelectedOverlayId(null);
+                          setActiveEditingId(null);
+                          setSelectedTextItemId(null);
+                          setSelectedBorderPage(null);
+                        }}
+                        className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 underline ml-2 shrink-0 cursor-pointer"
+                      >
+                        Deselect
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* CASE 1: SHAPE PROPERTIES */}
@@ -12870,6 +13180,69 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           {deg}°
                         </button>
                       ))}
+                    </div>
+                  </div>
+
+                  {/* Layer Order / Arrange */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-200 dark:border-zinc-800">
+                    <div className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      Layer Order / Arrange
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('front', shp.id, 'shape')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Bring to Front"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>Front</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('back', shp.id, 'shape')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Send to Back"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-zinc-500" />
+                        <span>Back</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('forward', shp.id, 'shape')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Bring Forward"
+                      >
+                        <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Forward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('backward', shp.id, 'shape')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Send Backward"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                        <span>Backward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('behindText', shp.id, 'shape')}
+                        className="px-2 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Behind Text"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Behind Text</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('inFrontOfText', shp.id, 'shape')}
+                        className="px-2 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700/60 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 text-xs font-medium text-emerald-800 dark:text-emerald-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="In Front of Text"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>In Front</span>
+                      </button>
                     </div>
                   </div>
 
@@ -13583,6 +13956,69 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     </div>
                   </div>
 
+                  {/* Layer Order / Arrange */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-200 dark:border-zinc-800">
+                    <div className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      Layer Order / Arrange
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('front', tbl.id, 'table')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Bring to Front"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>Front</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('back', tbl.id, 'table')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Send to Back"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-zinc-500" />
+                        <span>Back</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('forward', tbl.id, 'table')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Bring Forward"
+                      >
+                        <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Forward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('backward', tbl.id, 'table')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Send Backward"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                        <span>Backward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('behindText', tbl.id, 'table')}
+                        className="px-2 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Behind Text"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Behind Text</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('inFrontOfText', tbl.id, 'table')}
+                        className="px-2 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700/60 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 text-xs font-medium text-emerald-800 dark:text-emerald-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="In Front of Text"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>In Front</span>
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Delete Table */}
                   <button
                     type="button"
@@ -14066,6 +14502,69 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         onChange={(e) => handleSetElementRotation(parseInt(e.target.value) || 0)}
                         className="w-12 px-1 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-900 dark:text-zinc-100 font-mono font-bold text-center shadow-2xs"
                       />
+                    </div>
+                  </div>
+
+                  {/* Layer Order / Arrange */}
+                  <div className="space-y-1.5 pt-2 border-t border-slate-200 dark:border-zinc-800">
+                    <div className="text-[11px] font-bold text-slate-700 dark:text-zinc-300">
+                      Layer Order / Arrange
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('front', img.id, 'image')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Bring to Front"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>Front</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('back', img.id, 'image')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Send to Back"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-zinc-500" />
+                        <span>Back</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('forward', img.id, 'image')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Bring Forward"
+                      >
+                        <ChevronUp className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Forward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('backward', img.id, 'image')}
+                        className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-700 text-xs font-medium text-slate-800 dark:text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Send Backward"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+                        <span>Backward</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('behindText', img.id, 'image')}
+                        className="px-2 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 text-xs font-medium text-amber-800 dark:text-amber-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Behind Text"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Behind Text</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleLayerOrder('inFrontOfText', img.id, 'image')}
+                        className="px-2 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700/60 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 text-xs font-medium text-emerald-800 dark:text-emerald-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="In Front of Text"
+                      >
+                        <Layers className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>In Front</span>
+                      </button>
                     </div>
                   </div>
 
@@ -14569,8 +15068,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               );
             })()}
 
-            {/* CASE 5: DOCUMENT PAGE PROPERTIES (Shown when nothing is selected) */}
-            {!selectedShapeId && !selectedTableId && !selectedOverlayId && !activeEditingId && !selectedTextItemId && selectedBorderPage === null && (
+            {/* CASE 5: DOCUMENT PAGE PROPERTIES (Always shown when nothing or invalid element is selected) */}
+            {(!selectedShapeId || !shapes.some((s) => s.id === selectedShapeId)) &&
+             (!selectedTableId || !tables.some((t) => t.id === selectedTableId)) &&
+             (!selectedOverlayId || (!textOverlays.some((t) => t.id === selectedOverlayId) && !imageOverlays.some((i) => i.id === selectedOverlayId) && !hyperlinks.some((h) => h.id === selectedOverlayId))) &&
+             (!activeEditingId && !selectedTextItemId) &&
+             selectedBorderPage === null && (
               <div className="space-y-3 border-t border-slate-200 dark:border-zinc-800 pt-3">
                 <div className="text-[11px] font-bold text-slate-800 dark:text-zinc-200 uppercase tracking-wider">
                   ▾ Page Details
@@ -14842,75 +15345,101 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     )}
 
       {/* FOOTER: Clean Responsive Zoom Bar (NO Squished Text, fully visible above Android navigation bar) */}
-      <footer
-        className="flex items-center justify-center sm:justify-between px-3 sm:px-6 py-1.5 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 z-30 text-xs text-zinc-600 dark:text-zinc-400 flex-shrink-0 shadow-xs"
-        style={{
-          paddingBottom: 'max(0.6rem, env(safe-area-inset-bottom, 8px))',
-        }}
-      >
-        <div className="hidden lg:flex items-center gap-2">
-          <span className="text-[11px] text-zinc-400">
-            {activeTool === 'edit-text'
-              ? 'Click any text on the page to edit with original font & weight'
-              : activeTool === 'add-text'
-              ? 'Click anywhere on page to place formatted text'
-              : activeTool === 'add-link'
-              ? 'Click anywhere to create a clickable web hyperlink'
-              : 'Viewing document • Scroll or use navigation buttons'}
-          </span>
+      {!isFullscreenMode && (
+        <footer
+          className="flex items-center justify-center sm:justify-between px-3 sm:px-6 py-1.5 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 z-30 text-xs text-zinc-600 dark:text-zinc-400 flex-shrink-0 shadow-xs"
+          style={{
+            paddingBottom: 'max(0.6rem, env(safe-area-inset-bottom, 8px))',
+          }}
+        >
+          <div className="hidden lg:flex items-center gap-2">
+            <span className="text-[11px] text-zinc-400">
+              {activeTool === 'edit-text'
+                ? 'Click any text on the page to edit with original font & weight'
+                : activeTool === 'add-text'
+                ? 'Click anywhere on page to place formatted text'
+                : activeTool === 'add-link'
+                ? 'Click anywhere to create a clickable web hyperlink'
+                : 'Viewing document • Scroll or use navigation buttons'}
+            </span>
+          </div>
+
+          {/* Clean, Non-Clipping Touch Zoom Bar */}
+          <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-center">
+            <button
+              onClick={handleFitWidth}
+              className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0"
+              title="Fit Page Width"
+            >
+              Width
+            </button>
+
+            <button
+              onClick={() => zoomAtPoint(Math.max(0.25, Number((zoomScaleRef.current - 0.15).toFixed(2))))}
+              className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
+              title="Zoom Out"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+
+            <input
+              type="range"
+              min="0.25"
+              max="3.5"
+              step="0.02"
+              value={zoomScale}
+              onChange={(e) => {
+                zoomAtPoint(parseFloat(e.target.value));
+              }}
+              className="w-20 sm:w-32 accent-emerald-600 h-1.5 cursor-pointer flex-shrink-0"
+            />
+
+            <span className="font-mono text-xs font-bold w-12 text-center flex-shrink-0">
+              {Math.round(zoomScale * 100)}%
+            </span>
+
+            <button
+              onClick={() => zoomAtPoint(Math.min(4.0, Number((zoomScaleRef.current + 0.15).toFixed(2))))}
+              className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
+              title="Zoom In"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={handleFitPage}
+              className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0"
+              title="Fit Entire Page"
+            >
+              Page
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsFullscreenMode((prev) => !prev)}
+              className="p-1.5 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0 cursor-pointer"
+              title={isFullscreenMode ? 'Exit Full Screen Reading Mode (Esc)' : 'Enter Full Screen Reading Mode'}
+            >
+              {isFullscreenMode ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </button>
+          </div>
+        </footer>
+      )}
+
+      {/* Floating Exit Full Screen Button in Reading Mode */}
+      {isFullscreenMode && (
+        <div className="fixed top-4 right-4 z-[9999999] flex items-center gap-2 bg-zinc-900/90 hover:bg-zinc-900 text-white backdrop-blur-md px-3.5 py-1.5 rounded-full shadow-2xl border border-zinc-700/80 transition-all select-none">
+          <span className="text-xs font-semibold text-zinc-200">Full Screen</span>
+          <button
+            type="button"
+            onClick={() => setIsFullscreenMode(false)}
+            className="p-1 rounded-full hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+            title="Exit Full Screen (Esc)"
+          >
+            <Minimize className="w-4 h-4" />
+          </button>
         </div>
-
-        {/* Clean, Non-Clipping Touch Zoom Bar */}
-        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-center">
-          <button
-            onClick={handleFitWidth}
-            className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0"
-            title="Fit Page Width"
-          >
-            Width
-          </button>
-
-          <button
-            onClick={() => zoomAtPoint(Math.max(0.25, Number((zoomScaleRef.current - 0.15).toFixed(2))))}
-            className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
-            title="Zoom Out"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-
-          <input
-            type="range"
-            min="0.25"
-            max="3.5"
-            step="0.02"
-            value={zoomScale}
-            onChange={(e) => {
-              zoomAtPoint(parseFloat(e.target.value));
-            }}
-            className="w-20 sm:w-32 accent-emerald-600 h-1.5 cursor-pointer flex-shrink-0"
-          />
-
-          <span className="font-mono text-xs font-bold w-12 text-center flex-shrink-0">
-            {Math.round(zoomScale * 100)}%
-          </span>
-
-          <button
-            onClick={() => zoomAtPoint(Math.min(4.0, Number((zoomScaleRef.current + 0.15).toFixed(2))))}
-            className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
-            title="Zoom In"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-
-          <button
-            onClick={handleFitPage}
-            className="px-2.5 py-1 rounded bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[11px] font-semibold text-zinc-700 dark:text-zinc-300 transition-colors whitespace-nowrap flex-shrink-0"
-            title="Fit Entire Page"
-          >
-            Page
-          </button>
-        </div>
-      </footer>
+      )}
 
       {/* INITIAL PROMPT POPUP (When Studio is opened without document) */}
       {showInitialPrompt && (
@@ -15270,7 +15799,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedTableId(tbl.id);
-                        handleLayerOrder('front');
+                        handleLayerOrder('front', tbl.id, 'table');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
@@ -15282,7 +15811,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedTableId(tbl.id);
-                        handleLayerOrder('back');
+                        handleLayerOrder('back', tbl.id, 'table');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
@@ -15294,7 +15823,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedTableId(tbl.id);
-                        handleLayerOrder('forward');
+                        handleLayerOrder('forward', tbl.id, 'table');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15306,7 +15835,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedTableId(tbl.id);
-                        handleLayerOrder('backward');
+                        handleLayerOrder('backward', tbl.id, 'table');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15318,7 +15847,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedTableId(tbl.id);
-                        handleLayerOrder('behindText');
+                        handleLayerOrder('behindText', tbl.id, 'table');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15330,7 +15859,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedTableId(tbl.id);
-                        handleLayerOrder('inFrontOfText');
+                        handleLayerOrder('inFrontOfText', tbl.id, 'table');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15464,7 +15993,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedShapeId(shp.id);
-                        handleLayerOrder('front');
+                        handleLayerOrder('front', shp.id, 'shape');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
@@ -15476,7 +16005,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedShapeId(shp.id);
-                        handleLayerOrder('back');
+                        handleLayerOrder('back', shp.id, 'shape');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
@@ -15488,7 +16017,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedShapeId(shp.id);
-                        handleLayerOrder('forward');
+                        handleLayerOrder('forward', shp.id, 'shape');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15500,7 +16029,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedShapeId(shp.id);
-                        handleLayerOrder('backward');
+                        handleLayerOrder('backward', shp.id, 'shape');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15512,7 +16041,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedShapeId(shp.id);
-                        handleLayerOrder('behindText');
+                        handleLayerOrder('behindText', shp.id, 'shape');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15524,7 +16053,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedShapeId(shp.id);
-                        handleLayerOrder('inFrontOfText');
+                        handleLayerOrder('inFrontOfText', shp.id, 'shape');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15708,7 +16237,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedOverlayId(img.id);
-                        handleLayerOrder('front');
+                        handleLayerOrder('front', img.id, 'image');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
@@ -15720,7 +16249,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedOverlayId(img.id);
-                        handleLayerOrder('back');
+                        handleLayerOrder('back', img.id, 'image');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-between text-zinc-800 dark:text-zinc-200"
@@ -15732,7 +16261,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedOverlayId(img.id);
-                        handleLayerOrder('forward');
+                        handleLayerOrder('forward', img.id, 'image');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15744,7 +16273,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedOverlayId(img.id);
-                        handleLayerOrder('backward');
+                        handleLayerOrder('backward', img.id, 'image');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15756,7 +16285,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedOverlayId(img.id);
-                        handleLayerOrder('behindText');
+                        handleLayerOrder('behindText', img.id, 'image');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15768,7 +16297,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       type="button"
                       onClick={() => {
                         setSelectedOverlayId(img.id);
-                        handleLayerOrder('inFrontOfText');
+                        handleLayerOrder('inFrontOfText', img.id, 'image');
                         closeMenu();
                       }}
                       className="w-full text-left px-3 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2 text-zinc-800 dark:text-zinc-200"
@@ -15876,7 +16405,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </button>
               <button
                 type="button"
-                onClick={() => {
+                onClick={async () => {
+                  await clearActivePdfSession();
                   setShowCloseConfirmModal(false);
                   onClose();
                 }}
@@ -15888,6 +16418,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 type="button"
                 onClick={async () => {
                   await handleSave();
+                  await clearActivePdfSession();
                   setShowCloseConfirmModal(false);
                   onClose();
                 }}
@@ -15930,12 +16461,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </button>
 
               <button
-                onClick={() => {
+                onClick={async () => {
                   setShowMultiTabCloseModal(false);
                   const anyUnsaved = tabs.some((t) => t.hasUnsavedEdits) || hasUnsavedEdits;
                   if (anyUnsaved) {
                     setShowCloseConfirmModal(true);
                   } else {
+                    await clearActivePdfSession();
                     onClose();
                   }
                 }}
@@ -16377,6 +16909,258 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           basePageDims={basePageDims}
           pageRotations={pageRotations}
         />
+      )}
+
+      {/* FULL SCREEN PAGE ORGANIZER (Huge PDF Rearranger, Previews, Dynamic Zoom & Gestures) */}
+      {showPageOrganizerModal && (
+        <div
+          className="fixed inset-0 z-[9999999] bg-zinc-950/95 backdrop-blur-md flex flex-col text-white select-none animate-in fade-in"
+          onKeyDown={(e) => {
+            if (e.key === '=' || e.key === '+') {
+              e.preventDefault();
+              setOrganizerZoom((z) => Math.min(2.5, Number((z + 0.15).toFixed(2))));
+            } else if (e.key === '-' || e.key === '_') {
+              e.preventDefault();
+              setOrganizerZoom((z) => Math.max(0.35, Number((z - 0.15).toFixed(2))));
+            } else if (e.key === '0') {
+              e.preventDefault();
+              setOrganizerZoom(1.0);
+            }
+          }}
+          tabIndex={0}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-zinc-800 bg-zinc-900/80 backdrop-blur-md flex-shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                <Maximize2 className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-sm sm:text-base text-zinc-100">Page Organizer</h3>
+                  <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-[11px] font-semibold text-zinc-300">
+                    {totalPages} {totalPages === 1 ? 'Page' : 'Pages'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-400 hidden sm:block">
+                  Drag and drop thumbnails to reorder pages • Pinch or use slider to zoom
+                </p>
+              </div>
+            </div>
+
+            {/* Zoom Controls */}
+            <div className="flex items-center gap-2 sm:gap-3 bg-zinc-800/80 px-3 py-1.5 rounded-xl border border-zinc-700/60 shadow-inner">
+              <button
+                type="button"
+                onClick={() => setOrganizerZoom((z) => Math.max(0.35, Number((z - 0.15).toFixed(2))))}
+                className="p-1 hover:bg-zinc-700 rounded transition-colors text-zinc-300 hover:text-white cursor-pointer"
+                title="Zoom Out (Ctrl + -)"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+
+              <input
+                type="range"
+                min="0.35"
+                max="2.5"
+                step="0.05"
+                value={organizerZoom}
+                onChange={(e) => setOrganizerZoom(parseFloat(e.target.value))}
+                className="w-20 sm:w-28 accent-indigo-500 h-1.5 cursor-pointer"
+              />
+
+              <span className="font-mono text-xs font-bold w-12 text-center text-zinc-200">
+                {Math.round(organizerZoom * 100)}%
+              </span>
+
+              <button
+                type="button"
+                onClick={() => setOrganizerZoom((z) => Math.min(2.5, Number((z + 0.15).toFixed(2))))}
+                className="p-1 hover:bg-zinc-700 rounded transition-colors text-zinc-300 hover:text-white cursor-pointer"
+                title="Zoom In (Ctrl + +)"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setOrganizerZoom(1.0)}
+                className="px-2 py-0.5 rounded bg-zinc-700/70 hover:bg-zinc-700 text-[10px] font-semibold text-zinc-300 transition-colors cursor-pointer"
+                title="Reset Zoom to 100%"
+              >
+                Reset
+              </button>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleInsertBlankPage('end')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                title="Add Blank Page to End"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Add Blank</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPageOrganizerModal(false)}
+                className="p-1.5 rounded-xl hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                title="Close Organizer (Esc)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Grid Canvas with Pinch-to-Zoom Gesture and Wheel Zoom */}
+          <div
+            className="flex-1 overflow-y-auto p-4 sm:p-8 overscroll-contain touch-pan-x touch-pan-y"
+            onWheel={(e) => {
+              if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                setOrganizerZoom((z) => Math.max(0.35, Math.min(2.5, Number((z - e.deltaY * 0.002).toFixed(2)))));
+              }
+            }}
+            onTouchStart={(e) => {
+              if (e.touches.length === 2) {
+                const dist = Math.hypot(
+                  e.touches[0].clientX - e.touches[1].clientX,
+                  e.touches[0].clientY - e.touches[1].clientY
+                );
+                (e.currentTarget as any).__pinchStartDist = dist;
+                (e.currentTarget as any).__pinchStartZoom = organizerZoom;
+              }
+            }}
+            onTouchMove={(e) => {
+              if (e.touches.length === 2 && (e.currentTarget as any).__pinchStartDist) {
+                const currentDist = Math.hypot(
+                  e.touches[0].clientX - e.touches[1].clientX,
+                  e.touches[0].clientY - e.touches[1].clientY
+                );
+                const startDist = (e.currentTarget as any).__pinchStartDist;
+                const startZoom = (e.currentTarget as any).__pinchStartZoom || 1.0;
+                const scaleFactor = currentDist / Math.max(10, startDist);
+                const nextZoom = Math.max(0.35, Math.min(2.5, Number((startZoom * scaleFactor).toFixed(2))));
+                setOrganizerZoom(nextZoom);
+              }
+            }}
+            onTouchEnd={(e) => {
+              if (e.touches.length < 2) {
+                (e.currentTarget as any).__pinchStartDist = null;
+              }
+            }}
+          >
+            <div
+              className="grid gap-6 justify-center items-start mx-auto"
+              style={{
+                gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(90, Math.round(140 * organizerZoom))}px, 1fr))`,
+                maxWidth: '1600px',
+              }}
+            >
+              {Array.from({ length: totalPages }, (_, idx) => {
+                const pageNum = idx + 1;
+                const isSelected = pageNum === currentPage;
+                const cardW = Math.max(90, Math.round(140 * organizerZoom));
+                const cardH = Math.max(120, Math.round(195 * organizerZoom));
+
+                return (
+                  <div
+                    key={`org-page-${pageNum}`}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', String(pageNum));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const sourcePage = parseInt(e.dataTransfer.getData('text/plain'), 10);
+                      if (sourcePage && sourcePage !== pageNum) {
+                        handleReorderPage(sourcePage, pageNum);
+                      }
+                    }}
+                    className={`group relative flex flex-col items-center p-2 rounded-2xl border transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-950/40 border-indigo-500 shadow-lg shadow-indigo-500/10'
+                        : 'bg-zinc-900/60 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/50 shadow-md'
+                    }`}
+                    onClick={() => {
+                      setCurrentPage(pageNum);
+                    }}
+                    onDoubleClick={() => {
+                      setCurrentPage(pageNum);
+                      setShowPageOrganizerModal(false);
+                    }}
+                  >
+                    {/* Page Thumbnail Image */}
+                    <div
+                      style={{ width: `${cardW}px`, height: `${cardH}px` }}
+                      className="bg-white rounded-xl shadow-md border border-zinc-700/60 flex items-center justify-center overflow-hidden relative"
+                    >
+                      <div className="absolute top-1.5 left-1.5 text-[10px] font-bold text-zinc-700 bg-white/95 backdrop-blur-xs px-1.5 py-0.5 rounded shadow-2xs z-10">
+                        {pageNum}
+                      </div>
+
+                      {pageThumbnails[pageNum] ? (
+                        <img
+                          src={pageThumbnails[pageNum]}
+                          alt={`Page ${pageNum}`}
+                          className="w-full h-full object-contain pointer-events-none"
+                        />
+                      ) : (
+                        <FileText className="w-8 h-8 text-zinc-300" />
+                      )}
+
+                      {/* Quick Hover Controls Overlay */}
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 p-1 z-20">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRotatePageBy(90);
+                          }}
+                          className="p-1.5 rounded-lg bg-zinc-800/90 hover:bg-zinc-700 text-white transition-colors cursor-pointer"
+                          title="Rotate 90° Clockwise"
+                        >
+                          <RotateCw className="w-3.5 h-3.5" />
+                        </button>
+                        {totalPages > 1 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              performDeletePage(pageNum);
+                            }}
+                            className="p-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white transition-colors cursor-pointer"
+                            title="Delete Page"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Page Label & Jump Button */}
+                    <div className="mt-2 flex items-center justify-between w-full px-1 text-xs">
+                      <span className={`font-semibold ${isSelected ? 'text-indigo-400' : 'text-zinc-400'}`}>
+                        Page {pageNum}
+                      </span>
+                      {isSelected && (
+                        <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded-full font-bold">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

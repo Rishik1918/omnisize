@@ -15,12 +15,27 @@ import { PdfEditorModal } from './PdfEditorModal';
 import { PdfOcrModal } from './PdfOcrModal';
 
 import { attachFilePath } from '../../utils/fileSaver';
+import { loadActivePdfSession } from '../../utils/pdfSessionPersistence';
 
 export const PdfStudioView: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'merge' | 'split' | 'edit' | 'ocr' | null>(null);
   const [droppedFile, setDroppedFile] = useState<File | undefined>(undefined);
   const [droppedFiles, setDroppedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  React.useEffect(() => {
+    loadActivePdfSession().then((session) => {
+      if (session && session.fileBuffer && session.fileBuffer.byteLength > 0 && !droppedFile) {
+        try {
+          const restoredFile = new File([session.fileBuffer], session.fileName || 'document.pdf', {
+            type: session.fileType || 'application/pdf',
+          });
+          setDroppedFile(restoredFile);
+          setActiveModal('edit');
+        } catch {}
+      }
+    });
+  }, []);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();

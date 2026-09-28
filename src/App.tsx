@@ -13,6 +13,8 @@ import { PdfEditorModal } from './components/PdfStudio/PdfEditorModal';
 import { InitialChoiceScreen } from './components/InitialChoiceScreen';
 import { PdfPasswordPromptModal } from './components/PdfPasswordPromptModal';
 import { SecurityStudio } from './components/SecurityStudio/SecurityStudio';
+import { ImageToPdfModal, ImageToPdfItem } from './components/ImageToPdfModal';
+import { loadActivePdfSession } from './utils/pdfSessionPersistence';
 import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOptions, DocumentProcessingOptions } from './types';
 import { ImageEngine } from './services/imageEngine';
 import { VideoEngine } from './services/videoEngine';
@@ -25,6 +27,8 @@ export default function App() {
   const [appMode, setAppMode] = useState<'home' | 'compress' | 'convert' | 'pdfstudio' | 'security'>('home');
   const [externalEditorPdf, setExternalEditorPdf] = useState<File | null>(null);
   const [showDesktopCloseModal, setShowDesktopCloseModal] = useState<boolean>(false);
+  const [imageConversionItems, setImageConversionItems] = useState<ImageToPdfItem[]>([]);
+  const [showImageConversionModal, setShowImageConversionModal] = useState<boolean>(false);
 
   useEffect(() => {
     ThemeManager.init();
@@ -89,7 +93,25 @@ export default function App() {
     let unsubOpen: (() => void) | undefined;
     let unsubClose: (() => void) | undefined;
 
+    let unsubImg: (() => void) | undefined;
+
     if (electronAPI) {
+      if (typeof electronAPI.onImageConversionDialog === 'function') {
+        unsubImg = electronAPI.onImageConversionDialog(async (data: { filePaths: string[] }) => {
+          if (data && Array.isArray(data.filePaths) && data.filePaths.length > 0) {
+            try {
+              const files = await electronAPI.readImageFiles(data.filePaths);
+              if (files && files.length > 0) {
+                setImageConversionItems(files);
+                setShowImageConversionModal(true);
+              }
+            } catch (err) {
+              console.error('Error handling image conversion dialog:', err);
+            }
+          }
+        });
+      }
+
       if (typeof electronAPI.getInitialFile === 'function') {
         electronAPI.getInitialFile().then((fileData: any) => {
           if (fileData && fileData.data) {
@@ -133,6 +155,7 @@ export default function App() {
       }
 
       return () => {
+        if (unsubImg) unsubImg();
         if (unsubOpen) unsubOpen();
         if (unsubClose) unsubClose();
       };
@@ -164,6 +187,41 @@ export default function App() {
       (window as any).__omnisize_pending_file = null;
     }
   }, []);
+
+  // Auto-resume active editing session on Android / Web after returning from other apps
+  useEffect(() => {
+    const checkAndRestoreSession = async () => {
+      try {
+        const session = await loadActivePdfSession();
+        if (session && session.fileBuffer && session.fileBuffer.byteLength > 0) {
+          const restoredFile = new File([session.fileBuffer], session.fileName || 'document.pdf', {
+            type: session.fileType || 'application/pdf',
+          });
+          setExternalEditorPdf(restoredFile);
+          setAppMode('pdfstudio');
+        }
+      } catch (err) {
+        console.warn('Auto-resume session note:', err);
+      }
+    };
+
+    checkAndRestoreSession();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        if (!externalEditorPdf) {
+          checkAndRestoreSession();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [externalEditorPdf]);
 
   const handleRemove = (id: string) => {
     setItems((prev) => prev.filter((item) => item.id !== id));
@@ -609,6 +667,21 @@ export default function App() {
           isOpen={Boolean(externalEditorPdf)}
           onClose={() => setExternalEditorPdf(null)}
           initialFile={externalEditorPdf}
+        />
+      )}
+
+      {showImageConversionModal && imageConversionItems.length > 0 && (
+        <ImageToPdfModal
+          isOpen={showImageConversionModal}
+          onClose={() => {
+            setShowImageConversionModal(false);
+            setImageConversionItems([]);
+          }}
+          images={imageConversionItems}
+          onOpenPdfInStudio={(pdfFile) => {
+            setAppMode('pdfstudio');
+            setExternalEditorPdf(pdfFile);
+          }}
         />
       )}
 

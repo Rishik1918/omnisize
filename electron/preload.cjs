@@ -31,4 +31,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   lockFile: (filePath) => ipcRenderer.invoke('lock-file', { filePath }),
   unlockFile: (filePath) => ipcRenderer.invoke('unlock-file', { filePath }),
   unlockAllFiles: () => ipcRenderer.invoke('unlock-all-files'),
+  onImageConversionDialog: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('open-image-conversion-dialog', handler);
+    return () => ipcRenderer.removeListener('open-image-conversion-dialog', handler);
+  },
+  readImageFiles: (filePaths) => ipcRenderer.invoke('read-image-files', filePaths),
 });

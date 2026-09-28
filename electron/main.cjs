@@ -143,6 +143,73 @@ class FileLockManager {
 
 const fileLockManager = new FileLockManager();
 
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.tiff', '.tif', '.gif']);
+
+function findAllImagePathsInArgs(args) {
+  if (!args || args.length === 0) return [];
+  const results = [];
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (arg && !arg.startsWith('--') && !arg.startsWith('-')) {
+      try {
+        if (fs.existsSync(arg) && fs.statSync(arg).isFile()) {
+          const ext = path.extname(arg).toLowerCase();
+          if (IMAGE_EXTENSIONS.has(ext)) {
+            results.push(path.resolve(arg));
+          }
+        }
+      } catch (e) {}
+    }
+  }
+  return results;
+}
+
+let pendingImagePaths = new Set();
+let imageBatchTimer = null;
+let initialImageConversionPaths = null;
+
+function queueImagesForConversion(paths) {
+  if (!paths || paths.length === 0) return;
+  paths.forEach((p) => pendingImagePaths.add(p));
+  if (imageBatchTimer) clearTimeout(imageBatchTimer);
+  imageBatchTimer = setTimeout(() => {
+    dispatchImageConversionDialog();
+  }, 350);
+}
+
+function dispatchImageConversionDialog() {
+  if (pendingImagePaths.size === 0) return;
+  const filePaths = Array.from(pendingImagePaths);
+  pendingImagePaths.clear();
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('open-image-conversion-dialog', { filePaths });
+  } else {
+    initialImageConversionPaths = filePaths;
+  }
+}
+
+function registerImageContextMenu() {
+  if (process.platform !== 'win32') return;
+  try {
+    const exePath = process.execPath;
+    const psScript = `
+      try {
+        $key = "HKCU:\\Software\\Classes\\SystemFileAssociations\\image\\shell\\OmnisizeConvert"
+        New-Item -Path $key -Force | Out-Null
+        Set-ItemProperty -Path $key -Name "(Default)" -Value "Convert to PDF using Omnisize"
+        Set-ItemProperty -Path $key -Name "Icon" -Value '"' + '${exePath.replace(/'/g, "''")}' + '",0'
+        $cmdKey = "$key\\command"
+        New-Item -Path $cmdKey -Force | Out-Null
+        Set-ItemProperty -Path $cmdKey -Name "(Default)" -Value '"' + '${exePath.replace(/'/g, "''")}' + '" --convert-images "%1"'
+      } catch {}
+    `;
+    spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psScript], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+  } catch (err) {}
+}
+
 function findFilePathInArgs(args) {
   if (!args || args.length === 0) return null;
   // Look for first non-flag argument that points to an existing file
@@ -168,6 +235,13 @@ if (!gotTheLock) {
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+
+      const isConvert = commandLine.includes('--convert-images');
+      const images = findAllImagePathsInArgs(commandLine);
+      if (isConvert || (images.length > 0 && commandLine.some((a) => a.toLowerCase().includes('convert')))) {
+        queueImagesForConversion(images);
+        return;
+      }
 
       const filePath = findFilePathInArgs(commandLine);
       if (filePath) {
@@ -200,7 +274,13 @@ function sendFileToRenderer(filePath) {
 }
 
 // Handle initial launch arguments
-pendingFilePath = findFilePathInArgs(process.argv);
+const isInitialConvert = process.argv.includes('--convert-images');
+const initialImagesFound = findAllImagePathsInArgs(process.argv);
+if (isInitialConvert && initialImagesFound.length > 0) {
+  initialImageConversionPaths = initialImagesFound;
+} else {
+  pendingFilePath = findFilePathInArgs(process.argv);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -228,12 +308,43 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    if (pendingFilePath) {
+    if (initialImageConversionPaths && initialImageConversionPaths.length > 0) {
+      setTimeout(() => {
+        mainWindow.webContents.send('open-image-conversion-dialog', { filePaths: initialImageConversionPaths });
+        initialImageConversionPaths = null;
+      }, 700);
+    } else if (pendingFilePath) {
       setTimeout(() => {
         sendFileToRenderer(pendingFilePath);
         pendingFilePath = null;
       }, 500);
     }
+  });
+
+  // Handle IPC request to read image files for PDF conversion
+  ipcMain.handle('read-image-files', async (_event, filePaths) => {
+    if (!Array.isArray(filePaths)) return [];
+    const results = [];
+    for (const fp of filePaths) {
+      try {
+        if (fs.existsSync(fp) && fs.statSync(fp).isFile()) {
+          const stat = fs.statSync(fp);
+          const buffer = fs.readFileSync(fp);
+          const ext = path.extname(fp).toLowerCase().replace('.', '');
+          const mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`;
+          results.push({
+            name: path.basename(fp),
+            path: fp,
+            size: stat.size,
+            data: buffer,
+            mimeType,
+          });
+        }
+      } catch (err) {
+        console.warn('Error reading image file:', fp, err);
+      }
+    }
+    return results;
   });
 
   // Handle IPC request for initial file
@@ -364,6 +475,7 @@ app.on('will-quit', () => {
 });
 
 app.whenReady().then(() => {
+  registerImageContextMenu();
   createWindow();
 
   app.on('activate', () => {
