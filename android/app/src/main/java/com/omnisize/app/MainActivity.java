@@ -11,6 +11,7 @@ import android.util.Base64;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import android.os.ParcelFileDescriptor;
 import com.getcapacitor.BridgeActivity;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -18,6 +19,7 @@ import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
     private JSONObject pendingFile = null;
+    private ParcelFileDescriptor activeFileDescriptor = null;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
@@ -91,6 +93,14 @@ public class MainActivity extends BridgeActivity {
                     }
                 }
 
+                try {
+                    if (activeFileDescriptor != null) {
+                        try { activeFileDescriptor.close(); } catch (Exception ignored) {}
+                        activeFileDescriptor = null;
+                    }
+                    activeFileDescriptor = getContentResolver().openFileDescriptor(uri, "r");
+                } catch (Exception ignored) {}
+
                 try (InputStream is = getContentResolver().openInputStream(uri)) {
                     if (is != null) {
                         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -115,6 +125,15 @@ public class MainActivity extends BridgeActivity {
                 e.printStackTrace();
             }
         }).start();
+    }
+
+    @Override
+    public void onDestroy() {
+        if (activeFileDescriptor != null) {
+            try { activeFileDescriptor.close(); } catch (Exception ignored) {}
+            activeFileDescriptor = null;
+        }
+        super.onDestroy();
     }
 
     private void deliverFileToWebview(JSONObject json) {

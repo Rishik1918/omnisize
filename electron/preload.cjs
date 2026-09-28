@@ -28,4 +28,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('save-file-direct', { filePath, defaultName, buffer }),
   saveFileDialog: (defaultName, buffer) =>
     ipcRenderer.invoke('save-file-dialog', { defaultName, buffer }),
+  lockFile: (filePath) => ipcRenderer.invoke('lock-file', { filePath }),
+  unlockFile: (filePath) => ipcRenderer.invoke('unlock-file', { filePath }),
+  unlockAllFiles: () => ipcRenderer.invoke('unlock-all-files'),
 });

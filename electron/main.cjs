@@ -1,9 +1,147 @@
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 let mainWindow = null;
 let pendingFilePath = null;
+
+class FileLockManager {
+  constructor() {
+    this.worker = null;
+    this.lockedFiles = new Map(); // id -> { filePath }
+    this.nextId = 1;
+    this.initWorker();
+  }
+
+  initWorker() {
+    if (process.platform !== 'win32') return;
+    try {
+      const psScript = `
+        $locks = @{}
+        while ($line = [Console]::ReadLine()) {
+          if (-not $line) { continue }
+          $parts = $line.Split('|', 3)
+          $cmd = $parts[0]
+          if ($cmd -eq 'LOCK') {
+            $id = $parts[1]
+            $p = $parts[2]
+            try {
+              if ($locks.ContainsKey($id)) {
+                try { $locks[$id].Close() } catch {}
+                $locks.Remove($id)
+              }
+              $locks[$id] = [System.IO.File]::Open($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+              [Console]::WriteLine('OK_LOCKED|' + $id)
+            } catch {
+              [Console]::WriteLine('ERR_LOCK|' + $id + '|' + $_.Exception.Message)
+            }
+          } elseif ($cmd -eq 'UNLOCK') {
+            $id = $parts[1]
+            if ($locks.ContainsKey($id)) {
+              try { $locks[$id].Close(); $locks.Remove($id) } catch {}
+              [Console]::WriteLine('OK_UNLOCKED|' + $id)
+            }
+          } elseif ($cmd -eq 'UNLOCK_ALL') {
+            foreach ($k in @($locks.Keys)) {
+              try { $locks[$k].Close() } catch {}
+            }
+            $locks.Clear()
+            [Console]::WriteLine('OK_UNLOCKED_ALL')
+          } elseif ($cmd -eq 'EXIT') {
+            break
+          }
+        }
+      `;
+      this.worker = spawn('powershell.exe', ['-NoProfile', '-Command', psScript], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+
+      this.worker.on('exit', () => {
+        this.worker = null;
+      });
+    } catch (err) {
+      console.warn('FileLockManager note:', err);
+    }
+  }
+
+  lock(filePath) {
+    if (!filePath || process.platform !== 'win32') return null;
+    try {
+      if (!fs.existsSync(filePath)) return null;
+      for (const [id, item] of this.lockedFiles.entries()) {
+        if (item.filePath === filePath) return id;
+      }
+      const id = String(this.nextId++);
+      this.lockedFiles.set(id, { filePath });
+      if (!this.worker) this.initWorker();
+      if (this.worker && this.worker.stdin && !this.worker.stdin.destroyed) {
+        this.worker.stdin.write(`LOCK|${id}|${filePath}\n`);
+      }
+      return id;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  unlock(filePathOrId) {
+    if (!filePathOrId || process.platform !== 'win32') return;
+    try {
+      let targetId = null;
+      if (this.lockedFiles.has(filePathOrId)) {
+        targetId = filePathOrId;
+      } else {
+        for (const [id, item] of this.lockedFiles.entries()) {
+          if (item.filePath === filePathOrId) {
+            targetId = id;
+            break;
+          }
+        }
+      }
+      if (targetId && this.lockedFiles.has(targetId)) {
+        this.lockedFiles.delete(targetId);
+        if (this.worker && this.worker.stdin && !this.worker.stdin.destroyed) {
+          this.worker.stdin.write(`UNLOCK|${targetId}\n`);
+        }
+      }
+    } catch (_) {}
+  }
+
+  unlockAll() {
+    try {
+      this.lockedFiles.clear();
+      if (this.worker && this.worker.stdin && !this.worker.stdin.destroyed) {
+        this.worker.stdin.write(`UNLOCK_ALL\n`);
+        this.worker.stdin.write(`EXIT\n`);
+        this.worker.stdin.end();
+      }
+    } catch (_) {}
+  }
+
+  async runWithUnlockedFile(filePath, fn) {
+    let matchedId = null;
+    for (const [id, item] of this.lockedFiles.entries()) {
+      if (item.filePath === filePath) {
+        matchedId = id;
+        break;
+      }
+    }
+    if (matchedId && this.worker && this.worker.stdin && !this.worker.stdin.destroyed) {
+      this.worker.stdin.write(`UNLOCK|${matchedId}\n`);
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    try {
+      return await fn();
+    } finally {
+      if (matchedId && this.worker && this.worker.stdin && !this.worker.stdin.destroyed) {
+        this.worker.stdin.write(`LOCK|${matchedId}|${filePath}\n`);
+      }
+    }
+  }
+}
+
+const fileLockManager = new FileLockManager();
 
 function findFilePathInArgs(args) {
   if (!args || args.length === 0) return null;
@@ -46,6 +184,8 @@ function sendFileToRenderer(filePath) {
     const buffer = fs.readFileSync(filePath);
     const filename = path.basename(filePath);
     const ext = path.extname(filePath).toLowerCase();
+
+    fileLockManager.lock(filePath);
 
     mainWindow.webContents.send('open-file', {
       name: filename,
@@ -104,6 +244,7 @@ function createWindow() {
         pendingFilePath = null;
         const stat = fs.statSync(filePath);
         const buffer = fs.readFileSync(filePath);
+        fileLockManager.lock(filePath);
         return {
           name: path.basename(filePath),
           path: filePath,
@@ -118,6 +259,21 @@ function createWindow() {
     return null;
   });
 
+  // IPC file locking handlers
+  ipcMain.handle('lock-file', (_event, { filePath }) => {
+    return fileLockManager.lock(filePath);
+  });
+
+  ipcMain.handle('unlock-file', (_event, { filePath }) => {
+    fileLockManager.unlock(filePath);
+    return true;
+  });
+
+  ipcMain.handle('unlock-all-files', () => {
+    fileLockManager.unlockAll();
+    return true;
+  });
+
   // Handle IPC direct file overwrite (no prompt under any circumstances)
   ipcMain.handle('save-file-direct', async (_event, { filePath, defaultName, buffer }) => {
     try {
@@ -126,8 +282,11 @@ function createWindow() {
         const desktopDir = app.getPath('desktop');
         targetPath = path.join(desktopDir, defaultName || 'document.pdf');
       }
-      fs.writeFileSync(targetPath, Buffer.from(buffer));
-      return { success: true, filePath: targetPath };
+      return await fileLockManager.runWithUnlockedFile(targetPath, async () => {
+        fs.writeFileSync(targetPath, Buffer.from(buffer));
+        fileLockManager.lock(targetPath);
+        return { success: true, filePath: targetPath };
+      });
     } catch (err) {
       console.error('Error saving file directly:', err);
       return { success: false, error: err.message };
@@ -151,8 +310,11 @@ function createWindow() {
       if (canceled || !filePath) {
         return { success: false, canceled: true };
       }
-      fs.writeFileSync(filePath, Buffer.from(buffer));
-      return { success: true, filePath };
+      return await fileLockManager.runWithUnlockedFile(filePath, async () => {
+        fs.writeFileSync(filePath, Buffer.from(buffer));
+        fileLockManager.lock(filePath);
+        return { success: true, filePath };
+      });
     } catch (err) {
       console.error('Error in save-file-dialog:', err);
       return { success: false, error: err.message };
@@ -175,6 +337,7 @@ function createWindow() {
 
   ipcMain.on('confirm-app-close', () => {
     isQuitting = true;
+    fileLockManager.unlockAll();
     if (mainWindow) {
       mainWindow.destroy();
       mainWindow = null;
@@ -192,10 +355,12 @@ let isQuitting = false;
 
 app.on('before-quit', () => {
   isQuitting = true;
+  fileLockManager.unlockAll();
 });
 
 app.on('will-quit', () => {
   isQuitting = true;
+  fileLockManager.unlockAll();
 });
 
 app.whenReady().then(() => {

@@ -12,6 +12,7 @@ import {
   Trash2,
   ScanText,
   Save,
+  Download,
   Loader2,
   Undo2,
   Redo2,
@@ -1386,6 +1387,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     startY: number;
     origX: number;
     origY: number;
+    multiSnapshot?: {
+      [id: string]: {
+        type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink';
+        origX: number;
+        origY: number;
+      };
+    };
   } | null>(null);
 
   const [resizingItem, setResizingItem] = useState<{
@@ -1566,6 +1574,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       });
     }
   }, [initialFile, initialFiles]);
+
+  // Lock all open document files in Electron while open, preventing external move/delete
+  useEffect(() => {
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+    if (electronAPI && typeof electronAPI.lockFile === 'function') {
+      tabs.forEach((tab) => {
+        const p = (tab.file as any)?.path;
+        if (p) {
+          electronAPI.lockFile(p).catch(() => {});
+        }
+      });
+    }
+  }, [tabs]);
+
+  // Unlock all files when editor is unmounted
+  useEffect(() => {
+    return () => {
+      const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+      if (electronAPI && typeof electronAPI.unlockAllFiles === 'function') {
+        electronAPI.unlockAllFiles().catch(() => {});
+      }
+    };
+  }, []);
 
   // Lock body overflow when editor is open so background never scrolls
   useEffect(() => {
@@ -1885,6 +1916,66 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
+  const startDraggingItem = (
+    id: string,
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink',
+    clientX: number,
+    clientY: number,
+    origX: number,
+    origY: number
+  ) => {
+    let multiSnapshot: { [id: string]: { type: any; origX: number; origY: number } } | undefined = undefined;
+    if (multiSelectedIds.includes(id) && multiSelectedIds.length > 1) {
+      multiSnapshot = {};
+      for (const selId of multiSelectedIds) {
+        if (selId === id) {
+          multiSnapshot[selId] = { type, origX, origY };
+          continue;
+        }
+        const textItm = modifiedTexts[selId] || detectedTextItems.find((t) => t.id === selId);
+        if (textItm) {
+          multiSnapshot[selId] = { type: 'text-item', origX: textItm.x, origY: textItm.y };
+          continue;
+        }
+        const ov = textOverlays.find((t) => t.id === selId);
+        if (ov) {
+          multiSnapshot[selId] = { type: 'overlay', origX: ov.x, origY: ov.y };
+          continue;
+        }
+        const im = imageOverlays.find((i) => i.id === selId);
+        if (im) {
+          multiSnapshot[selId] = { type: 'image', origX: im.x, origY: im.y };
+          continue;
+        }
+        const sh = shapes.find((s) => s.id === selId);
+        if (sh) {
+          multiSnapshot[selId] = { type: 'shape', origX: sh.x, origY: sh.y };
+          continue;
+        }
+        const tb = tables.find((t) => t.id === selId);
+        if (tb) {
+          multiSnapshot[selId] = { type: 'table', origX: tb.x, origY: tb.y };
+          continue;
+        }
+        const hl = hyperlinks.find((l) => l.id === selId);
+        if (hl) {
+          multiSnapshot[selId] = { type: 'hyperlink', origX: hl.x, origY: hl.y };
+          continue;
+        }
+      }
+    }
+
+    setDraggingItem({
+      id,
+      type,
+      startX: clientX,
+      startY: clientY,
+      origX,
+      origY,
+      multiSnapshot,
+    });
+  };
+
   // Wondershare PDFelement Properties Panel & Advanced Color System
   // On Android app, properties panel does not auto-open (user opens manually); Desktop defaults open
   const [showPropertiesPanel, setShowPropertiesPanel] = useState<boolean>(
@@ -2044,13 +2135,55 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const pdfProxyRef = useRef<any>(null);
   const filePickerRef = useRef<HTMLInputElement | null>(null);
 
-  // Stable reference to page container frame for 120 FPS GPU transform zooming
+  // Stable reference to page container frame for smooth focal zooming
   const pageFrameRef = useRef<HTMLDivElement | null>(null);
   const zoomScaleRef = useRef<number>(zoomScale);
-  const sliderZoomTimeoutRef = useRef<any>(null);
+  const [showSaveDropdown, setShowSaveDropdown] = useState<boolean>(false);
+  const saveDropdownRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     zoomScaleRef.current = zoomScale;
   }, [zoomScale]);
+
+  // Click outside to dismiss Save Dropdown
+  useEffect(() => {
+    if (!showSaveDropdown) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (saveDropdownRef.current && !saveDropdownRef.current.contains(e.target as Node)) {
+        setShowSaveDropdown(false);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => window.removeEventListener('mousedown', handleOutsideClick);
+  }, [showSaveDropdown]);
+
+  // Wondershare PDFelement-Style Smooth Mouse & Viewport-Centered Focal Zoom
+  const zoomAtPoint = useCallback((nextScale: number, clientX?: number, clientY?: number) => {
+    const container = containerRef.current;
+    if (!container) {
+      setZoomScale(nextScale);
+      return;
+    }
+    const currentScale = zoomScaleRef.current;
+    if (Math.abs(nextScale - currentScale) < 0.001) return;
+
+    const rect = container.getBoundingClientRect();
+    const focalX = clientX !== undefined ? (clientX - rect.left) : (container.clientWidth / 2);
+    const focalY = clientY !== undefined ? (clientY - rect.top) : (container.clientHeight / 2);
+
+    const contentX = container.scrollLeft + focalX;
+    const contentY = container.scrollTop + focalY;
+
+    const ratio = nextScale / currentScale;
+    setZoomScale(nextScale);
+
+    requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollLeft = contentX * ratio - focalX;
+        containerRef.current.scrollTop = contentY * ratio - focalY;
+      }
+    });
+  }, []);
 
   // Scanned Document OCR in-place editing state
   const [isOcrScanningPage, setIsOcrScanningPage] = useState<boolean>(false);
@@ -2960,6 +3093,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   // Remove tab and switch to adjacent tab
   const performCloseTab = (tabId: string) => {
+    const target = tabs.find((t) => t.id === tabId);
+    if (target && (target.file as any)?.path) {
+      const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+      if (electronAPI && typeof electronAPI.unlockFile === 'function') {
+        electronAPI.unlockFile((target.file as any).path).catch(() => {});
+      }
+    }
     const remaining = tabs.filter((t) => t.id !== tabId);
     setTabs(remaining);
 
@@ -4470,27 +4610,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           onMouseDown={(e) => {
             e.stopPropagation();
             e.preventDefault();
-            setDraggingItem({
-              id,
-              type,
-              startX: e.clientX,
-              startY: e.clientY,
-              origX,
-              origY,
-            });
+            startDraggingItem(id, type, e.clientX, e.clientY, origX, origY);
           }}
           onTouchStart={(e) => {
             e.stopPropagation();
             if (e.touches.length > 0) {
               const touch = e.touches[0];
-              setDraggingItem({
-                id,
-                type,
-                startX: touch.clientX,
-                startY: touch.clientY,
-                origX,
-                origY,
-              });
+              startDraggingItem(id, type, touch.clientX, touch.clientY, origX, origY);
             }
           }}
         >
@@ -4611,51 +4737,55 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
 
       if (draggingItem) {
-        // Continuous inter-page dragging: check target page under pointer
+        const deltaX = (clientX - draggingItem.startX) / scale;
+        const deltaY = -(clientY - draggingItem.startY) / scale;
+
+        // Check if cursor moved over a page
         const pageEl = document.elementsFromPoint(clientX, clientY).find((el) => el.hasAttribute('data-page-number'));
-        if (pageEl) {
-          const targetPage = parseInt(pageEl.getAttribute('data-page-number')!, 10);
-          const targetPageIndex = targetPage - 1;
-          const rect = pageEl.getBoundingClientRect();
+        const targetPage = pageEl ? parseInt(pageEl.getAttribute('data-page-number')!, 10) : currentPage;
+        const targetPageIndex = targetPage - 1;
 
-          let itemW = 100;
-          let itemH = 60;
-          if (draggingItem.type === 'shape') {
-            const sh = shapes.find((s) => s.id === draggingItem.id);
-            if (sh) { itemW = sh.width; itemH = sh.height; }
-          } else if (draggingItem.type === 'table') {
-            const tb = tables.find((t) => t.id === draggingItem.id);
-            if (tb) { itemW = tb.width; itemH = tb.height; }
-          } else if (draggingItem.type === 'image') {
-            const im = imageOverlays.find((i) => i.id === draggingItem.id);
-            if (im) { itemW = im.width; itemH = im.height; }
-          } else if (draggingItem.type === 'overlay') {
-            const tx = textOverlays.find((t) => t.id === draggingItem.id);
-            if (tx) { itemW = 120; itemH = 30; }
-          } else if (draggingItem.type === 'text-item') {
-            const item = modifiedTexts[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
-            if (item) { itemW = item.width || 80; itemH = item.height || 24; }
-          } else if (draggingItem.type === 'hyperlink') {
-            const hl = hyperlinks.find((l) => l.id === draggingItem.id);
-            if (hl) { itemW = hl.width; itemH = hl.height; }
+        if (draggingItem.multiSnapshot) {
+          // Translate all multi-selected items in lockstep!
+          for (const [sId, sData] of Object.entries(draggingItem.multiSnapshot)) {
+            const nextX = Math.round((sData.origX + deltaX) * 10) / 10;
+            const nextY = Math.round((sData.origY + deltaY) * 10) / 10;
+            if (sData.type === 'text-item') {
+              setModifiedTexts((prev) => {
+                const item = prev[sId] || detectedTextItems.find((t) => t.id === sId);
+                if (!item) return prev;
+                return {
+                  ...prev,
+                  [sId]: { ...item, x: nextX, y: nextY, isModified: true },
+                };
+              });
+            } else if (sData.type === 'overlay') {
+              setTextOverlays((prev) => prev.map((t) => (t.id === sId ? { ...t, x: nextX, y: nextY } : t)));
+            } else if (sData.type === 'image') {
+              setImageOverlays((prev) => prev.map((i) => (i.id === sId ? { ...i, x: nextX, y: nextY, isModified: true } : i)));
+            } else if (sData.type === 'shape') {
+              setShapes((prev) => prev.map((s) => (s.id === sId ? { ...s, x: nextX, y: nextY } : s)));
+            } else if (sData.type === 'table') {
+              setTables((prev) => prev.map((t) => (t.id === sId ? { ...t, x: nextX, y: nextY } : t)));
+            } else if (sData.type === 'hyperlink') {
+              setHyperlinks((prev) => prev.map((l) => (l.id === sId ? { ...l, x: nextX, y: nextY } : l)));
+            }
           }
-
-          // Calculate coordinates relative to this page, strictly clamped within page boundaries so nothing is ever in the gap
-          const rawX = (clientX - rect.left) / scale - itemW / 2;
-          const rawY = (rect.height - (clientY - rect.top)) / scale - itemH / 2;
-          const clampedX = Math.round(Math.max(10, Math.min((basePageDims.width || 595) - itemW - 10, rawX)) * 10) / 10;
-          const clampedY = Math.round(Math.max(10, Math.min((basePageDims.height || 842) - itemH - 10, rawY)) * 10) / 10;
+        } else {
+          // Single item translation based on natural mouse delta from click point
+          const newX = Math.round((draggingItem.origX + deltaX) * 10) / 10;
+          const newY = Math.round((draggingItem.origY + deltaY) * 10) / 10;
 
           if (draggingItem.type === 'shape') {
-            setShapes((prev) => prev.map((s) => (s.id === draggingItem.id ? { ...s, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : s)));
+            setShapes((prev) => prev.map((s) => (s.id === draggingItem.id ? { ...s, pageIndex: targetPageIndex, x: newX, y: newY } : s)));
           } else if (draggingItem.type === 'table') {
-            setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
+            setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: newX, y: newY } : t)));
           } else if (draggingItem.type === 'image') {
-            setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: clampedX, y: clampedY, isModified: true } : i)));
+            setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: newX, y: newY, isModified: true } : i)));
           } else if (draggingItem.type === 'overlay') {
-            setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
+            setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: newX, y: newY } : t)));
           } else if (draggingItem.type === 'hyperlink') {
-            setHyperlinks((prev) => prev.map((l) => (l.id === draggingItem.id ? { ...l, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : l)));
+            setHyperlinks((prev) => prev.map((l) => (l.id === draggingItem.id ? { ...l, pageIndex: targetPageIndex, x: newX, y: newY } : l)));
           } else if (draggingItem.type === 'text-item') {
             setModifiedTexts((prev) => {
               const item = prev[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
@@ -4665,54 +4795,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 [draggingItem.id]: {
                   ...item,
                   pageIndex: targetPageIndex,
-                  x: clampedX,
-                  y: clampedY,
+                  x: newX,
+                  y: newY,
                   isModified: true,
                 },
               };
             });
           }
-          if (currentPage !== targetPage) {
-            setCurrentPage(targetPage);
-          }
-          return;
         }
 
-        // Pointer over inter-page gap: clamp position safely within current page
-        const deltaX = (clientX - draggingItem.startX) / scale;
-        const deltaY = -(clientY - draggingItem.startY) / scale;
-        const newX = Math.round(Math.max(10, Math.min((basePageDims.width || 595) - 60, draggingItem.origX + deltaX)) * 10) / 10;
-        const newY = Math.round(Math.max(10, Math.min((basePageDims.height || 842) - 40, draggingItem.origY + deltaY)) * 10) / 10;
-
-        if (draggingItem.type === 'shape') {
-          setShapes((prev) => prev.map((s) => (s.id === draggingItem.id ? { ...s, x: newX, y: newY } : s)));
-        } else if (draggingItem.type === 'table') {
-          setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
-        } else if (draggingItem.type === 'image') {
-          setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, x: newX, y: newY, isModified: true } : i)));
-        } else if (draggingItem.type === 'overlay') {
-          setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
-        } else if (draggingItem.type === 'hyperlink') {
-          setHyperlinks((prev) => prev.map((l) => (l.id === draggingItem.id ? { ...l, x: newX, y: newY } : l)));
-        } else if (draggingItem.type === 'text-item') {
-          setModifiedTexts((prev) => {
-            const item = prev[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
-            if (!item) return prev;
-            return {
-              ...prev,
-              [draggingItem.id]: {
-                ...item,
-                x: newX,
-                y: newY,
-                isModified: true,
-              },
-            };
-          });
+        if (currentPage !== targetPage) {
+          setCurrentPage(targetPage);
         }
+        return;
       } else if (resizingItem) {
         // Delta in screen points:
-        // deltaX > 0 means moving right, deltaX < 0 means moving left
-        // deltaY > 0 means moving down, deltaY < 0 means moving up
         const deltaX = (clientX - resizingItem.startX) / scale;
         const deltaY = (clientY - resizingItem.startY) / scale;
         const h = resizingItem.handle;
@@ -4722,23 +4819,23 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         let nextX = resizingItem.origX;
         let nextY = resizingItem.origY;
 
-        // East: right handle (drag right to increase width, left edge stays fixed)
+        // East: right handle
         if (h.includes('e')) {
           nextW = Math.max(20, resizingItem.origW + deltaX);
         }
-        // West: left handle (drag left to increase width, right edge stays fixed)
+        // West: left handle
         if (h.includes('w')) {
           const proposedW = Math.max(20, resizingItem.origW - deltaX);
           nextX = resizingItem.origX + resizingItem.origW - proposedW;
           nextW = proposedW;
         }
-        // South: bottom handle on screen (drag down to increase height, top edge in PDF stays fixed)
+        // South: bottom handle
         if (h.includes('s')) {
           const proposedH = Math.max(15, resizingItem.origH + deltaY);
           nextY = (resizingItem.origY + resizingItem.origH) - proposedH;
           nextH = proposedH;
         }
-        // North: top handle on screen (drag up to increase height, bottom edge in PDF stays fixed)
+        // North: top handle
         if (h.includes('n')) {
           const proposedH = Math.max(15, resizingItem.origH - deltaY);
           nextY = resizingItem.origY;
@@ -4780,9 +4877,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           );
         } else if (resizingItem.type === 'overlay') {
           setTextOverlays((prev) =>
-            prev.map((t) =>
-              t.id === resizingItem.id ? { ...t, x: nextX, y: nextY } : t
-            )
+            prev.map((t) => {
+              if (t.id !== resizingItem.id) return t;
+              const scaleRatio = resizingItem.origH > 0 ? (nextH / resizingItem.origH) : 1;
+              const newSize = Math.max(8, Math.min(144, Math.round(t.size * scaleRatio)));
+              return {
+                ...t,
+                x: nextX,
+                y: nextY,
+                width: nextW,
+                height: nextH,
+                size: newSize,
+              };
+            })
           );
         } else if (resizingItem.type === 'hyperlink') {
           setHyperlinks((prev) =>
@@ -4822,15 +4929,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     const onPointerUp = () => {
       if (draggingItem) {
-        pushSnapshot({ shapes, tables, imageOverlays, textOverlays });
+        pushSnapshot({ shapes, tables, imageOverlays, textOverlays, modifiedTexts });
         setDraggingItem(null);
       }
       if (resizingItem) {
-        pushSnapshot({ shapes, tables, imageOverlays, textOverlays });
+        pushSnapshot({ shapes, tables, imageOverlays, textOverlays, modifiedTexts });
         setResizingItem(null);
       }
       if (rotatingItem) {
-        pushSnapshot({ shapes, tables, imageOverlays, textOverlays });
+        pushSnapshot({ shapes, tables, imageOverlays, textOverlays, modifiedTexts });
         setRotatingItem(null);
       }
       if (resizingCol || resizingRow) {
@@ -5381,24 +5488,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
     };
 
-    let wheelTimeout: any = null;
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.08 : -0.08;
-        const next = Math.min(4.0, Math.max(0.25, Number((zoomScaleRef.current + delta).toFixed(2))));
-        const visualRatio = next / zoomScaleRef.current;
-        if (pagesContainerRef.current) {
-          pagesContainerRef.current.style.transform = `scale(${visualRatio})`;
-          pagesContainerRef.current.style.transformOrigin = '50% 0';
-        }
-        if (wheelTimeout) clearTimeout(wheelTimeout);
-        wheelTimeout = setTimeout(() => {
-          if (pagesContainerRef.current) {
-            pagesContainerRef.current.style.transform = 'none';
-          }
-          setZoomScale(next);
-        }, 120);
+        const factor = e.deltaY < 0 ? 1.12 : 0.89;
+        const next = Math.min(4.0, Math.max(0.25, Number((zoomScaleRef.current * factor).toFixed(2))));
+        zoomAtPoint(next, e.clientX, e.clientY);
       }
       // Native continuous scrolling operates freely without wheel interception
     };
@@ -5415,9 +5510,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       el.removeEventListener('touchend', onTouchEnd);
       el.removeEventListener('touchcancel', onTouchEnd);
       el.removeEventListener('wheel', onWheel);
-      if (wheelTimeout) clearTimeout(wheelTimeout);
     };
-  }, []);
+  }, [zoomAtPoint]);
 
   // Desktop Global Keyboard Shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+E, Ctrl+L, Ctrl+R, Ctrl+Z, Ctrl+Y, Ctrl+X, Ctrl+S, Ctrl+P)
   useEffect(() => {
@@ -5721,6 +5815,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
 
       const hasSelectedItem = Boolean(
+        multiSelectedIds.length > 0 ||
         selectedStrokeId || selectedTableRange || selectedTableCell || selectedOverlayId || selectedTextItemId || selectedShapeId || selectedTableId || selectedBorderPage !== null
       );
 
@@ -5739,6 +5834,38 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               return next;
             });
             setSelectedStrokeId(null);
+            return;
+          }
+
+          // 0.2 If multiple items are selected via Ctrl+click, delete all of them
+          if (multiSelectedIds.length > 0) {
+            const idsToDelete = new Set(multiSelectedIds);
+            setTextOverlays((prev) => prev.filter((t) => !idsToDelete.has(t.id)));
+            setImageOverlays((prev) =>
+              prev.map((i) =>
+                idsToDelete.has(i.id) ? (i.isExtracted ? { ...i, isDeleted: true, isModified: true } : null) : i
+              ).filter(Boolean) as ImageOverlay[]
+            );
+            setShapes((prev) => prev.filter((s) => !idsToDelete.has(s.id)));
+            setTables((prev) => prev.filter((t) => !idsToDelete.has(t.id)));
+            setHyperlinks((prev) => prev.filter((h) => !idsToDelete.has(h.id)));
+            setModifiedTexts((prev) => {
+              const next = { ...prev };
+              for (const id of idsToDelete) {
+                const item = prev[id] || detectedTextItems.find((t) => t.id === id);
+                if (item) {
+                  next[id] = { ...item, currentText: '', isDeleted: true, isModified: true };
+                }
+              }
+              return next;
+            });
+            pushSnapshot({ textOverlays, imageOverlays, shapes, tables, hyperlinks, modifiedTexts });
+            setMultiSelectedIds([]);
+            setSelectedOverlayId(null);
+            setSelectedShapeId(null);
+            setSelectedTableId(null);
+            setSelectedTableCell(null);
+            setSelectedTextItemId(null);
             return;
           }
 
@@ -5904,7 +6031,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
           // 5. If document text item is selected
           if (selectedTextItemId) {
-            updateActiveTextItemProps({ currentText: '', isModified: true });
+            setModifiedTexts((prev) => {
+              const item = prev[selectedTextItemId] || detectedTextItems.find((t) => t.id === selectedTextItemId);
+              if (!item) return prev;
+              return {
+                ...prev,
+                [selectedTextItemId]: {
+                  ...item,
+                  currentText: '',
+                  isDeleted: true,
+                  isModified: true,
+                },
+              };
+            });
+            setSelectedTextItemId(null);
+            pushSnapshot({ modifiedTexts });
             return;
           }
 
@@ -6028,6 +6169,34 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         // Element nudging (Arrow keys) or resizing (Shift + Arrow keys)
         const step = isCtrlOrMeta ? 10 : 1;
         if (e.shiftKey) {
+          // If a text item is selected and Up/Down is pressed, continuously expand selection of text lines
+          if (
+            (selectedTextItemId || multiSelectedIds.some((id) => detectedTextItems.some((t) => t.id === id))) &&
+            (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+          ) {
+            e.preventDefault();
+            const pageTexts = detectedTextItems
+              .filter((t) => (t.pageIndex === (currentPage - 1)))
+              .sort((a, b) => b.y - a.y || a.x - b.x); // top-to-bottom visual order (higher PDF y is higher on page)
+            
+            const activeId = selectedTextItemId || multiSelectedIds[multiSelectedIds.length - 1];
+            const currentIndex = pageTexts.findIndex((t) => t.id === activeId);
+            if (currentIndex !== -1) {
+              const targetIndex = e.key === 'ArrowDown' ? Math.min(pageTexts.length - 1, currentIndex + 1) : Math.max(0, currentIndex - 1);
+              const targetItem = pageTexts[targetIndex];
+              if (targetItem) {
+                setMultiSelectedIds((prev) => {
+                  const s = new Set(prev);
+                  if (activeId) s.add(activeId);
+                  s.add(targetItem.id);
+                  return Array.from(s);
+                });
+                setSelectedTextItemId(targetItem.id);
+              }
+            }
+            return;
+          }
+
           // Resize element
           e.preventDefault();
           const dW = (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0);
@@ -6038,6 +6207,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             setTables((prev) => prev.map((t) => t.id === selectedTableId ? { ...t, width: Math.max(20, t.width + dW), height: Math.max(20, t.height + dH) } : t));
           } else if (selectedOverlayId) {
             setImageOverlays((prev) => prev.map((i) => i.id === selectedOverlayId ? { ...i, width: Math.max(10, i.width + dW), height: Math.max(10, i.height + dH) } : i));
+            setTextOverlays((prev) => prev.map((t) => t.id === selectedOverlayId ? { ...t, width: Math.max(10, (t.width || 100) + dW), height: Math.max(10, (t.height || 30) + dH) } : t));
           } else if (selectedTextItemId) {
             setModifiedTexts((prev) => {
               const item = prev[selectedTextItemId] || detectedTextItems.find((t) => t.id === selectedTextItemId);
@@ -6055,33 +6225,38 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           }
           return;
         } else {
-          // Nudge element position
+          // Nudge element position (moves all multi-selected elements together, or active single item)
+          e.preventDefault();
           const dX = (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0);
           const dY = (e.key === 'ArrowDown' ? -step : e.key === 'ArrowUp' ? step : 0);
-          if (selectedShapeId) {
-            e.preventDefault();
-            setShapes((prev) => prev.map((s) => s.id === selectedShapeId ? { ...s, x: s.x + dX, y: s.y + dY } : s));
-          } else if (selectedTableId) {
-            e.preventDefault();
-            setTables((prev) => prev.map((t) => t.id === selectedTableId ? { ...t, x: t.x + dX, y: t.y + dY } : t));
-          } else if (selectedOverlayId) {
-            e.preventDefault();
-            setImageOverlays((prev) => prev.map((i) => i.id === selectedOverlayId ? { ...i, x: i.x + dX, y: i.y + dY } : i));
-            setTextOverlays((prev) => prev.map((t) => t.id === selectedOverlayId ? { ...t, x: t.x + dX, y: t.y + dY } : t));
-          } else if (selectedTextItemId) {
-            e.preventDefault();
+
+          const targets = new Set<string>(multiSelectedIds);
+          if (selectedShapeId) targets.add(selectedShapeId);
+          if (selectedTableId) targets.add(selectedTableId);
+          if (selectedOverlayId) targets.add(selectedOverlayId);
+          if (selectedTextItemId) targets.add(selectedTextItemId);
+
+          if (targets.size > 0) {
+            setShapes((prev) => prev.map((s) => targets.has(s.id) ? { ...s, x: s.x + dX, y: s.y + dY } : s));
+            setTables((prev) => prev.map((t) => targets.has(t.id) ? { ...t, x: t.x + dX, y: t.y + dY } : t));
+            setImageOverlays((prev) => prev.map((i) => targets.has(i.id) ? { ...i, x: i.x + dX, y: i.y + dY } : i));
+            setTextOverlays((prev) => prev.map((t) => targets.has(t.id) ? { ...t, x: t.x + dX, y: t.y + dY } : t));
             setModifiedTexts((prev) => {
-              const item = prev[selectedTextItemId] || detectedTextItems.find((t) => t.id === selectedTextItemId);
-              if (!item) return prev;
-              return {
-                ...prev,
-                [selectedTextItemId]: {
-                  ...item,
-                  x: (item.x || 0) + dX,
-                  y: (item.y || 0) + dY,
-                  isModified: true,
-                },
-              };
+              let updated = false;
+              const next = { ...prev };
+              targets.forEach((id) => {
+                const item = next[id] || detectedTextItems.find((t) => t.id === id);
+                if (item) {
+                  next[id] = {
+                    ...item,
+                    x: (item.x || 0) + dX,
+                    y: (item.y || 0) + dY,
+                    isModified: true,
+                  };
+                  updated = true;
+                }
+              });
+              return updated ? next : prev;
             });
           }
         }
@@ -6540,11 +6715,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </button>
 
             {/* Direct Save Button (Ctrl+S) & Save As Dropdown (Ctrl+Shift+S) */}
-            <div className="flex items-center">
+            <div className="relative inline-flex items-stretch rounded-lg shadow-sm border border-indigo-500/40 dark:border-indigo-400/30 overflow-visible h-8" ref={saveDropdownRef}>
               <button
-                onClick={() => handleSave({ isSaveAs: false })}
+                type="button"
+                onClick={() => {
+                  setShowSaveDropdown(false);
+                  handleSave({ isSaveAs: false });
+                }}
                 disabled={isSaving}
-                className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-l-lg text-xs font-semibold text-white transition-all shadow-sm active:scale-95 ${
+                className={`h-full flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-l-lg text-xs font-semibold text-white transition-all active:scale-95 ${
                   saveSuccess ? 'bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-500'
                 }`}
                 title="Save (Ctrl+S) - Overwrites directly in-place without prompt"
@@ -6560,13 +6739,47 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               </button>
               <button
                 type="button"
-                onClick={() => handleSave({ isSaveAs: true })}
+                onClick={() => setShowSaveDropdown((prev) => !prev)}
                 disabled={isSaving}
-                className="px-1.5 py-1.5 rounded-r-lg border-l border-indigo-400/40 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-sm"
-                title="Save As... (Ctrl+Shift+S)"
+                className="h-full px-2 py-1.5 rounded-r-lg border-l border-indigo-400/40 text-xs font-semibold text-indigo-100 bg-indigo-700 hover:bg-indigo-800 dark:bg-indigo-800 dark:hover:bg-indigo-700 transition-colors shadow-sm flex items-center justify-center cursor-pointer"
+                title="Save Options (Save / Save As...)"
               >
-                <ChevronDown className="w-3.5 h-3.5" />
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showSaveDropdown ? 'rotate-180' : ''}`} />
               </button>
+
+              {/* Dropdown Menu */}
+              {showSaveDropdown && (
+                <div className="absolute right-0 top-full mt-1.5 w-52 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSaveDropdown(false);
+                      handleSave({ isSaveAs: false });
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:text-indigo-600 dark:hover:text-indigo-400 text-left font-medium transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Save className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      Save
+                    </span>
+                    <kbd className="text-[10px] font-mono text-zinc-400 bg-zinc-100 dark:bg-zinc-700/50 px-1 py-0.5 rounded">Ctrl+S</kbd>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSaveDropdown(false);
+                      handleSave({ isSaveAs: true });
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 text-xs text-zinc-800 dark:text-zinc-200 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:text-indigo-600 dark:hover:text-indigo-400 text-left font-medium transition-colors"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Download className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                      Save As...
+                    </span>
+                    <kbd className="text-[10px] font-mono text-zinc-400 bg-zinc-100 dark:bg-zinc-700/50 px-1 py-0.5 rounded">Ctrl+Shift+S</kbd>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -9974,16 +10187,68 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     </div>
                   )}
 
+                  {/* White-out background cover for moved or deleted original text items so no ghost/duplicate text remains visible on canvas */}
+                  {isCurrentPage &&
+                    detectedTextItems
+                      .filter((item) => {
+                        const cur = modifiedTexts[item.id];
+                        const isDraggingThis = draggingItem && draggingItem.type === 'text-item' && (draggingItem.id === item.id || (draggingItem.multiSnapshot && item.id in draggingItem.multiSnapshot));
+                        if (isDraggingThis) return true;
+                        if (!cur) return false;
+                        const isMoved = (cur.x !== undefined && Math.abs(cur.x - item.x) > 0.5) ||
+                                        (cur.y !== undefined && Math.abs(cur.y - item.y) > 0.5) ||
+                                        (cur.pageIndex !== undefined && cur.pageIndex !== item.pageIndex);
+                        return cur.isDeleted || isMoved;
+                      })
+                      .map((item) => {
+                        const scale = zoomScale;
+                        const cluster = textItemLineClusters.get(item.id);
+                        const baselineY = cluster ? cluster.baselineCssY : (viewportDims.height - item.y * scale);
+                        const origX = (item.origX !== undefined ? item.origX : item.x);
+                        const origW = (item.origWidth !== undefined ? item.origWidth : item.width);
+                        const origH = (item.origHeight !== undefined ? item.origHeight : (cluster ? (cluster.boxHeight / scale) : (item.fontSize || 12) * 1.15));
+
+                        const boxX = origX * scale - 2;
+                        const defaultBoxTop = cluster ? cluster.boxTop : (baselineY - (item.fontSize || 12) * scale * 0.82);
+                        const boxY = defaultBoxTop - 1;
+                        const boxW = Math.max(10, origW * scale + 4);
+                        const boxH = Math.max(14, origH * scale + 2);
+
+                        const targetPageCanvas = pageCanvasesRef.current.get(pageNum) || canvasRef.current;
+                        const sampledBg = sampleCanvasBgColor(targetPageCanvas, boxX, boxY, boxW, boxH, item.bgColorHex);
+                        const effectiveBgHex = item.bgColorHex || sampledBg.hex || '#ffffff';
+
+                        return (
+                          <div
+                            key={`orig_cover_${item.id}`}
+                            style={{
+                              position: 'absolute',
+                              left: `${boxX}px`,
+                              top: `${boxY}px`,
+                              width: `${boxW}px`,
+                              height: `${boxH}px`,
+                              backgroundColor: effectiveBgHex,
+                              zIndex: 15,
+                              pointerEvents: 'none',
+                            }}
+                          />
+                        );
+                      })}
+
                   {/* In-Place Interactive Existing Text Bounding Boxes (Always render modified items across all tabs/tools; render all items in edit-text mode) */}
                   {isCurrentPage &&
                     detectedTextItems
-                      .filter((item) => activeTool === 'edit-text' || Boolean(modifiedTexts[item.id]?.isModified))
+                      .filter((item) => {
+                        const cur = modifiedTexts[item.id];
+                        if (cur?.isDeleted) return false;
+                        return activeTool === 'edit-text' || Boolean(cur?.isModified);
+                      })
                       .map((item) => {
                         const currentItem = modifiedTexts[item.id] || item;
                         const currentTextVal = currentItem.currentText ?? item.originalText;
                         const isItemModified = currentItem.isModified;
                         const isEditing = activeEditingId === item.id;
-                        const isSelected = selectedTextItemId === item.id;
+                        const isSelected = selectedTextItemId === item.id || multiSelectedIds.includes(item.id);
 
                         const itemFontFamily = currentItem.fontFamily ?? item.fontFamily ?? 'Calibri';
                         const itemFontSize = currentItem.fontSize ?? item.fontSize ?? 12;
@@ -10020,13 +10285,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     key={item.id}
                     onClick={(e) => {
                       e.stopPropagation();
+                      handleItemSelect(item.id, 'text', e);
                       setActiveEditingId(item.id);
-                      setSelectedTextItemId(item.id);
-                      setSelectedOverlayId(null);
-                      setSelectedShapeId(null);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setMultiSelectedIds([item.id]);
                       if (!/android/i.test(navigator.userAgent)) {
                         setShowPropertiesPanel(true);
                       }
@@ -10113,6 +10373,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           pushSnapshot({ modifiedTexts });
                         }}
                         onKeyDown={(e) => {
+                          if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+                            e.stopPropagation();
+                          }
                           if (e.key === 'Enter') {
                             setActiveEditingId(null);
                             pushSnapshot({ modifiedTexts });
@@ -10272,6 +10535,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           );
                         }}
                         onKeyDown={(e) => {
+                          if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+                            e.stopPropagation();
+                          }
                           if (e.key === 'Enter' && !e.shiftKey) {
                             e.preventDefault();
                             if (!t.text.trim()) {
@@ -10383,6 +10649,75 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     title="Double-click to edit text • Drag to move"
                   >
                     {t.text}
+                    {isSelected && (
+                      <>
+                        {renderResizeHandles(t.id, 'overlay', t.x, t.y, t.width || 120, t.height || (t.size * 1.35))}
+                        {/* Quick Action Floating Badge: Prev Page, Next Page, Delete, Edit */}
+                        <div
+                          className={`absolute ${
+                            /android/i.test(navigator.userAgent) ? '-bottom-8' : '-top-7'
+                          } left-1/2 -translate-x-1/2 flex items-center gap-1 bg-zinc-900/90 text-white rounded-md px-1.5 py-0.5 shadow-md text-[10px] z-50 whitespace-nowrap`}
+                        >
+                          {pageNum > 1 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTextOverlays((prev) =>
+                                  prev.map((item) => (item.id === t.id ? { ...item, pageIndex: item.pageIndex - 1 } : item))
+                                );
+                                pushSnapshot({ textOverlays });
+                                setCurrentPage(pageNum - 1);
+                              }}
+                              className="px-1.5 py-0.5 rounded hover:bg-zinc-700 font-medium"
+                              title="Move to Previous Page"
+                            >
+                              ← Prev
+                            </button>
+                          )}
+                          {pageNum < totalPages && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setTextOverlays((prev) =>
+                                  prev.map((item) => (item.id === t.id ? { ...item, pageIndex: item.pageIndex + 1 } : item))
+                                );
+                                pushSnapshot({ textOverlays });
+                                setCurrentPage(pageNum + 1);
+                              }}
+                              className="px-1.5 py-0.5 rounded hover:bg-zinc-700 font-medium"
+                              title="Move to Next Page"
+                            >
+                              Next →
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedOverlayId(t.id);
+                              setEditingOverlayId(t.id);
+                            }}
+                            className="px-1.5 py-0.5 rounded hover:bg-zinc-700 font-medium text-emerald-400"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTextOverlays((prev) => prev.filter((item) => item.id !== t.id));
+                              setSelectedOverlayId(null);
+                              pushSnapshot({ textOverlays });
+                            }}
+                            className="px-1.5 py-0.5 rounded hover:bg-red-600/80 font-medium text-red-300 hover:text-white"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 );
               })}
@@ -10429,14 +10764,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         if (e.button !== 0) return;
                         e.stopPropagation();
                         handleItemSelect(l.id, 'hyperlink', e);
-                        setDraggingItem({
-                          id: l.id,
-                          type: 'hyperlink',
-                          startX: e.clientX,
-                          startY: e.clientY,
-                          origX: l.x,
-                          origY: l.y,
-                        });
+                        startDraggingItem(l.id, 'hyperlink', e.clientX, e.clientY, l.x, l.y);
                       }
                     }}
                     onTouchStart={(e) => {
@@ -10444,14 +10772,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         e.stopPropagation();
                         handleItemSelect(l.id, 'hyperlink', e);
                         const touch = e.touches[0];
-                        setDraggingItem({
-                          id: l.id,
-                          type: 'hyperlink',
-                          startX: touch.clientX,
-                          startY: touch.clientY,
-                          origX: l.x,
-                          origY: l.y,
-                        });
+                        startDraggingItem(l.id, 'hyperlink', touch.clientX, touch.clientY, l.x, l.y);
                       }
                     }}
                     style={{
@@ -10603,7 +10924,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssY = viewportDims.height - img.y * scale - img.height * scale;
                 const cssW = img.width * scale;
                 const cssH = img.height * scale;
-                const isSelected = selectedOverlayId === img.id;
+                const isSelected = selectedOverlayId === img.id || multiSelectedIds.includes(img.id);
                 const isCropping = cropImageId === img.id;
                 const url = getCachedBlobUrl(img.imageData);
                 const imgFilters = [
@@ -10630,26 +10951,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     key={img.id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedOverlayId(img.id);
-                      setSelectedShapeId(null);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setActiveEditingId(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([img.id]);
-                      if (!/android/i.test(navigator.userAgent)) {
-                        setShowPropertiesPanel(true);
-                      }
+                      handleItemSelect(img.id, 'image', e);
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      setSelectedOverlayId(img.id);
-                      setSelectedShapeId(null);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([img.id]);
+                      handleItemSelect(img.id, 'image', e);
                       setElementContextMenu({
                         x: e.clientX,
                         y: e.clientY,
@@ -10660,39 +10967,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     onMouseDown={(e) => {
                       if (isCropping || e.button !== 0) return;
                       e.stopPropagation();
-                      setSelectedOverlayId(img.id);
-                      setSelectedShapeId(null);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([img.id]);
-                      setDraggingItem({
-                        id: img.id,
-                        type: 'image',
-                        startX: e.clientX,
-                        startY: e.clientY,
-                        origX: img.x,
-                        origY: img.y,
-                      });
+                      handleItemSelect(img.id, 'image', e);
+                      startDraggingItem(img.id, 'image', e.clientX, e.clientY, img.x, img.y);
                     }}
                     onTouchStart={(e) => {
                       if (isCropping || e.touches.length !== 1) return;
                       e.stopPropagation();
-                      setSelectedOverlayId(img.id);
-                      setSelectedShapeId(null);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([img.id]);
+                      handleItemSelect(img.id, 'image', e);
                       const touch = e.touches[0];
-                      setDraggingItem({
-                        id: img.id,
-                        type: 'image',
-                        startX: touch.clientX,
-                        startY: touch.clientY,
-                        origX: img.x,
-                        origY: img.y,
-                      });
+                      startDraggingItem(img.id, 'image', touch.clientX, touch.clientY, img.x, img.y);
                     }}
                     style={{
                       left: `${cssX}px`,
@@ -10881,33 +11164,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssY = viewportDims.height - shape.y * scale - shape.height * scale;
                 const cssW = shape.width * scale;
                 const cssH = shape.height * scale;
-                const isSelected = selectedShapeId === shape.id;
+                const isSelected = selectedShapeId === shape.id || multiSelectedIds.includes(shape.id);
 
                 return (
                   <div
                     key={shape.id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedShapeId(shape.id);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedOverlayId(null);
-                      setActiveEditingId(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([shape.id]);
-                      if (!/android/i.test(navigator.userAgent)) {
-                        setShowPropertiesPanel(true);
-                      }
+                      handleItemSelect(shape.id, 'shape', e);
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      setSelectedShapeId(shape.id);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedOverlayId(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([shape.id]);
+                      handleItemSelect(shape.id, 'shape', e);
                       setElementContextMenu({
                         x: e.clientX,
                         y: e.clientY,
@@ -10918,39 +11187,15 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     onMouseDown={(e) => {
                       if (e.button !== 0) return;
                       e.stopPropagation();
-                      setSelectedShapeId(shape.id);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedOverlayId(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([shape.id]);
-                      setDraggingItem({
-                        id: shape.id,
-                        type: 'shape',
-                        startX: e.clientX,
-                        startY: e.clientY,
-                        origX: shape.x,
-                        origY: shape.y,
-                      });
+                      handleItemSelect(shape.id, 'shape', e);
+                      startDraggingItem(shape.id, 'shape', e.clientX, e.clientY, shape.x, shape.y);
                     }}
                     onTouchStart={(e) => {
                       if (e.touches.length !== 1) return;
                       e.stopPropagation();
-                      setSelectedShapeId(shape.id);
-                      setSelectedTableId(null);
-                      setSelectedTableCell(null);
-                      setSelectedOverlayId(null);
-                      setSelectedTextItemId(null);
-                      setMultiSelectedIds([shape.id]);
+                      handleItemSelect(shape.id, 'shape', e);
                       const touch = e.touches[0];
-                      setDraggingItem({
-                        id: shape.id,
-                        type: 'shape',
-                        startX: touch.clientX,
-                        startY: touch.clientY,
-                        origX: shape.x,
-                        origY: shape.y,
-                      });
+                      startDraggingItem(shape.id, 'shape', touch.clientX, touch.clientY, shape.x, shape.y);
                     }}
                     style={{
                       left: `${cssX}px`,
@@ -11012,15 +11257,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       const target = e.target as HTMLElement;
                       if (target.tagName === 'INPUT' || target.getAttribute('data-resizer') === 'true') return;
                       e.stopPropagation();
-                      handleItemSelect(tbl.id, 'table', e);
-                      setDraggingItem({
-                        id: tbl.id,
-                        type: 'table',
-                        startX: e.clientX,
-                        startY: e.clientY,
-                        origX: tbl.x,
-                        origY: tbl.y,
-                      });
+                      startDraggingItem(tbl.id, 'table', e.clientX, e.clientY, tbl.x, tbl.y);
                     }}
                     onTouchStart={(e) => {
                       if (e.touches.length !== 1) return;
@@ -11029,14 +11266,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       e.stopPropagation();
                       handleItemSelect(tbl.id, 'table', e);
                       const touch = e.touches[0];
-                      setDraggingItem({
-                        id: tbl.id,
-                        type: 'table',
-                        startX: touch.clientX,
-                        startY: touch.clientY,
-                        origX: tbl.x,
-                        origY: tbl.y,
-                      });
+                      startDraggingItem(tbl.id, 'table', touch.clientX, touch.clientY, tbl.x, tbl.y);
                     }}
                     style={{
                       left: `${cssX}px`,
@@ -14641,7 +14871,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </button>
 
           <button
-            onClick={() => setZoomScale((prev) => Math.max(0.25, Number((prev - 0.15).toFixed(2))))}
+            onClick={() => zoomAtPoint(Math.max(0.25, Number((zoomScaleRef.current - 0.15).toFixed(2))))}
             className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
             title="Zoom Out"
           >
@@ -14655,19 +14885,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             step="0.02"
             value={zoomScale}
             onChange={(e) => {
-              const next = parseFloat(e.target.value);
-              const visualRatio = next / zoomScaleRef.current;
-              if (pagesContainerRef.current) {
-                pagesContainerRef.current.style.transform = `scale(${visualRatio})`;
-                pagesContainerRef.current.style.transformOrigin = '50% 0';
-              }
-              if (sliderZoomTimeoutRef.current) clearTimeout(sliderZoomTimeoutRef.current);
-              sliderZoomTimeoutRef.current = setTimeout(() => {
-                if (pagesContainerRef.current) {
-                  pagesContainerRef.current.style.transform = 'none';
-                }
-                setZoomScale(next);
-              }, 100);
+              zoomAtPoint(parseFloat(e.target.value));
             }}
             className="w-20 sm:w-32 accent-emerald-600 h-1.5 cursor-pointer flex-shrink-0"
           />
@@ -14677,7 +14895,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           </span>
 
           <button
-            onClick={() => setZoomScale((prev) => Math.min(4.0, Number((prev + 0.15).toFixed(2))))}
+            onClick={() => zoomAtPoint(Math.min(4.0, Number((zoomScaleRef.current + 0.15).toFixed(2))))}
             className="p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded transition-colors flex-shrink-0"
             title="Zoom In"
           >

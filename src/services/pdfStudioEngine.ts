@@ -20,6 +20,8 @@ export interface TextOverlay {
   y: number; // PDF points (from bottom-left)
   size: number;
   color: string; // hex or rgb
+  width?: number;
+  height?: number;
   fontFamily?: 'Helvetica' | 'TimesRoman' | 'Courier' | string;
   isBold?: boolean;
   isItalic?: boolean;
@@ -81,6 +83,12 @@ export interface ExistingTextItem {
   y: number; // PDF points (baseline)
   width: number; // PDF points
   height: number; // PDF points
+  origX?: number;
+  origY?: number;
+  origWidth?: number;
+  origHeight?: number;
+  origPageIndex?: number;
+  isDeleted?: boolean;
   fontSize: number;
   fontFamily?: 'Helvetica' | 'TimesRoman' | 'Courier' | string;
   isBold?: boolean;
@@ -552,77 +560,89 @@ export class PdfStudioEngine {
     // 0. Apply Existing Text Replacements (erases original bounding box with sampled cover, redraws matching font, weight, style & alignment)
     if (payload.textReplacements && payload.textReplacements.length > 0) {
       for (const rep of payload.textReplacements) {
-        if (!rep.isModified && rep.currentText === rep.originalText) continue;
-        if (rep.pageIndex >= 0 && rep.pageIndex < doc.getPageCount()) {
-          const page = doc.getPage(rep.pageIndex);
-          const chosenFont = selectFont(rep.fontFamily, rep.isBold, rep.isItalic);
-          const size = rep.fontSize || 12;
+        if (!rep.isModified && rep.currentText === rep.originalText && !rep.isDeleted) continue;
 
-          // Erase old text bounding box covering ascenders and descenders completely!
-          const descenderPt = Math.max(2.5, size * 0.32);
-          const ascenderPt = Math.max(1.5, size * 0.15);
-          const eraseY = Math.max(0, rep.y - descenderPt);
-          const eraseHeight = Math.max(rep.height + descenderPt + ascenderPt, size * 1.35);
-          const eraseWidth = rep.width + 4;
+        const origPageIdx = rep.origPageIndex !== undefined ? rep.origPageIndex : rep.pageIndex;
+        const origX = rep.origX !== undefined ? rep.origX : rep.x;
+        const origY = rep.origY !== undefined ? rep.origY : rep.y;
+        const origW = rep.origWidth !== undefined ? rep.origWidth : rep.width;
+        const origH = rep.origHeight !== undefined ? rep.origHeight : rep.height;
 
-          let bg: { r: number; g: number; b: number } = { r: 1, g: 1, b: 1 };
-          if (rep.bgColorHex && /^#[0-9a-fA-F]{6}$/.test(rep.bgColorHex)) {
-            const r = parseInt(rep.bgColorHex.slice(1, 3), 16) / 255;
-            const g = parseInt(rep.bgColorHex.slice(3, 5), 16) / 255;
-            const b = parseInt(rep.bgColorHex.slice(5, 7), 16) / 255;
-            bg = { r, g, b };
-          } else if (rep.backgroundColor) {
-            bg = rep.backgroundColor;
-          }
+        let bg: { r: number; g: number; b: number } = { r: 1, g: 1, b: 1 };
+        if (rep.bgColorHex && /^#[0-9a-fA-F]{6}$/.test(rep.bgColorHex)) {
+          const r = parseInt(rep.bgColorHex.slice(1, 3), 16) / 255;
+          const g = parseInt(rep.bgColorHex.slice(3, 5), 16) / 255;
+          const b = parseInt(rep.bgColorHex.slice(5, 7), 16) / 255;
+          bg = { r, g, b };
+        } else if (rep.backgroundColor) {
+          bg = rep.backgroundColor;
+        }
 
-          // Only snap to 1.0 if strictly neutral and practically pure white (>0.985 with <0.01 delta)
-          if (
-            bg.r >= 0.985 &&
-            bg.g >= 0.985 &&
-            bg.b >= 0.985 &&
-            Math.abs(bg.r - bg.g) <= 0.01 &&
-            Math.abs(bg.r - bg.b) <= 0.01
-          ) {
-            bg = { r: 1, g: 1, b: 1 };
-          }
+        if (
+          bg.r >= 0.985 &&
+          bg.g >= 0.985 &&
+          bg.b >= 0.985 &&
+          Math.abs(bg.r - bg.g) <= 0.01 &&
+          Math.abs(bg.r - bg.b) <= 0.01
+        ) {
+          bg = { r: 1, g: 1, b: 1 };
+        }
 
-          page.drawRectangle({
-            x: Math.max(0, rep.x - 2),
+        const size = rep.fontSize || 12;
+        const descenderPt = Math.max(2.5, size * 0.32);
+        const ascenderPt = Math.max(1.5, size * 0.15);
+
+        // Erase the ORIGINAL bounding box on the original page so moving never leaves a ghost copy!
+        if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+          const origPage = doc.getPage(origPageIdx);
+          const eraseY = Math.max(0, origY - descenderPt);
+          const eraseHeight = Math.max(origH + descenderPt + ascenderPt, size * 1.35);
+          const eraseWidth = origW + 4;
+
+          origPage.drawRectangle({
+            x: Math.max(0, origX - 2),
             y: eraseY,
             width: eraseWidth,
             height: eraseHeight,
             color: rgb(bg.r, bg.g, bg.b),
           });
+        }
 
-          // Draw replacement text matching original coordinates, font, size, weight & alignment
-          if (rep.currentText.trim().length > 0) {
-            const textColor = rep.color ? this.parseHexColor(rep.color) : rgb(0.05, 0.05, 0.05);
-            let posX = rep.x;
-            if (rep.alignment === 'center' || rep.alignment === 'right') {
-              const measuredWidth = chosenFont.widthOfTextAtSize(rep.currentText, size);
-              if (rep.alignment === 'center') posX += Math.max(0, (rep.width - measuredWidth) / 2);
-              else if (rep.alignment === 'right') posX += Math.max(0, rep.width - measuredWidth);
-            }
+        // If marked deleted or text has been cleared, don't draw anything
+        if (rep.isDeleted || rep.currentText.trim().length === 0) {
+          continue;
+        }
 
-            page.drawText(rep.currentText, {
-              x: posX,
-              y: rep.y,
-              size,
-              font: chosenFont,
+        // Draw replacement text matching coordinates, font, size, weight & alignment
+        if (rep.pageIndex >= 0 && rep.pageIndex < doc.getPageCount()) {
+          const page = doc.getPage(rep.pageIndex);
+          const chosenFont = selectFont(rep.fontFamily, rep.isBold, rep.isItalic);
+          const textColor = rep.color ? this.parseHexColor(rep.color) : rgb(0.05, 0.05, 0.05);
+          let posX = rep.x;
+          if (rep.alignment === 'center' || rep.alignment === 'right') {
+            const measuredWidth = chosenFont.widthOfTextAtSize(rep.currentText, size);
+            if (rep.alignment === 'center') posX += Math.max(0, (rep.width - measuredWidth) / 2);
+            else if (rep.alignment === 'right') posX += Math.max(0, rep.width - measuredWidth);
+          }
+
+          page.drawText(rep.currentText, {
+            x: posX,
+            y: rep.y,
+            size,
+            font: chosenFont,
+            color: textColor,
+            rotate: rep.rotation ? degrees(rep.rotation) : undefined,
+          });
+
+          // Underline if enabled
+          if (rep.isUnderline) {
+            const textWidth = chosenFont.widthOfTextAtSize(rep.currentText, size);
+            page.drawLine({
+              start: { x: posX, y: rep.y - 1.5 },
+              end: { x: posX + textWidth, y: rep.y - 1.5 },
+              thickness: Math.max(0.75, size * 0.06),
               color: textColor,
-              rotate: rep.rotation ? degrees(rep.rotation) : undefined,
             });
-
-            // Underline if enabled
-            if (rep.isUnderline) {
-              const textWidth = chosenFont.widthOfTextAtSize(rep.currentText, size);
-              page.drawLine({
-                start: { x: posX, y: rep.y - 1.5 },
-                end: { x: posX + textWidth, y: rep.y - 1.5 },
-                thickness: Math.max(0.75, size * 0.06),
-                color: textColor,
-              });
-            }
           }
         }
       }
@@ -1641,6 +1661,12 @@ export class PdfStudioEngine {
           y,
           width,
           height,
+          origX: x,
+          origY: y,
+          origWidth: width,
+          origHeight: height,
+          origPageIndex: pageIndex,
+          isDeleted: false,
           fontSize,
           fontFamily,
           isBold,

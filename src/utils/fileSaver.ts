@@ -24,6 +24,9 @@ export function attachFilePath(file: File): File {
       const p = electronAPI.getPathForFile(file);
       if (p) {
         (file as any).path = p;
+        if (typeof electronAPI.lockFile === 'function') {
+          electronAPI.lockFile(p).catch(() => {});
+        }
       }
     }
   } catch (_) {}
