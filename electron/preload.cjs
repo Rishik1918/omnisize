@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   getInitialFile: () => ipcRenderer.invoke('get-initial-file'),
@@ -13,4 +13,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('request-app-close', handler);
   },
   confirmAppClose: () => ipcRenderer.send('confirm-app-close'),
+  getPathForFile: (file) => {
+    try {
+      if (webUtils && typeof webUtils.getPathForFile === 'function') {
+        return webUtils.getPathForFile(file);
+      }
+      return file.path || null;
+    } catch (e) {
+      return file.path || null;
+    }
+  },
+  saveFileDirect: (filePath, buffer) =>
+    ipcRenderer.invoke('save-file-direct', { filePath, buffer }),
+  saveFileDialog: (defaultName, buffer) =>
+    ipcRenderer.invoke('save-file-dialog', { defaultName, buffer }),
 });

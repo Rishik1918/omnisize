@@ -92,6 +92,9 @@ export default function App() {
             const ext = fileData.extension || fileData.name.split('.').pop() || '';
             const mimeType = ext === 'pdf' ? 'application/pdf' : fileData.mimeType || 'application/octet-stream';
             const file = new File([fileData.data], fileData.name, { type: mimeType });
+            if (fileData.path) {
+              (file as any).path = fileData.path;
+            }
             handleIncomingFile(file);
           }
         }).catch((err: any) => console.error('Error fetching initial desktop file:', err));
@@ -103,6 +106,9 @@ export default function App() {
             const ext = fileData.extension || fileData.name.split('.').pop() || '';
             const mimeType = ext === 'pdf' ? 'application/pdf' : fileData.mimeType || 'application/octet-stream';
             const file = new File([fileData.data], fileData.name, { type: mimeType });
+            if (fileData.path) {
+              (file as any).path = fileData.path;
+            }
             handleIncomingFile(file);
           }
         });

@@ -95,7 +95,7 @@ import {
   PdfSignatureEngine,
   PdfSignatureInfo
 } from '../../services/pdfSignatureEngine';
-import { saveFile } from '../../utils/fileSaver';
+import { saveFile, saveFileDirectlyOrPrompt } from '../../utils/fileSaver';
 import { getDocumentProxy } from 'unpdf';
 import { createPortal } from 'react-dom';
 import { PDFDocument } from 'pdf-lib';
@@ -1721,7 +1721,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
     if (!isDirty) return;
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
+      setHasUnsavedEdits(false);
+      (window as any).__hasUnsavedStudioEdits = false;
       if (activeTabId) {
         setTabs((prev) =>
           prev.map((t) =>
@@ -1767,6 +1769,33 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         hyperlinks,
         updatedAt: Date.now(),
       });
+
+      // Background silent auto-save to disk if running in Electron and path exists
+      try {
+        const electronAPI = (window as any).electronAPI;
+        const filePath = (file as any)?.path || (electronAPI?.getPathForFile ? electronAPI.getPathForFile(file) : null);
+        if (filePath && electronAPI?.saveFileDirect) {
+          const editedBlob = await PdfStudioEngine.applyEdits(file, {
+            rotations: pageRotations,
+            deletedPages,
+            insertedBlankPages,
+            textOverlays,
+            imageOverlays,
+            shapes,
+            tables,
+            textReplacements: Object.values(modifiedTexts),
+            hyperlinks,
+            pageBorders,
+            pageNumberConfig,
+            drawings,
+            watermarkConfig: watermarkConfig || undefined,
+          });
+          const buf = await editedBlob.arrayBuffer();
+          await electronAPI.saveFileDirect(filePath, buf);
+        }
+      } catch (autoErr) {
+        console.warn('Auto-save disk persistence note:', autoErr);
+      }
     }, 2000);
 
     return () => clearTimeout(timer);
@@ -2009,21 +2038,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [ocrLanguage, setOcrLanguage] = useState<string>('eng+hin');
   const pageOcrCache = useRef<Record<number, ExistingTextItem[]>>({});
 
-  // Check if document has unsaved edits
-  const hasUnsavedEdits =
-    Object.keys(modifiedTexts).length > 0 ||
-    textOverlays.length > 0 ||
-    imageOverlays.length > 0 ||
-    shapes.length > 0 ||
-    tables.length > 0 ||
-    hyperlinks.length > 0 ||
-    Object.keys(pageRotations).length > 0 ||
-    deletedPages.length > 0 ||
-    insertedBlankPages.length > 0 ||
-    Object.values(pageBorders).some((b) => b?.enabled) ||
-    pageNumberConfig.enabled ||
-    drawings.length > 0 ||
-    Boolean(watermarkConfig?.enabled);
+  // Check if document has unsaved edits (set true on any user modification, reset to false on save)
+  const [hasUnsavedEdits, setHasUnsavedEdits] = useState<boolean>(false);
 
   // Toggle Auto-Save
   const toggleAutoSave = () => {
@@ -2037,6 +2053,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Push snapshot into history
   const pushSnapshot = useCallback(
     (newSnapshot: Partial<EditorSnapshot>) => {
+      setHasUnsavedEdits(true);
+      (window as any).__hasUnsavedStudioEdits = true;
+      if (activeTabId) {
+        setTabs((prev) =>
+          prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t))
+        );
+      }
+
       const fullSnapshot: EditorSnapshot = {
         modifiedTexts: newSnapshot.modifiedTexts ?? modifiedTexts,
         textOverlays: newSnapshot.textOverlays ?? textOverlays,
@@ -2624,7 +2648,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   }, [currentPage, zoomScale, arrayBuffer, totalPages, pageRotations]);
 
   // Save PDF Document
-  const handleSave = async (): Promise<boolean> => {
+  // Save PDF Document (supports direct in-place overwrite without prompt, or Save As)
+  const handleSave = async (options?: { isSaveAs?: boolean }): Promise<boolean> => {
     if (!file) return false;
     try {
       setIsSaving(true);
@@ -2646,10 +2671,25 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         watermarkConfig: watermarkConfig || undefined,
       });
 
-      const baseName = file.name.replace(/\.pdf$/i, '');
-      await saveFile(editedBlob, `${baseName}_edited.pdf`);
+      const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+      const existingPath =
+        (file as any)?.path ||
+        (electronAPI && typeof electronAPI.getPathForFile === 'function' ? electronAPI.getPathForFile(file) : null);
+
+      const saveRes = await saveFileDirectlyOrPrompt(editedBlob, file.name, {
+        existingPath: options?.isSaveAs ? null : existingPath,
+        isSaveAs: options?.isSaveAs,
+        fileHandle: (file as any)?.handle,
+      });
+
+      if (!saveRes.success && options?.isSaveAs) {
+        return false;
+      }
+
       await clearActivePdfSession();
       setSaveSuccess(true);
+      setHasUnsavedEdits(false);
+      (window as any).__hasUnsavedStudioEdits = false;
       setTabs((prev) =>
         prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: false } : t))
       );
@@ -2748,6 +2788,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         offsetY: 24,
       }
     );
+    setHasUnsavedEdits(Boolean(target.hasUnsavedEdits));
     setShowInitialPrompt(false);
   };
 
@@ -2905,24 +2946,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     }
   };
 
-  // Close Request handler (checks for multiple tabs, unsaved edits & autosave)
+  // Close Request handler (checks for unsaved edits & autosave)
   const handleRequestClose = async () => {
     if (autoSaveEnabled && hasUnsavedEdits) {
       await handleSave();
-      if (tabs.length > 1) {
-        setShowMultiTabCloseModal(true);
-      } else {
-        onClose();
-      }
+      onClose();
       return;
     }
 
-    if (tabs.length > 1) {
-      setShowMultiTabCloseModal(true);
-      return;
-    }
-
-    if (hasUnsavedEdits) {
+    const anyUnsaved = hasUnsavedEdits || tabs.some((t) => t.hasUnsavedEdits);
+    if (anyUnsaved) {
       setShowCloseConfirmModal(true);
       return;
     }
@@ -3831,9 +3864,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const handleApplyLink = (displayTxt: string, targetUrl: string) => {
     setShowLinkModal(false);
     if (!targetUrl || !targetUrl.trim()) return;
-    const cleanUrl = targetUrl.trim().startsWith('http://') || targetUrl.trim().startsWith('https://')
-      ? targetUrl.trim()
-      : `https://${targetUrl.trim()}`;
+    let raw = targetUrl.trim();
+    // Auto-correct duplicate http(s) prefixes if user pasted full URL into prefilled field
+    raw = raw.replace(/^(https?:\/\/)+(https?:\/\/)+/i, '$2');
+    const cleanUrl = raw.startsWith('http://') || raw.startsWith('https://')
+      ? raw
+      : `https://${raw}`;
     const pageIndex = currentPage - 1;
 
     if (linkModalData.targetTextItemId) {
@@ -4544,7 +4580,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           } else if (draggingItem.type === 'table') {
             setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
           } else if (draggingItem.type === 'image') {
-            setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : i)));
+            setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: clampedX, y: clampedY, isModified: true } : i)));
           } else if (draggingItem.type === 'overlay') {
             setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
           } else if (draggingItem.type === 'text-item') {
@@ -4580,7 +4616,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         } else if (draggingItem.type === 'table') {
           setTables((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
         } else if (draggingItem.type === 'image') {
-          setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, x: newX, y: newY } : i)));
+          setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, x: newX, y: newY, isModified: true } : i)));
         } else if (draggingItem.type === 'overlay') {
           setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
         } else if (draggingItem.type === 'text-item') {
@@ -4664,7 +4700,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         } else if (resizingItem.type === 'image') {
           setImageOverlays((prev) =>
             prev.map((i) =>
-              i.id === resizingItem.id ? { ...i, x: nextX, y: nextY, width: nextW, height: nextH } : i
+              i.id === resizingItem.id ? { ...i, x: nextX, y: nextY, width: nextW, height: nextH, isModified: true } : i
             )
           );
         } else if (resizingItem.type === 'overlay') {
@@ -5323,10 +5359,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         return;
       }
 
-      // Save: Ctrl+S
+      // Save: Ctrl+S / Save As: Ctrl+Shift+S
       if (isCtrlOrMeta && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        handleSave();
+        if (e.shiftKey) {
+          handleSave({ isSaveAs: true });
+        } else {
+          handleSave({ isSaveAs: false });
+        }
         return;
       }
 
@@ -6418,24 +6458,35 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               {isRibbonCollapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
             </button>
 
-            {/* Save Button */}
-            <button
-              onClick={handleSave}
-              disabled={isSaving}
-              className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-lg text-xs font-semibold text-white transition-all shadow-sm active:scale-95 ${
-                saveSuccess ? 'bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-500'
-              }`}
-              title="Save Edited PDF to Device"
-            >
-              {isSaving ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : saveSuccess ? (
-                <Check className="w-3.5 h-3.5" />
-              ) : (
-                <Save className="w-3.5 h-3.5" />
-              )}
-              <span>{saveSuccess ? 'Saved' : 'Save'}</span>
-            </button>
+            {/* Direct Save Button (Ctrl+S) & Save As Dropdown (Ctrl+Shift+S) */}
+            <div className="flex items-center">
+              <button
+                onClick={() => handleSave({ isSaveAs: false })}
+                disabled={isSaving}
+                className={`flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 rounded-l-lg text-xs font-semibold text-white transition-all shadow-sm active:scale-95 ${
+                  saveSuccess ? 'bg-indigo-700' : 'bg-indigo-600 hover:bg-indigo-500'
+                }`}
+                title="Save (Ctrl+S) - Overwrites directly in-place without prompt"
+              >
+                {isSaving ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : saveSuccess ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{saveSuccess ? 'Saved' : 'Save'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSave({ isSaveAs: true })}
+                disabled={isSaving}
+                className="px-1.5 py-1.5 rounded-r-lg border-l border-indigo-400/40 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 transition-colors shadow-sm"
+                title="Save As... (Ctrl+Shift+S)"
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -7117,6 +7168,53 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         </div>
                         <span className="text-[10px] opacity-70">E</span>
                       </button>
+                    </div>
+
+                    <div className="pt-2 mt-2 border-t border-zinc-200 dark:border-zinc-800">
+                      <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5 px-1 flex items-center justify-between">
+                        <span>Preset Colors & Wheel</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-1 py-1">
+                        {['#000000', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#d97706', '#ea580c', '#ffffff'].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => {
+                              setDrawingColor(c);
+                              if (!['pen', 'pencil', 'highlighter'].includes(activeTool)) {
+                                setActiveTool('pen');
+                              }
+                            }}
+                            style={{ backgroundColor: c }}
+                            className={`w-4 h-4 rounded-full border transition-transform hover:scale-125 ${
+                              drawingColor === c ? 'ring-2 ring-indigo-500 scale-110' : 'border-black/20 dark:border-white/20'
+                            }`}
+                            title={c}
+                          />
+                        ))}
+                        <div className="relative ml-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPenColorWheel((prev) => !prev);
+                            }}
+                            className="w-5 h-5 rounded-full border border-black/30 dark:border-white/30 shadow-xs hover:scale-125 transition-transform"
+                            style={{
+                              background: 'conic-gradient(from 0deg, red, yellow, lime, aqua, blue, magenta, red)',
+                            }}
+                            title="Color Wheel"
+                          />
+                          {showPenColorWheel && (
+                            <div className="absolute top-7 right-0 z-50 animate-fade-in shadow-2xl">
+                              <ColorWheelPicker
+                                color={drawingColor}
+                                onChange={(c) => setDrawingColor(c)}
+                                onClose={() => setShowPenColorWheel(false)}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>,
@@ -8931,7 +9029,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   title="Choose Pencil Graphite Shade"
                 />
                 <div className="flex items-center gap-1">
-                  {['#334155', '#0f172a', '#64748b', '#2563eb'].map((c) => (
+                  {['#000000', '#334155', '#64748b', '#2563eb', '#dc2626', '#16a34a', '#9333ea', '#d97706', '#ea580c', '#ffffff'].map((c) => (
                     <button
                       key={c}
                       type="button"
@@ -9793,37 +9891,39 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     </div>
                   )}
 
-                  {/* In-Place Interactive Existing Text Bounding Boxes (Edit Text Mode) */}
-                  {isCurrentPage && activeTool === 'edit-text' &&
-              detectedTextItems.map((item) => {
-                const currentItem = modifiedTexts[item.id] || item;
-                const currentTextVal = currentItem.currentText ?? item.originalText;
-                const isItemModified = currentItem.isModified;
-                const isEditing = activeEditingId === item.id;
-                const isSelected = selectedTextItemId === item.id;
+                  {/* In-Place Interactive Existing Text Bounding Boxes (Always render modified items across all tabs/tools; render all items in edit-text mode) */}
+                  {isCurrentPage &&
+                    detectedTextItems
+                      .filter((item) => activeTool === 'edit-text' || Boolean(modifiedTexts[item.id]?.isModified))
+                      .map((item) => {
+                        const currentItem = modifiedTexts[item.id] || item;
+                        const currentTextVal = currentItem.currentText ?? item.originalText;
+                        const isItemModified = currentItem.isModified;
+                        const isEditing = activeEditingId === item.id;
+                        const isSelected = selectedTextItemId === item.id;
 
-                const itemFontFamily = currentItem.fontFamily ?? item.fontFamily ?? 'Calibri';
-                const itemFontSize = currentItem.fontSize ?? item.fontSize ?? 12;
-                const itemIsBold = currentItem.isBold ?? item.isBold ?? false;
-                const itemIsItalic = currentItem.isItalic ?? item.isItalic ?? false;
-                const itemIsUnderline = currentItem.isUnderline ?? item.isUnderline ?? false;
-                const itemAlign = currentItem.alignment ?? item.alignment ?? 'left';
+                        const itemFontFamily = currentItem.fontFamily ?? item.fontFamily ?? 'Calibri';
+                        const itemFontSize = currentItem.fontSize ?? item.fontSize ?? 12;
+                        const itemIsBold = currentItem.isBold ?? item.isBold ?? false;
+                        const itemIsItalic = currentItem.isItalic ?? item.isItalic ?? false;
+                        const itemIsUnderline = currentItem.isUnderline ?? item.isUnderline ?? false;
+                        const itemAlign = currentItem.alignment ?? item.alignment ?? 'left';
 
-                const scale = zoomScale;
-                const cluster = textItemLineClusters.get(item.id);
-                const baselineY = cluster ? cluster.baselineCssY : (viewportDims.height - item.y * scale);
+                        const scale = zoomScale;
+                        const cluster = textItemLineClusters.get(item.id);
+                        const baselineY = cluster ? cluster.baselineCssY : (viewportDims.height - item.y * scale);
 
-                const itemW = (currentItem.width !== undefined ? currentItem.width : item.width);
-                const itemH = (currentItem.height !== undefined ? currentItem.height : (cluster ? (cluster.boxHeight / scale) : (itemFontSize * 1.15)));
-                const itemX = (currentItem.x !== undefined ? currentItem.x : item.x);
-                const itemY = (currentItem.y !== undefined ? currentItem.y : item.y);
+                        const itemW = (currentItem.width !== undefined ? currentItem.width : item.width);
+                        const itemH = (currentItem.height !== undefined ? currentItem.height : (cluster ? (cluster.boxHeight / scale) : (itemFontSize * 1.15)));
+                        const itemX = (currentItem.x !== undefined ? currentItem.x : item.x);
+                        const itemY = (currentItem.y !== undefined ? currentItem.y : item.y);
 
-                const boxW = Math.max(8, itemW * scale);
-                const boxH = Math.max(12, itemH * scale);
-                const boxX = itemX * scale;
-                const boxY = (currentItem.x !== undefined && currentItem.y !== undefined && currentItem.isModified)
-                  ? (viewportDims.height - itemY * scale - itemH * scale)
-                  : (cluster ? cluster.boxTop : (baselineY - (itemFontSize * scale * 0.82)));
+                        const boxW = Math.max(8, itemW * scale);
+                        const boxH = Math.max(12, itemH * scale);
+                        const boxX = itemX * scale;
+                        const defaultBoxTop = cluster ? cluster.boxTop : (baselineY - (itemFontSize * scale * 0.82));
+                        const deltaY = (itemY !== item.y) ? (item.y - itemY) * scale : 0;
+                        const boxY = defaultBoxTop + deltaY;
 
                 const cssFontFamily = resolveCssFontFamily(itemFontFamily);
                 const targetPageCanvas = pageCanvasesRef.current.get(pageNum) || canvasRef.current;
@@ -9996,11 +10096,20 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             {isCurrentPage && activeTool === 'view' && (
               <div className="absolute inset-0 z-20 pointer-events-auto select-text cursor-text pdf-text-selection-layer">
                 <style>{`
-                  .pdf-text-selection-layer ::selection {
-                    background: rgba(59, 130, 246, 0.35) !important;
+                  .pdf-text-selection-layer, .pdf-text-selection-layer * {
+                    -webkit-user-select: text !important;
+                    user-select: text !important;
+                  }
+                  .pdf-text-selection-layer *::selection, .pdf-text-selection-layer::selection {
+                    background: rgba(59, 130, 246, 0.4) !important;
                     color: transparent !important;
                     -webkit-text-fill-color: transparent !important;
                     caret-color: transparent !important;
+                    text-shadow: none !important;
+                  }
+                  .pdf-text-selection-layer *::-moz-selection, .pdf-text-selection-layer::-moz-selection {
+                    background: rgba(59, 130, 246, 0.4) !important;
+                    color: transparent !important;
                     text-shadow: none !important;
                   }
                 `}</style>
@@ -10065,8 +10174,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         autoFocus
                         value={t.text}
                         placeholder="Type text here..."
+                        onFocus={(e) => {
+                          if (t.text === 'Sample Text') {
+                            e.target.select();
+                          }
+                        }}
                         onChange={(e) => {
-                          const val = e.target.value;
+                          let val = e.target.value;
+                          if (t.text === 'Sample Text' && val !== 'Sample Text') {
+                            val = val.replace('Sample Text', '');
+                          }
                           setTextOverlays((prev) =>
                             prev.map((item) => (item.id === t.id ? { ...item, text: val } : item))
                           );
@@ -10195,11 +10312,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const cssX = l.x * scale;
                 const cssY = viewportDims.height - l.y * scale - l.height * scale;
                 const isSelected = selectedOverlayId === l.id || multiSelectedIds.includes(l.id);
+                const isEditMode = activeTool === 'edit-text';
 
                 return (
                   <div
                     key={l.id}
                     onClick={(e) => {
+                      if (isEditMode) return;
                       e.stopPropagation();
                       setSelectedOverlayId(l.id);
                       const targetUrl = l.url.startsWith('http://') || l.url.startsWith('https://') ? l.url : `https://${l.url}`;
@@ -10210,31 +10329,49 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${cssY}px`,
                       width: `${l.width * scale}px`,
                       height: `${l.height * scale}px`,
+                      pointerEvents: isEditMode ? 'none' : 'auto',
                     }}
-                    className={`absolute rounded cursor-pointer z-30 group transition-all ${
+                    className={`absolute rounded cursor-pointer z-30 transition-all ${
                       isSelected
                         ? 'ring-2 ring-blue-500 bg-blue-500/20 border border-blue-500'
+                        : isEditMode
+                        ? 'border border-blue-400/20'
                         : 'border border-blue-500/30 hover:border-blue-500 hover:bg-blue-500/10'
                     }`}
-                    title={`Click to open link: ${l.url}`}
-                  >
-                    {/* Floating Sleek Tooltip with External Link & Delete */}
-                    <div className="absolute -top-7 left-0 hidden group-hover:flex items-center gap-1 px-2 py-0.5 bg-zinc-900/90 text-white rounded text-[11px] shadow-lg pointer-events-auto z-50 whitespace-nowrap">
-                      <ExternalLink className="w-3 h-3 text-blue-400 flex-shrink-0" />
-                      <span className="font-mono underline text-blue-300 max-w-[200px] truncate">{l.url}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setHyperlinks((prev) => prev.filter((item) => item.id !== l.id));
-                          pushSnapshot({ hyperlinks: hyperlinks.filter((item) => item.id !== l.id) });
-                        }}
-                        className="p-0.5 ml-1 text-zinc-400 hover:text-red-400 transition-colors"
-                        title="Delete Hyperlink"
-                      >
-                        <Trash2 className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
-                  </div>
+                    title={isEditMode ? undefined : `Click to open link: ${l.url}`}
+                  />
+                );
+              })}
+
+            {/* White-out background patches for extracted images that have been moved across or resized */}
+            {imageOverlays
+              .filter(
+                (img) =>
+                  img.pageIndex === pageNum - 1 &&
+                  img.isExtracted &&
+                  img.isModified &&
+                  img.origX !== undefined &&
+                  img.origY !== undefined &&
+                  (img.x !== img.origX || img.y !== img.origY || img.width !== img.origWidth || img.height !== img.origHeight)
+              )
+              .map((img) => {
+                const scale = zoomScale;
+                const origCssX = img.origX! * scale;
+                const origCssY = viewportDims.height - img.origY! * scale - (img.origHeight || img.height) * scale;
+                const origCssW = (img.origWidth || img.width) * scale;
+                const origCssH = (img.origHeight || img.height) * scale;
+                return (
+                  <div
+                    key={`patch_${img.id}`}
+                    style={{
+                      left: `${origCssX}px`,
+                      top: `${origCssY}px`,
+                      width: `${origCssW}px`,
+                      height: `${origCssH}px`,
+                      backgroundColor: '#ffffff',
+                    }}
+                    className="absolute z-10 pointer-events-none"
+                  />
                 );
               })}
 
@@ -15504,7 +15641,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 <input
                   type="url"
                   value={linkModalData.url}
-                  onChange={(e) => setLinkModalData((prev) => ({ ...prev, url: e.target.value }))}
+                  onChange={(e) => {
+                    let val = e.target.value;
+                    val = val.replace(/^(https?:\/\/)+(https?:\/\/)+/i, '$2');
+                    setLinkModalData((prev) => ({ ...prev, url: val }));
+                  }}
                   placeholder="https://example.com"
                   autoFocus
                   onKeyDown={(e) => {

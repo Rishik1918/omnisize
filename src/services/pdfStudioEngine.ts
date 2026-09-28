@@ -46,6 +46,12 @@ export interface ImageOverlay {
   width: number;
   height: number;
   rotation?: number;
+  origX?: number;
+  origY?: number;
+  origWidth?: number;
+  origHeight?: number;
+  isExtracted?: boolean;
+  isModified?: boolean;
   borderWidth?: number;
   borderColor?: string;
   borderStyle?: 'solid' | 'dashed' | 'dotted' | 'double' | 'groove' | 'ridge';
@@ -634,7 +640,31 @@ export class PdfStudioEngine {
     if (payload.imageOverlays && payload.imageOverlays.length > 0) {
       for (const imgOverlay of payload.imageOverlays) {
         if (imgOverlay.pageIndex >= 0 && imgOverlay.pageIndex < doc.getPageCount()) {
+          // If the image was pre-existing from the original PDF and wasn't modified or moved, keep it as is
+          if (imgOverlay.isExtracted && !imgOverlay.isModified) {
+            continue;
+          }
+
           const page = doc.getPage(imgOverlay.pageIndex);
+
+          // If extracted image was moved or modified, blank out original bounding box with white
+          if (
+            imgOverlay.isExtracted &&
+            imgOverlay.isModified &&
+            imgOverlay.origX !== undefined &&
+            imgOverlay.origY !== undefined
+          ) {
+            try {
+              page.drawRectangle({
+                x: imgOverlay.origX,
+                y: imgOverlay.origY,
+                width: imgOverlay.origWidth || imgOverlay.width,
+                height: imgOverlay.origHeight || imgOverlay.height,
+                color: rgb(1, 1, 1),
+              });
+            } catch (_) {}
+          }
+
           const embeddedImage = imgOverlay.imageType === 'png'
             ? await doc.embedPng(imgOverlay.imageData)
             : await doc.embedJpg(imgOverlay.imageData);
@@ -1626,7 +1656,18 @@ export class PdfStudioEngine {
           currentMatrix = multiplyMatrices(currentMatrix, args);
         } else if ((fn === 82 || fn === 85) && args && args[0]) {
           const imgName = args[0];
-          const obj = (page.objs && page.objs.get(imgName)) || (page.commonObjs && page.commonObjs.get(imgName));
+          const obj = await new Promise<any>((resolve) => {
+            try {
+              const targetCollection = (imgName.startsWith('g_') || imgName.startsWith('img_g')) ? page.commonObjs : page.objs;
+              if (targetCollection && typeof targetCollection.get === 'function') {
+                targetCollection.get(imgName, (res: any) => resolve(res));
+              } else {
+                resolve(null);
+              }
+            } catch (_) {
+              resolve(null);
+            }
+          });
           if (obj && obj.data && obj.width && obj.height) {
             const canvas = document.createElement('canvas');
             canvas.width = obj.width;
@@ -1663,6 +1704,12 @@ export class PdfStudioEngine {
                   y: imgY,
                   width: imgW,
                   height: imgH,
+                  origX: imgX,
+                  origY: imgY,
+                  origWidth: imgW,
+                  origHeight: imgH,
+                  isExtracted: true,
+                  isModified: false,
                   rotation: 0,
                   opacity: 1,
                 });

@@ -118,6 +118,40 @@ function createWindow() {
     return null;
   });
 
+  // Handle IPC direct file overwrite (no prompt)
+  ipcMain.handle('save-file-direct', async (_event, { filePath, buffer }) => {
+    try {
+      if (!filePath) throw new Error('No target file path provided.');
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      return { success: true, filePath };
+    } catch (err) {
+      console.error('Error saving file directly:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Handle IPC Save As dialog
+  ipcMain.handle('save-file-dialog', async (_event, { defaultName, buffer }) => {
+    try {
+      const { dialog } = require('electron');
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: defaultName || 'document.pdf',
+        filters: [
+          { name: 'PDF Document', extensions: ['pdf'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+      if (canceled || !filePath) {
+        return { success: false, canceled: true };
+      }
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+      return { success: true, filePath };
+    } catch (err) {
+      console.error('Error in save-file-dialog:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   // Prevent unauthorized new windows or external navigation
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('https:') || url.startsWith('http:')) {
