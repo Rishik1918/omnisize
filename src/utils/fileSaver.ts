@@ -13,7 +13,22 @@ export interface SaveOptions {
   isSaveAs?: boolean;
   fileHandle?: any;
 }
-
+ 
+/**
+ * Helper to attach local Electron file system path to a File object
+ */
+export function attachFilePath(file: File): File {
+  try {
+    const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+    if (electronAPI && typeof electronAPI.getPathForFile === 'function') {
+      const p = electronAPI.getPathForFile(file);
+      if (p) {
+        (file as any).path = p;
+      }
+    }
+  } catch (_) {}
+  return file;
+}
 /**
  * Universal file saver that saves directly to the existing file path (no prompt)
  * when available, or prompts Save As when requested or required.
@@ -30,18 +45,18 @@ export async function saveFileDirectlyOrPrompt(
     if (electronAPI) {
       const buffer = await blob.arrayBuffer();
 
-      // If user did NOT explicitly request "Save As" and we have an existing file path, overwrite directly
-      if (!options?.isSaveAs && options?.existingPath) {
+      // If user did NOT explicitly request "Save As", save directly without any dialog under all circumstances!
+      if (!options?.isSaveAs) {
         if (typeof electronAPI.saveFileDirect === 'function') {
-          const res = await electronAPI.saveFileDirect(options.existingPath, buffer);
+          const res = await electronAPI.saveFileDirect(options?.existingPath || null, buffer, filename);
           if (res?.success) {
-            return { success: true, filePath: options.existingPath, message: `Saved directly to ${options.existingPath}` };
+            return { success: true, filePath: res.filePath || options?.existingPath || filename, message: `Saved directly to ${res.filePath || options?.existingPath || filename}` };
           }
         }
       }
 
-      // Explicit "Save As" or unknown existing file path in Electron
-      if (typeof electronAPI.saveFileDialog === 'function') {
+      // ONLY when user explicitly requested "Save As" (e.g. Ctrl+Shift+S or dropdown menu), prompt save file dialog
+      if (options?.isSaveAs && typeof electronAPI.saveFileDialog === 'function') {
         const res = await electronAPI.saveFileDialog(options?.existingPath || filename, buffer);
         if (res?.success && res.filePath) {
           return { success: true, filePath: res.filePath, message: `Saved to ${res.filePath}` };

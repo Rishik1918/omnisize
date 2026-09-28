@@ -23,8 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return file.path || null;
     }
   },
-  saveFileDirect: (filePath, buffer) =>
-    ipcRenderer.invoke('save-file-direct', { filePath, buffer }),
+  getDesktopPath: () => ipcRenderer.invoke('get-desktop-path'),
+  saveFileDirect: (filePath, buffer, defaultName) =>
+    ipcRenderer.invoke('save-file-direct', { filePath, defaultName, buffer }),
   saveFileDialog: (defaultName, buffer) =>
     ipcRenderer.invoke('save-file-dialog', { defaultName, buffer }),
 });

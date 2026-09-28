@@ -14,6 +14,8 @@ import { PdfSplitModal } from './PdfSplitModal';
 import { PdfEditorModal } from './PdfEditorModal';
 import { PdfOcrModal } from './PdfOcrModal';
 
+import { attachFilePath } from '../../utils/fileSaver';
+
 export const PdfStudioView: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'merge' | 'split' | 'edit' | 'ocr' | null>(null);
   const [droppedFile, setDroppedFile] = useState<File | undefined>(undefined);
@@ -24,7 +26,7 @@ export const PdfStudioView: React.FC = () => {
     e.preventDefault();
     setIsDragOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files);
+      const files = Array.from(e.dataTransfer.files).map(attachFilePath);
       setDroppedFiles(files);
       setDroppedFile(files[0]);
       setActiveModal('edit');
@@ -33,7 +35,7 @@ export const PdfStudioView: React.FC = () => {
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const files = Array.from(e.target.files);
+      const files = Array.from(e.target.files).map(attachFilePath);
       setDroppedFiles(files);
       setDroppedFile(files[0]);
       setActiveModal('edit');

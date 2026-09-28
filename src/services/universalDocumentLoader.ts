@@ -7,6 +7,15 @@ export class UniversalDocumentLoader {
    * Convert any supported file type (PDF, Word, Excel, Images, Text) into a valid PDF File
    */
   static async loadAsPdf(file: File): Promise<File> {
+    const rawPath = (file as any)?.path;
+    const res = await this._loadAsPdfInternal(file);
+    if (rawPath && !(res as any).path) {
+      (res as any).path = rawPath;
+    }
+    return res;
+  }
+
+  private static async _loadAsPdfInternal(file: File): Promise<File> {
     const ext = file.name.split('.').pop()?.toLowerCase() || '';
 
     // 1. Native PDF

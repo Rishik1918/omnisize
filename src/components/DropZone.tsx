@@ -1,6 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { Upload, Image as ImageIcon, Film, FileText } from 'lucide-react';
 
+import { attachFilePath } from '../utils/fileSaver';
+
 interface DropZoneProps {
   onFilesAdded: (files: File[]) => void;
   onPresetSelect?: (preset: string) => void;
@@ -25,13 +27,13 @@ export const DropZone: React.FC<DropZoneProps> = ({ onFilesAdded }) => {
     e.stopPropagation();
     setIsDragOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFilesAdded(Array.from(e.dataTransfer.files));
+      onFilesAdded(Array.from(e.dataTransfer.files).map(attachFilePath));
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onFilesAdded(Array.from(e.target.files));
+      onFilesAdded(Array.from(e.target.files).map(attachFilePath));
       e.target.value = '';
     }
   };

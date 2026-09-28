@@ -52,6 +52,7 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
 
   const [previewPage, setPreviewPage] = useState<number>(initialPage || 1);
   const [previewZoom, setPreviewZoom] = useState<number>(1.0);
+  const [baseCanvasDims, setBaseCanvasDims] = useState<{ width: number; height: number } | null>(null);
   const [addToTemplate, setAddToTemplate] = useState<boolean>(false);
 
   // Collapsible sections
@@ -80,8 +81,9 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
         const target = previewCanvasRef.current;
         target.width = canvas.width;
         target.height = canvas.height;
-        target.style.width = `${Math.round(cssWidth)}px`;
-        target.style.height = `${Math.round(cssHeight)}px`;
+        target.style.width = '100%';
+        target.style.height = '100%';
+        setBaseCanvasDims({ width: cssWidth, height: cssHeight });
 
         const ctx = target.getContext('2d');
         if (!ctx) return;
@@ -467,39 +469,61 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
           </div>
 
           {/* Right Live Document Page Preview */}
-          <div className="flex-1 bg-[#12151b] flex flex-col items-center justify-between p-4 min-h-0 overflow-hidden">
-            <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-auto p-2">
+          <div
+            className="flex-1 bg-[#12151b] flex flex-col items-center justify-between p-4 min-h-0 overflow-hidden"
+            onWheel={(e) => {
+              if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                setPreviewZoom((z) => Math.min(2.5, Math.max(0.4, Math.round((z + (e.deltaY < 0 ? 0.1 : -0.1)) * 100) / 100)));
+              }
+            }}
+          >
+            <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-auto p-4 select-none">
               <div
-                className="bg-white shadow-2xl rounded-xs overflow-hidden border border-zinc-300/40 dark:border-zinc-800 transition-transform origin-center"
-                style={{ transform: `scale(${previewZoom})` }}
+                className="bg-white shadow-2xl rounded-xs overflow-hidden border border-zinc-300/40 dark:border-zinc-800 transition-all origin-center"
+                style={{
+                  width: baseCanvasDims ? `${Math.round(baseCanvasDims.width * previewZoom)}px` : 'auto',
+                  height: baseCanvasDims ? `${Math.round(baseCanvasDims.height * previewZoom)}px` : 'auto',
+                  maxWidth: 'none',
+                }}
               >
-                <canvas ref={previewCanvasRef} className="block max-h-[64vh] object-contain" />
+                <canvas ref={previewCanvasRef} className="block w-full h-full" />
               </div>
             </div>
 
             {/* Bottom Controls: Zoom + Pagination */}
-            <div className="flex items-center gap-3 bg-[#1a1d24] border border-zinc-800 rounded-lg px-3 py-1 shadow-md shrink-0">
+            <div className="flex items-center gap-3 bg-[#1a1d24] border border-zinc-800 rounded-lg px-3 py-1.5 shadow-md shrink-0">
               {/* Zoom Controls */}
-              <div className="flex items-center gap-1 border-r border-zinc-700 pr-2">
+              <div className="flex items-center gap-2 border-r border-zinc-700 pr-3">
                 <button
                   type="button"
-                  onClick={() => setPreviewZoom((z) => Math.max(0.4, Math.round((z - 0.15) * 100) / 100))}
+                  onClick={() => setPreviewZoom((z) => Math.max(0.4, Math.round((z - 0.1) * 100) / 100))}
                   className="p-1 rounded text-zinc-400 hover:text-white"
                   title="Zoom Out (-)"
                 >
                   <ZoomOut className="w-3.5 h-3.5" />
                 </button>
+                <input
+                  type="range"
+                  min="0.4"
+                  max="2.5"
+                  step="0.05"
+                  value={previewZoom}
+                  onChange={(e) => setPreviewZoom(parseFloat(e.target.value))}
+                  className="w-20 sm:w-24 h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                  title={`Zoom: ${Math.round(previewZoom * 100)}%`}
+                />
                 <button
                   type="button"
                   onClick={() => setPreviewZoom(1.0)}
-                  className="font-mono text-[11px] text-zinc-300 hover:text-white px-1 font-semibold"
+                  className="font-mono text-[11px] text-zinc-300 hover:text-white px-1 font-semibold min-w-[36px] text-center"
                   title="Reset Zoom to 100%"
                 >
                   {Math.round(previewZoom * 100)}%
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPreviewZoom((z) => Math.min(2.5, Math.round((z + 0.15) * 100) / 100))}
+                  onClick={() => setPreviewZoom((z) => Math.min(2.5, Math.round((z + 0.1) * 100) / 100))}
                   className="p-1 rounded text-zinc-400 hover:text-white"
                   title="Zoom In (+)"
                 >

@@ -95,7 +95,7 @@ import {
   PdfSignatureEngine,
   PdfSignatureInfo
 } from '../../services/pdfSignatureEngine';
-import { saveFile, saveFileDirectlyOrPrompt } from '../../utils/fileSaver';
+import { saveFile, saveFileDirectlyOrPrompt, attachFilePath } from '../../utils/fileSaver';
 import { getDocumentProxy } from 'unpdf';
 import { createPortal } from 'react-dom';
 import { PDFDocument } from 'pdf-lib';
@@ -1371,7 +1371,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Dragging & Resizing Canvas State
   const [draggingItem, setDraggingItem] = useState<{
     id: string;
-    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item';
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink';
     startX: number;
     startY: number;
     origX: number;
@@ -1380,7 +1380,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   const [resizingItem, setResizingItem] = useState<{
     id: string;
-    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item';
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink';
     handle: string;
     startX: number;
     startY: number;
@@ -1396,7 +1396,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Interactive On-Canvas Rotation Pointer State (MS Word Style)
   const [rotatingItem, setRotatingItem] = useState<{
     id: string;
-    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item';
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink';
     centerX: number;
     centerY: number;
     startAngle: number;
@@ -1476,7 +1476,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Sync initialFile or initialFiles prop changes
   useEffect(() => {
     if (initialFiles && initialFiles.length > 0) {
-      const newTabs: EditorTabItem[] = initialFiles.map((f, i) => ({
+      const processedFiles = initialFiles.map(attachFilePath);
+      const newTabs: EditorTabItem[] = processedFiles.map((f, i) => ({
         id: `tab_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 5)}`,
         name: f.name,
         file: f,
@@ -1510,8 +1511,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setFile(newTabs[0].file);
       setShowInitialPrompt(false);
     } else if (initialFile) {
+      const attachedInitialFile = attachFilePath(initialFile);
       setTabs((prev) => {
-        const exists = prev.find((t) => t.file.name === initialFile.name);
+        const exists = prev.find((t) => t.file.name === attachedInitialFile.name);
         if (exists) {
           setActiveTabId(exists.id);
           setFile(exists.file);
@@ -1519,12 +1521,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         }
         const newId = `tab_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
         setActiveTabId(newId);
-        setFile(initialFile);
+        setFile(attachedInitialFile);
         setShowInitialPrompt(false);
         const newTab: EditorTabItem = {
           id: newId,
-          name: initialFile.name,
-          file: initialFile,
+          name: attachedInitialFile.name,
+          file: attachedInitialFile,
           modifiedTexts: {},
           textOverlays: [],
           imageOverlays: [],
@@ -1616,6 +1618,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     url: string;
     targetTextItemId?: string | null;
     targetOverlayId?: string | null;
+    targetHyperlinkId?: string | null;
   }>({ text: '', url: 'https://' });
   const cellImageInputRef = useRef<HTMLInputElement>(null);
   const [activeTableImgCell, setActiveTableImgCell] = useState<string | null>(null);
@@ -1822,9 +1825,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   const handleItemSelect = (
     id: string,
-    type: 'overlay' | 'image' | 'shape' | 'table' | 'text',
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text' | 'hyperlink',
     e?: React.MouseEvent | React.TouchEvent
   ) => {
+    setActiveEditingId(null);
     const isCtrl = e && 'ctrlKey' in e && (e.ctrlKey || e.metaKey);
     if (isCtrl) {
       setMultiSelectedIds((prev) =>
@@ -1858,6 +1862,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setSelectedShapeId(null);
       setSelectedTableId(null);
       setSelectedTableCell(null);
+    } else if (type === 'hyperlink') {
+      setSelectedOverlayId(id);
+      setSelectedShapeId(null);
+      setSelectedTableId(null);
+      setSelectedTableCell(null);
+      setSelectedTextItemId(null);
     }
 
     if (!/android/i.test(navigator.userAgent)) {
@@ -2217,7 +2227,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Select File from Device
   const handleSelectFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const selectedFiles = Array.from(e.target.files);
+      const selectedFiles = Array.from(e.target.files).map(attachFilePath);
       const newTabs: EditorTabItem[] = selectedFiles.map((f, i) => ({
         id: `tab_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 5)}`,
         name: f.name,
@@ -2556,12 +2566,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
           // Extract selectable text elements for the current page
           try {
+            let textItems: ExistingTextItem[] = [];
             if (pageOcrCache.current[currentPage]) {
+              textItems = pageOcrCache.current[currentPage];
               if (isMounted) {
-                setDetectedTextItems(pageOcrCache.current[currentPage]);
+                setDetectedTextItems(textItems);
               }
             } else {
-              const textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
+              textItems = await PdfStudioEngine.extractPageTextItems(proxyOrBuf, currentPage);
               if (isMounted) {
                 setDetectedTextItems(textItems);
 
@@ -2615,6 +2627,36 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               }
             } catch (imgErr) {
               console.warn('Page image extraction note:', imgErr);
+            }
+
+            // Extract existing embedded vector shapes (boxes, rects, banners) so they are selectable, resizable and movable across pages
+            try {
+              const extractedShapes = await PdfStudioEngine.extractPageShapes(proxyOrBuf, currentPage);
+              if (isMounted && extractedShapes.length > 0) {
+                setShapes((prev) => {
+                  const existingKeys = new Set(prev.map((s) => `${s.pageIndex}_${Math.round(s.x)}_${Math.round(s.y)}_${Math.round(s.width)}_${Math.round(s.height)}`));
+                  const newShapes = extractedShapes.filter((s) => !existingKeys.has(`${s.pageIndex}_${Math.round(s.x)}_${Math.round(s.y)}_${Math.round(s.width)}_${Math.round(s.height)}`));
+                  return newShapes.length > 0 ? [...prev, ...newShapes] : prev;
+                });
+              }
+            } catch (shapeErr) {
+              console.warn('Page shape extraction note:', shapeErr);
+            }
+
+            // Detect existing table structures from extracted page text items
+            try {
+              if (textItems && textItems.length >= 4) {
+                const detectedTables = PdfStudioEngine.detectPageTables(textItems, currentPage - 1);
+                if (isMounted && detectedTables.length > 0) {
+                  setTables((prev) => {
+                    const existingKeys = new Set(prev.map((t) => `${t.pageIndex}_${Math.round(t.x)}_${Math.round(t.y)}`));
+                    const newTables = detectedTables.filter((t) => !existingKeys.has(`${t.pageIndex}_${Math.round(t.x)}_${Math.round(t.y)}`));
+                    return newTables.length > 0 ? [...prev, ...newTables] : prev;
+                  });
+                }
+              }
+            } catch (tblErr) {
+              console.warn('Page table detection note:', tblErr);
             }
           } catch (e) {
             console.warn('Text item extraction warning:', e);
@@ -2672,15 +2714,25 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       });
 
       const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
-      const existingPath =
-        (file as any)?.path ||
-        (electronAPI && typeof electronAPI.getPathForFile === 'function' ? electronAPI.getPathForFile(file) : null);
+      let existingPath = (file as any)?.path;
+      if (!existingPath && electronAPI && typeof electronAPI.getPathForFile === 'function') {
+        try {
+          existingPath = electronAPI.getPathForFile(file);
+        } catch (_) {}
+      }
+      if (existingPath) {
+        (file as any).path = existingPath;
+      }
 
       const saveRes = await saveFileDirectlyOrPrompt(editedBlob, file.name, {
         existingPath: options?.isSaveAs ? null : existingPath,
         isSaveAs: options?.isSaveAs,
         fileHandle: (file as any)?.handle,
       });
+
+      if (saveRes?.filePath) {
+        (file as any).path = saveRes.filePath;
+      }
 
       if (!saveRes.success && options?.isSaveAs) {
         return false;
@@ -2795,7 +2847,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Add one or more files as new document tabs
   const handleAddNewTabFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
-    const selectedFiles = Array.from(e.target.files);
+    const selectedFiles = Array.from(e.target.files).map(attachFilePath);
 
     // Save active tab state before creating and activating any new tabs!
     let currentTabs = tabs;
@@ -3872,6 +3924,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       : `https://${raw}`;
     const pageIndex = currentPage - 1;
 
+    if (linkModalData.targetHyperlinkId) {
+      const targetId = linkModalData.targetHyperlinkId;
+      const existingLink = hyperlinks.find((l) => l.id === targetId);
+      if (existingLink) {
+        let nextOverlays = textOverlays;
+        const associatedTextOverlay = textOverlays.find(
+          (t) => t.pageIndex === existingLink.pageIndex && Math.abs(t.x - existingLink.x) < 15 && Math.abs(t.y - existingLink.y) < 20
+        );
+        let updatedW = existingLink.width;
+        if (associatedTextOverlay && displayTxt && displayTxt.trim()) {
+          nextOverlays = textOverlays.map((t) => (t.id === associatedTextOverlay.id ? { ...t, text: displayTxt.trim() } : t));
+          setTextOverlays(nextOverlays);
+          updatedW = Math.max(30, displayTxt.trim().length * (associatedTextOverlay.size || 12) * 0.65);
+        }
+        const nextLinks = hyperlinks.map((l) => (l.id === targetId ? { ...l, url: cleanUrl, width: updatedW } : l));
+        setHyperlinks(nextLinks);
+        pushSnapshot({ textOverlays: nextOverlays, hyperlinks: nextLinks });
+        return;
+      }
+    }
+
     if (linkModalData.targetTextItemId) {
       const item = detectedTextItems.find((t) => t.id === linkModalData.targetTextItemId);
       if (item) {
@@ -4287,7 +4360,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   // Render 8 Resize Handles and MS Word-Style Rotation Handle on selected Element
   const renderResizeHandles = (
     id: string,
-    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item',
+    type: 'overlay' | 'image' | 'shape' | 'table' | 'text-item' | 'hyperlink',
     origX: number,
     origY: number,
     origW: number,
@@ -4567,6 +4640,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           } else if (draggingItem.type === 'text-item') {
             const item = modifiedTexts[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
             if (item) { itemW = item.width || 80; itemH = item.height || 24; }
+          } else if (draggingItem.type === 'hyperlink') {
+            const hl = hyperlinks.find((l) => l.id === draggingItem.id);
+            if (hl) { itemW = hl.width; itemH = hl.height; }
           }
 
           // Calculate coordinates relative to this page, strictly clamped within page boundaries so nothing is ever in the gap
@@ -4583,6 +4659,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, pageIndex: targetPageIndex, x: clampedX, y: clampedY, isModified: true } : i)));
           } else if (draggingItem.type === 'overlay') {
             setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : t)));
+          } else if (draggingItem.type === 'hyperlink') {
+            setHyperlinks((prev) => prev.map((l) => (l.id === draggingItem.id ? { ...l, pageIndex: targetPageIndex, x: clampedX, y: clampedY } : l)));
           } else if (draggingItem.type === 'text-item') {
             setModifiedTexts((prev) => {
               const item = prev[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
@@ -4619,6 +4697,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           setImageOverlays((prev) => prev.map((i) => (i.id === draggingItem.id ? { ...i, x: newX, y: newY, isModified: true } : i)));
         } else if (draggingItem.type === 'overlay') {
           setTextOverlays((prev) => prev.map((t) => (t.id === draggingItem.id ? { ...t, x: newX, y: newY } : t)));
+        } else if (draggingItem.type === 'hyperlink') {
+          setHyperlinks((prev) => prev.map((l) => (l.id === draggingItem.id ? { ...l, x: newX, y: newY } : l)));
         } else if (draggingItem.type === 'text-item') {
           setModifiedTexts((prev) => {
             const item = prev[draggingItem.id] || detectedTextItems.find((t) => t.id === draggingItem.id);
@@ -4707,6 +4787,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           setTextOverlays((prev) =>
             prev.map((t) =>
               t.id === resizingItem.id ? { ...t, x: nextX, y: nextY } : t
+            )
+          );
+        } else if (resizingItem.type === 'hyperlink') {
+          setHyperlinks((prev) =>
+            prev.map((l) =>
+              l.id === resizingItem.id ? { ...l, x: nextX, y: nextY, width: nextW, height: nextH } : l
             )
           );
         } else if (resizingItem.type === 'text-item') {
@@ -10318,28 +10404,135 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   <div
                     key={l.id}
                     onClick={(e) => {
-                      if (isEditMode) return;
                       e.stopPropagation();
-                      setSelectedOverlayId(l.id);
-                      const targetUrl = l.url.startsWith('http://') || l.url.startsWith('https://') ? l.url : `https://${l.url}`;
-                      window.open(targetUrl, '_blank');
+                      if (isEditMode) {
+                        handleItemSelect(l.id, 'hyperlink', e);
+                      } else {
+                        setSelectedOverlayId(l.id);
+                        const targetUrl = l.url.startsWith('http://') || l.url.startsWith('https://') ? l.url : `https://${l.url}`;
+                        window.open(targetUrl, '_blank');
+                      }
+                    }}
+                    onDoubleClick={(e) => {
+                      if (isEditMode) {
+                        e.stopPropagation();
+                        const associatedText = textOverlays.find(
+                          (t) => t.pageIndex === l.pageIndex && Math.abs(t.x - l.x) < 15 && Math.abs(t.y - l.y) < 20
+                        );
+                        setLinkModalData({
+                          targetHyperlinkId: l.id,
+                          text: associatedText ? associatedText.text : '',
+                          url: l.url,
+                        });
+                        setShowLinkModal(true);
+                      }
+                    }}
+                    onMouseDown={(e) => {
+                      if (isEditMode) {
+                        if (e.button !== 0) return;
+                        e.stopPropagation();
+                        handleItemSelect(l.id, 'hyperlink', e);
+                        setDraggingItem({
+                          id: l.id,
+                          type: 'hyperlink',
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          origX: l.x,
+                          origY: l.y,
+                        });
+                      }
+                    }}
+                    onTouchStart={(e) => {
+                      if (isEditMode && e.touches.length === 1) {
+                        e.stopPropagation();
+                        handleItemSelect(l.id, 'hyperlink', e);
+                        const touch = e.touches[0];
+                        setDraggingItem({
+                          id: l.id,
+                          type: 'hyperlink',
+                          startX: touch.clientX,
+                          startY: touch.clientY,
+                          origX: l.x,
+                          origY: l.y,
+                        });
+                      }
                     }}
                     style={{
                       left: `${cssX}px`,
                       top: `${cssY}px`,
                       width: `${l.width * scale}px`,
                       height: `${l.height * scale}px`,
-                      pointerEvents: isEditMode ? 'none' : 'auto',
+                      pointerEvents: 'auto',
                     }}
                     className={`absolute rounded cursor-pointer z-30 transition-all ${
                       isSelected
-                        ? 'ring-2 ring-blue-500 bg-blue-500/20 border border-blue-500'
+                        ? 'ring-2 ring-blue-500 bg-blue-500/20 border border-blue-500 shadow-sm'
                         : isEditMode
-                        ? 'border border-blue-400/20'
+                        ? 'border border-blue-400/50 bg-blue-500/10 hover:border-blue-500 hover:bg-blue-500/20'
                         : 'border border-blue-500/30 hover:border-blue-500 hover:bg-blue-500/10'
                     }`}
-                    title={isEditMode ? undefined : `Click to open link: ${l.url}`}
-                  />
+                    title={
+                      isEditMode
+                        ? `Hyperlink (${l.url}) - Click to select, drag to move, double-click to edit`
+                        : `Click to open link: ${l.url}`
+                    }
+                  >
+                    {isEditMode && isSelected && (
+                      <>
+                        {renderResizeHandles(l.id, 'hyperlink', l.x, l.y, l.width, l.height)}
+                        {/* Quick action floating badge */}
+                        <div
+                          className="absolute -top-8 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-zinc-900/95 text-white rounded-md px-2 py-0.5 shadow-lg text-[10px] z-50 whitespace-nowrap pointer-events-auto"
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const associatedText = textOverlays.find(
+                                (t) => t.pageIndex === l.pageIndex && Math.abs(t.x - l.x) < 15 && Math.abs(t.y - l.y) < 20
+                              );
+                              setLinkModalData({
+                                targetHyperlinkId: l.id,
+                                text: associatedText ? associatedText.text : '',
+                                url: l.url,
+                              });
+                              setShowLinkModal(true);
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-zinc-700 font-medium text-blue-300"
+                            title="Edit URL & Display Text"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Edit Link</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const targetUrl = l.url.startsWith('http://') || l.url.startsWith('https://') ? l.url : `https://${l.url}`;
+                              window.open(targetUrl, '_blank');
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-zinc-700 font-medium text-emerald-300"
+                            title="Test Link (Open in Browser)"
+                          >
+                            <span>Open</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextLinks = hyperlinks.filter((item) => item.id !== l.id);
+                              setHyperlinks(nextLinks);
+                              setSelectedOverlayId(null);
+                              pushSnapshot({ hyperlinks: nextLinks });
+                            }}
+                            className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-red-600 font-medium text-red-300 hover:text-white"
+                            title="Remove Hyperlink"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 );
               })}
 
@@ -10347,12 +10540,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             {imageOverlays
               .filter(
                 (img) =>
-                  img.pageIndex === pageNum - 1 &&
+                  (img.origPageIndex ?? img.pageIndex) === pageNum - 1 &&
                   img.isExtracted &&
                   img.isModified &&
                   img.origX !== undefined &&
                   img.origY !== undefined &&
-                  (img.x !== img.origX || img.y !== img.origY || img.width !== img.origWidth || img.height !== img.origHeight)
+                  (img.x !== img.origX || img.y !== img.origY || img.width !== img.origWidth || img.height !== img.origHeight || (img.origPageIndex !== undefined && img.origPageIndex !== img.pageIndex))
               )
               .map((img) => {
                 const scale = zoomScale;
@@ -10363,6 +10556,37 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 return (
                   <div
                     key={`patch_${img.id}`}
+                    style={{
+                      left: `${origCssX}px`,
+                      top: `${origCssY}px`,
+                      width: `${origCssW}px`,
+                      height: `${origCssH}px`,
+                      backgroundColor: '#ffffff',
+                    }}
+                    className="absolute z-10 pointer-events-none"
+                  />
+                );
+              })}
+
+            {/* White-out background patches for extracted shapes that have been moved across or resized */}
+            {shapes
+              .filter(
+                (s) =>
+                  (s.origPageIndex ?? s.pageIndex) === pageNum - 1 &&
+                  s.isExtracted &&
+                  s.origX !== undefined &&
+                  s.origY !== undefined &&
+                  (s.x !== s.origX || s.y !== s.origY || s.width !== s.origWidth || s.height !== s.origHeight || (s.origPageIndex !== undefined && s.origPageIndex !== s.pageIndex))
+              )
+              .map((s) => {
+                const scale = zoomScale;
+                const origCssX = s.origX! * scale;
+                const origCssY = viewportDims.height - s.origY! * scale - (s.origHeight || s.height) * scale;
+                const origCssW = (s.origWidth || s.width) * scale;
+                const origCssH = (s.origHeight || s.height) * scale;
+                return (
+                  <div
+                    key={`patch_shape_${s.id}`}
                     style={{
                       left: `${origCssX}px`,
                       top: `${origCssY}px`,
@@ -15607,7 +15831,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <div className="flex items-center justify-between pb-1 border-b border-slate-100 dark:border-zinc-800">
               <h3 className="font-bold text-sm text-slate-900 dark:text-zinc-100 flex items-center gap-2">
                 <LinkIcon className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                <span>Insert Hyperlink</span>
+                <span>{linkModalData.targetHyperlinkId ? 'Edit Hyperlink' : 'Insert Hyperlink'}</span>
               </h3>
               <button
                 type="button"
@@ -15672,7 +15896,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 onClick={() => handleApplyLink(linkModalData.text, linkModalData.url)}
                 className="px-4 py-1.5 text-xs font-semibold rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors shadow-xs"
               >
-                Apply Link
+                {linkModalData.targetHyperlinkId ? 'Save Changes' : 'Apply Link'}
               </button>
             </div>
           </div>

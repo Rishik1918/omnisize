@@ -118,17 +118,24 @@ function createWindow() {
     return null;
   });
 
-  // Handle IPC direct file overwrite (no prompt)
-  ipcMain.handle('save-file-direct', async (_event, { filePath, buffer }) => {
+  // Handle IPC direct file overwrite (no prompt under any circumstances)
+  ipcMain.handle('save-file-direct', async (_event, { filePath, defaultName, buffer }) => {
     try {
-      if (!filePath) throw new Error('No target file path provided.');
-      fs.writeFileSync(filePath, Buffer.from(buffer));
-      return { success: true, filePath };
+      let targetPath = filePath;
+      if (!targetPath) {
+        const desktopDir = app.getPath('desktop');
+        targetPath = path.join(desktopDir, defaultName || 'document.pdf');
+      }
+      fs.writeFileSync(targetPath, Buffer.from(buffer));
+      return { success: true, filePath: targetPath };
     } catch (err) {
       console.error('Error saving file directly:', err);
       return { success: false, error: err.message };
     }
   });
+
+  // Handle IPC request for Desktop directory path
+  ipcMain.handle('get-desktop-path', () => app.getPath('desktop'));
 
   // Handle IPC Save As dialog
   ipcMain.handle('save-file-dialog', async (_event, { defaultName, buffer }) => {

@@ -17,7 +17,7 @@ import { ProcessedItem, MediaType, ImageProcessingOptions, VideoProcessingOption
 import { ImageEngine } from './services/imageEngine';
 import { VideoEngine } from './services/videoEngine';
 import { DocumentEngine } from './services/documentEngine';
-import { saveFile } from './utils/fileSaver';
+import { saveFile, attachFilePath } from './utils/fileSaver';
 import { ThemeManager } from './services/themeManager';
 import { Play, AlertCircle, KeyRound, Lock, ShieldCheck, Layers, Video, Image as ImageIcon, FileText } from 'lucide-react';
 
@@ -50,16 +50,19 @@ export default function App() {
   };
 
   const handleFilesAdded = (files: File[]) => {
-    const newItems: ProcessedItem[] = files.map((file) => ({
-      id: Math.random().toString(36).substring(2, 9),
-      file,
-      name: file.name,
-      type: detectType(file),
-      originalSize: file.size,
-      previewUrl: URL.createObjectURL(file),
-      status: 'idle',
-      progress: 0,
-    }));
+    const newItems: ProcessedItem[] = files.map((f) => {
+      const file = attachFilePath(f);
+      return {
+        id: Math.random().toString(36).substring(2, 9),
+        file,
+        name: file.name,
+        type: detectType(file),
+        originalSize: file.size,
+        previewUrl: URL.createObjectURL(file),
+        status: 'idle',
+        progress: 0,
+      };
+    });
     setItems((prev) => [...prev, ...newItems]);
 
     if (activeTab === 'unlock') {
@@ -68,7 +71,8 @@ export default function App() {
     }
   };
 
-  const handleIncomingFile = (file: File) => {
+  const handleIncomingFile = (f: File) => {
+    const file = attachFilePath(f);
     const type = detectType(file);
     if (type === 'pdf') {
       setAppMode('pdfstudio');

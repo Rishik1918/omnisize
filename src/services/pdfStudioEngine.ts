@@ -46,6 +46,7 @@ export interface ImageOverlay {
   width: number;
   height: number;
   rotation?: number;
+  origPageIndex?: number;
   origX?: number;
   origY?: number;
   origWidth?: number;
@@ -139,6 +140,13 @@ export interface ShapeOverlay {
   strokeStyle?: 'solid' | 'dashed' | 'dotted';
   opacity?: number;
   rotation?: number; // 0 to 360
+  origPageIndex?: number;
+  origX?: number;
+  origY?: number;
+  origWidth?: number;
+  origHeight?: number;
+  isExtracted?: boolean;
+  isModified?: boolean;
   zIndex?: number;
   behindText?: boolean;
 }
@@ -146,6 +154,13 @@ export interface ShapeOverlay {
 export interface TableOverlay {
   id: string;
   pageIndex: number;
+  origPageIndex?: number;
+  origX?: number;
+  origY?: number;
+  origWidth?: number;
+  origHeight?: number;
+  isExtracted?: boolean;
+  isModified?: boolean;
   x: number; // PDF points
   y: number; // PDF points
   width: number; // PDF points
@@ -647,7 +662,7 @@ export class PdfStudioEngine {
 
           const page = doc.getPage(imgOverlay.pageIndex);
 
-          // If extracted image was moved or modified, blank out original bounding box with white
+          // If extracted image was moved or modified, blank out original bounding box on its original page with white
           if (
             imgOverlay.isExtracted &&
             imgOverlay.isModified &&
@@ -655,13 +670,17 @@ export class PdfStudioEngine {
             imgOverlay.origY !== undefined
           ) {
             try {
-              page.drawRectangle({
-                x: imgOverlay.origX,
-                y: imgOverlay.origY,
-                width: imgOverlay.origWidth || imgOverlay.width,
-                height: imgOverlay.origHeight || imgOverlay.height,
-                color: rgb(1, 1, 1),
-              });
+              const origPageIdx = imgOverlay.origPageIndex !== undefined ? imgOverlay.origPageIndex : imgOverlay.pageIndex;
+              if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+                const origPage = doc.getPage(origPageIdx);
+                origPage.drawRectangle({
+                  x: imgOverlay.origX,
+                  y: imgOverlay.origY,
+                  width: imgOverlay.origWidth || imgOverlay.width,
+                  height: imgOverlay.origHeight || imgOverlay.height,
+                  color: rgb(1, 1, 1),
+                });
+              }
             } catch (_) {}
           }
 
@@ -737,6 +756,28 @@ export class PdfStudioEngine {
     if (payload.shapes && payload.shapes.length > 0) {
       for (const shape of payload.shapes) {
         if (shape.pageIndex >= 0 && shape.pageIndex < doc.getPageCount()) {
+          // If shape is pre-existing from the PDF and wasn't moved or changed, keep it
+          if (shape.isExtracted && !shape.isModified) {
+            continue;
+          }
+
+          // If extracted shape was moved or modified, blank out original bounding box on its original page
+          if (shape.isExtracted && shape.isModified && shape.origX !== undefined && shape.origY !== undefined) {
+            try {
+              const origPageIdx = shape.origPageIndex !== undefined ? shape.origPageIndex : shape.pageIndex;
+              if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+                const origPage = doc.getPage(origPageIdx);
+                origPage.drawRectangle({
+                  x: shape.origX,
+                  y: shape.origY,
+                  width: shape.origWidth || shape.width,
+                  height: shape.origHeight || shape.height,
+                  color: rgb(1, 1, 1),
+                });
+              }
+            } catch (_) {}
+          }
+
           const page = doc.getPage(shape.pageIndex);
           const stroke = this.parseHexColor(shape.strokeColor || '#000000');
           const hasFill = shape.fillColor && shape.fillColor !== 'transparent' && shape.fillColor !== 'none';
@@ -766,6 +807,28 @@ export class PdfStudioEngine {
     if (payload.tables && payload.tables.length > 0) {
       for (const table of payload.tables) {
         if (table.pageIndex >= 0 && table.pageIndex < doc.getPageCount()) {
+          // If table was pre-existing and unmodified, keep it
+          if (table.isExtracted && !table.isModified) {
+            continue;
+          }
+
+          // If extracted table was moved or modified, blank out original bounding box on its original page
+          if (table.isExtracted && table.isModified && table.origX !== undefined && table.origY !== undefined) {
+            try {
+              const origPageIdx = table.origPageIndex !== undefined ? table.origPageIndex : table.pageIndex;
+              if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+                const origPage = doc.getPage(origPageIdx);
+                origPage.drawRectangle({
+                  x: table.origX,
+                  y: table.origY,
+                  width: table.origWidth || table.width,
+                  height: table.origHeight || table.height,
+                  color: rgb(1, 1, 1),
+                });
+              }
+            } catch (_) {}
+          }
+
           const page = doc.getPage(table.pageIndex);
           const cols = Math.max(1, table.cols);
           const rows = Math.max(1, table.rows);
@@ -1708,6 +1771,7 @@ export class PdfStudioEngine {
                   origY: imgY,
                   origWidth: imgW,
                   origHeight: imgH,
+                  origPageIndex: pageIndex,
                   isExtracted: true,
                   isModified: false,
                   rotation: 0,
@@ -1723,6 +1787,207 @@ export class PdfStudioEngine {
       console.warn('Image extraction note:', err);
       return [];
     }
+  }
+
+  /**
+   * Extract vector rectangle shapes from a PDF page
+   */
+  static async extractPageShapes(
+    pdfBufferOrProxy: ArrayBuffer | any,
+    pageNumber: number
+  ): Promise<ShapeOverlay[]> {
+    try {
+      const proxy = typeof pdfBufferOrProxy?.getPage === 'function'
+        ? pdfBufferOrProxy
+        : await getDocumentProxy(new Uint8Array(pdfBufferOrProxy.slice(0)));
+      const page = await proxy.getPage(pageNumber);
+      const opList = await page.getOperatorList();
+      const pageIndex = pageNumber - 1;
+      const shapes: ShapeOverlay[] = [];
+
+      let currentMatrix = [1, 0, 0, 1, 0, 0];
+      const matrixStack: number[][] = [];
+
+      const multiplyMatrices = (m1: number[], m2: number[]) => [
+        m1[0] * m2[0] + m1[2] * m2[1],
+        m1[1] * m2[0] + m1[3] * m2[1],
+        m1[0] * m2[2] + m1[2] * m2[3],
+        m1[1] * m2[2] + m1[3] * m2[3],
+        m1[0] * m2[4] + m1[2] * m2[5] + m1[4],
+        m1[1] * m2[4] + m1[3] * m2[5] + m1[5],
+      ];
+
+      for (let i = 0; i < opList.fnArray.length; i++) {
+        const fn = opList.fnArray[i];
+        const args = opList.argsArray[i];
+
+        if (fn === 10) {
+          matrixStack.push([...currentMatrix]);
+        } else if (fn === 11) {
+          if (matrixStack.length > 0) currentMatrix = matrixStack.pop()!;
+        } else if (fn === 12 && Array.isArray(args)) {
+          currentMatrix = multiplyMatrices(currentMatrix, args);
+        } else if (fn === 14 && Array.isArray(args) && args[0] && args[1]) {
+          const ops = args[0];
+          const pathArgs = args[1];
+          let argIdx = 0;
+          for (let opIdx = 0; opIdx < ops.length; opIdx++) {
+            const op = ops[opIdx];
+            if (op === 4 && pathArgs.length >= argIdx + 4) { // Rectangle
+              const rx = pathArgs[argIdx];
+              const ry = pathArgs[argIdx + 1];
+              const rw = pathArgs[argIdx + 2];
+              const rh = pathArgs[argIdx + 3];
+              argIdx += 4;
+              if (Math.abs(rw) > 16 && Math.abs(rh) > 16 && Math.abs(rw) < 550 && Math.abs(rh) < 800) {
+                const finalX = Math.round(rx * currentMatrix[0] + currentMatrix[4]);
+                const finalY = Math.round(ry * currentMatrix[3] + currentMatrix[5]);
+                const finalW = Math.round(Math.abs(rw * currentMatrix[0]));
+                const finalH = Math.round(Math.abs(rh * currentMatrix[3]));
+                shapes.push({
+                  id: `shp_extracted_${pageIndex}_${shapes.length}_${Date.now()}`,
+                  pageIndex,
+                  origPageIndex: pageIndex,
+                  type: 'rectangle',
+                  x: finalX,
+                  y: finalY,
+                  width: finalW,
+                  height: finalH,
+                  origX: finalX,
+                  origY: finalY,
+                  origWidth: finalW,
+                  origHeight: finalH,
+                  isExtracted: true,
+                  isModified: false,
+                  strokeColor: '#334155',
+                  fillColor: 'transparent',
+                  strokeWidth: 1,
+                  opacity: 1,
+                  rotation: 0,
+                });
+              }
+            } else if (op === 0 || op === 1) {
+              argIdx += 2;
+            } else if (op === 2 || op === 3) {
+              argIdx += 6;
+            }
+          }
+        }
+      }
+      return shapes;
+    } catch (err) {
+      console.warn('Shape extraction note:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Detect tabular layouts on a page from extracted text items
+   */
+  static detectPageTables(textItems: ExistingTextItem[], pageIndex: number): TableOverlay[] {
+    try {
+      if (!textItems || textItems.length < 4) return [];
+
+      const rowsMap: { y: number; items: ExistingTextItem[] }[] = [];
+      const sorted = [...textItems].sort((a, b) => b.y - a.y);
+
+      for (const item of sorted) {
+        const existingRow = rowsMap.find((r) => Math.abs(r.y - item.y) <= 6);
+        if (existingRow) {
+          existingRow.items.push(item);
+        } else {
+          rowsMap.push({ y: item.y, items: [item] });
+        }
+      }
+
+      const multiColRows = rowsMap.filter((r) => r.items.length >= 2);
+      if (multiColRows.length < 2) return [];
+
+      const tables: TableOverlay[] = [];
+      let currentTableRows: { y: number; items: ExistingTextItem[] }[] = [];
+
+      for (let i = 0; i < multiColRows.length; i++) {
+        const row = multiColRows[i];
+        if (currentTableRows.length === 0) {
+          currentTableRows.push(row);
+        } else {
+          const prevRow = currentTableRows[currentTableRows.length - 1];
+          if (Math.abs(prevRow.y - row.y) <= 38 && Math.abs(row.items.length - prevRow.items.length) <= 2) {
+            currentTableRows.push(row);
+          } else {
+            if (currentTableRows.length >= 2) {
+              const tbl = this._buildTableFromRows(currentTableRows, pageIndex);
+              if (tbl) tables.push(tbl);
+            }
+            currentTableRows = [row];
+          }
+        }
+      }
+
+      if (currentTableRows.length >= 2) {
+        const tbl = this._buildTableFromRows(currentTableRows, pageIndex);
+        if (tbl) tables.push(tbl);
+      }
+
+      return tables;
+    } catch (err) {
+      console.warn('Table detection note:', err);
+      return [];
+    }
+  }
+
+  private static _buildTableFromRows(
+    rows: { y: number; items: ExistingTextItem[] }[],
+    pageIndex: number
+  ): TableOverlay | null {
+    if (rows.length < 2) return null;
+    const allItems = rows.flatMap((r) => r.items);
+    const minX = Math.min(...allItems.map((i) => i.x));
+    const maxX = Math.max(...allItems.map((i) => i.x + i.width));
+    const minY = Math.min(...allItems.map((i) => i.y));
+    const maxY = Math.max(...allItems.map((i) => i.y + (i.height || 14)));
+
+    rows.forEach((r) => r.items.sort((a, b) => a.x - b.x));
+    const maxCols = Math.max(...rows.map((r) => r.items.length));
+    if (maxCols < 2) return null;
+
+    const cells: string[][] = rows.map((r) => {
+      const rowCells: string[] = [];
+      for (let c = 0; c < maxCols; c++) {
+        rowCells.push(r.items[c]?.currentText || r.items[c]?.originalText || '');
+      }
+      return rowCells;
+    });
+
+    const w = Math.max(80, maxX - minX + 16);
+    const h = Math.max(40, maxY - minY + 16);
+    const colW = w / maxCols;
+    const rowH = h / rows.length;
+
+    return {
+      id: `tbl_extracted_${pageIndex}_${Date.now()}`,
+      pageIndex,
+      origPageIndex: pageIndex,
+      x: Math.max(10, minX - 8),
+      y: Math.max(10, minY - 8),
+      width: w,
+      height: h,
+      origX: Math.max(10, minX - 8),
+      origY: Math.max(10, minY - 8),
+      origWidth: w,
+      origHeight: h,
+      isExtracted: true,
+      isModified: false,
+      rows: rows.length,
+      cols: maxCols,
+      cells,
+      colWidths: Array(maxCols).fill(colW),
+      rowHeights: Array(rows.length).fill(rowH),
+      headerRow: true,
+      borderWidth: 1,
+      borderColor: '#94a3b8',
+      cellBgColor: '#ffffff',
+    };
   }
 
   /**
