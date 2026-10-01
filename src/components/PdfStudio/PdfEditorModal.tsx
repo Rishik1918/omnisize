@@ -1663,7 +1663,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [selectedTextItemId, setSelectedTextItemId] = useState<string | null>(null);
 
   // Edit mode target filter ('all' = text & images, 'text' = text only, 'image' = images only)
-  const [editTargetMode, setEditTargetMode] = useState<'all' | 'text' | 'image'>('all');
+  const [editTargetMode, setEditTargetMode] = useState<'all' | 'text' | 'image'>('text');
   const [showEditTargetDropdown, setShowEditTargetDropdown] = useState<boolean>(false);
   const [pageOrderRevision, setPageOrderRevision] = useState<number>(0);
   const [reorderFeedback, setReorderFeedback] = useState<string | null>(null);
@@ -6808,10 +6808,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         }
       }
 
-      // Escape: immediately exit fullscreen mode, Page Organizer, previews, and all open dialogs/modals
+      // Escape: immediately exit fullscreen mode, Page Organizer, previews, sidebar, and all open dialogs/modals
       if (e.key === 'Escape') {
+        if (showSidebar) setShowSidebar(false);
         if (isFullscreenMode) setIsFullscreenMode(false);
         if (showPageOrganizerModal) setShowPageOrganizerModal(false);
+        setShowEditTargetDropdown(false);
         setShowInsertPageModal(false);
         setShowPageNumberModal(false);
         setShowWatermarkModal(false);
@@ -7474,35 +7476,29 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           <div className="relative inline-flex items-center">
             <button
               onClick={() => {
-                setActiveTool('edit-text');
-                setSelectedOverlayId(null);
+                if (activeTool !== 'edit-text') {
+                  setActiveTool('edit-text');
+                } else {
+                  setShowEditTargetDropdown((prev) => !prev);
+                }
               }}
-              className={`flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-l-md font-semibold whitespace-nowrap transition-all ${
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
                 activeTool === 'edit-text'
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Edit Mode - Select & edit: text in-place, images, shapes, tables"
+              title="Edit Mode - Click to edit or open target dropdown"
             >
               <Edit3 className="w-3.5 h-3.5" />
-              <span>
-                {editTargetMode === 'text' ? 'Edit Text' : editTargetMode === 'image' ? 'Edit Images' : 'Edit All'}
-              </span>
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setActiveTool('edit-text');
-                setShowEditTargetDropdown((prev) => !prev);
-              }}
-              className={`px-1 py-1 rounded-r-md border-l font-semibold transition-all ${
-                activeTool === 'edit-text'
-                  ? 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-500'
-                  : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 border-zinc-200 dark:border-zinc-700'
-              }`}
-              title="Choose what to edit: Text, Images, or Both"
-            >
-              <ChevronDown className="w-3 h-3" />
+              <span>Edit</span>
+              <ChevronDown
+                className="w-3 h-3 opacity-70 hover:opacity-100 cursor-pointer ml-0.5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveTool('edit-text');
+                  setShowEditTargetDropdown((prev) => !prev);
+                }}
+              />
             </button>
 
             {showEditTargetDropdown && (
@@ -7513,24 +7509,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 />
                 <div className="absolute top-full left-0 mt-1 w-44 bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-800 py-1.5 z-50 text-xs animate-in fade-in select-none">
                   <div className="px-3 py-1 text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
-                    Edit Target Filter
+                    Edit Mode Target
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditTargetMode('all');
-                      setActiveTool('edit-text');
-                      setShowEditTargetDropdown(false);
-                    }}
-                    className={`w-full text-left px-3 py-1.5 flex items-center justify-between transition-colors ${
-                      editTargetMode === 'all'
-                        ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 font-bold'
-                        : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                    }`}
-                  >
-                    <span>Edit All (Text & Images)</span>
-                    {editTargetMode === 'all' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
-                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -7545,7 +7525,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                     }`}
                   >
-                    <span>Edit Text Only</span>
+                    <span>Edit Text</span>
                     {editTargetMode === 'text' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
                   </button>
                   <button
@@ -7563,8 +7543,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
                     }`}
                   >
-                    <span>Edit Images Only</span>
+                    <span>Edit Images</span>
                     {editTargetMode === 'image' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditTargetMode('all');
+                      setActiveTool('edit-text');
+                      setShowEditTargetDropdown(false);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 flex items-center justify-between transition-colors ${
+                      editTargetMode === 'all'
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 font-bold'
+                        : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                    }`}
+                  >
+                    <span>Edit All</span>
+                    {editTargetMode === 'all' && <Check className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
                   </button>
                 </div>
               </>
@@ -11260,9 +11256,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             ? 'line-through'
                             : 'none',
                           fontSize: `${itemFontSize * scale}px`,
-                          color: textColor,
+                          color: (isItemModified || hasExtractedImageChanged) ? textColor : 'transparent',
                           textAlign: itemAlign,
-                          backgroundColor: isItemModified ? effectiveBgHex : 'transparent',
+                          backgroundColor: (isItemModified || hasExtractedImageChanged) ? effectiveBgHex : 'transparent',
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: `${boxH}px`,
                           height: '100%',
@@ -11772,7 +11768,12 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             {/* Render Interactive Movable, Resizable & Croppable Image Overlays */}
             {imageOverlays
-              .filter((i) => i.pageIndex === pageNum - 1 && !i.isDeleted)
+              .filter((i) => {
+                if (i.pageIndex !== pageNum - 1 || i.isDeleted) return false;
+                // In 'text' mode, do not overlay unmodified extracted background images over the native canvas
+                if (editTargetMode === 'text' && i.isExtracted && !i.isModified) return false;
+                return true;
+              })
               .map((img) => {
                 const scale = zoomScale;
                 const cssX = img.x * scale;
@@ -11837,7 +11838,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${cssY}px`,
                       width: `${cssW}px`,
                       height: `${cssH}px`,
-                      zIndex: img.zIndex ?? (img.behindText ? 3 : (img.isExtracted ? 3 : 25)),
+                      zIndex: img.zIndex ?? (img.behindText ? 2 : (img.isExtracted ? 2 : 25)),
+                      mixBlendMode: (img.behindText || (img.isExtracted && !img.isModified)) ? 'multiply' : undefined,
                       transform: img.rotation ? `rotate(${img.rotation}deg)` : undefined,
                       borderRadius: img.borderRadius ? `${img.borderRadius * scale}px` : undefined,
                       pointerEvents: editTargetMode === 'text' ? 'none' : 'auto',
