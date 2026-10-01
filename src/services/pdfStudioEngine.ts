@@ -257,6 +257,9 @@ export type PageNumberPosition =
   | 'top-left'
   | 'top-center'
   | 'top-right'
+  | 'middle-left'
+  | 'middle-center'
+  | 'middle-right'
   | 'bottom-left'
   | 'bottom-center'
   | 'bottom-right';
@@ -1292,6 +1295,8 @@ export class PdfStudioEngine {
         let posY = offsetY;
         if (cfg.position.startsWith('top')) {
           posY = pHeight - offsetY - fontSize;
+        } else if (cfg.position.startsWith('middle')) {
+          posY = (pHeight - fontSize) / 2 + (offsetY - 24);
         } else {
           posY = offsetY;
         }

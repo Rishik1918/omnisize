@@ -935,25 +935,49 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [currentPage, setCurrentPage] = useState<number>(1); // 1-indexed
   const [zoomScale, setZoomScale] = useState<number>(1.0);
   const [activeTool, setActiveTool] = useState<
-    'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image' | 'add-shape' | 'add-table' | 'pen' | 'pencil' | 'highlighter' | 'eraser'
+    'view' | 'edit-text' | 'add-text' | 'add-link' | 'add-image' | 'add-shape' | 'add-table' | 'pen' | 'pencil' | 'glow-pen' | 'highlighter' | 'eraser'
   >('view');
 
-  // Freehand Drawing Tools (Pen, Pencil, Highlighter, Eraser)
+  // Freehand Drawing Tools (Pen, Pencil, Glow Pen, Highlighter, Eraser)
   const [drawings, setDrawings] = useState<DrawingStroke[]>([]);
   const [drawingColor, setDrawingColor] = useState<string>('#000000');
   const [penThickness, setPenThickness] = useState<number>(3);
   const [pencilThickness, setPencilThickness] = useState<number>(1.5);
+  const [glowPenThickness, setGlowPenThickness] = useState<number>(4);
   const [highlighterColor, setHighlighterColor] = useState<string>('#f97316');
   const [highlighterThickness, setHighlighterThickness] = useState<number>(14);
   const [eraserRadius, setEraserRadius] = useState<number>(12); // radius in px
   const [snapToShape, setSnapToShape] = useState<boolean>(false);
   const [currentStroke, setCurrentStroke] = useState<DrawingStroke | null>(null);
   const [eraserCursorPos, setEraserCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [drawCursorPos, setDrawCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [temporaryGlowStrokes, setTemporaryGlowStrokes] = useState<Array<DrawingStroke & { expiresAt: number; opacity: number }>>([]);
+  const [highResPageThumbnails, setHighResPageThumbnails] = useState<Record<number, string>>({});
+  const drawAndHoldTimerRef = useRef<any>(null);
   const [isDrawingMouseDown, setIsDrawingMouseDown] = useState<boolean>(false);
   const [showDrawDropdown, setShowDrawDropdown] = useState<boolean>(false);
   const [showPenColorWheel, setShowPenColorWheel] = useState<boolean>(false);
   const [showPencilColorWheel, setShowPencilColorWheel] = useState<boolean>(false);
   const drawBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Temporary Neon Red Glow Pen fading and expiration effect (~3 seconds lifetime)
+  useEffect(() => {
+    if (temporaryGlowStrokes.length === 0) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setTemporaryGlowStrokes((prev) => {
+        const active = prev.filter((s) => s.expiresAt > now);
+        if (active.length === 0) return [];
+        return active.map((s) => {
+          const remaining = s.expiresAt - now;
+          // Smoothly fade out over the last 900ms
+          const opacity = remaining < 900 ? Math.max(0, remaining / 900) : 1;
+          return { ...s, opacity };
+        });
+      });
+    }, 50);
+    return () => clearInterval(timer);
+  }, [temporaryGlowStrokes.length]);
 
   // Watermark Feature State
   const DEFAULT_WATERMARK_CONFIG: WatermarkConfig = {
@@ -2577,6 +2601,39 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     };
   }, [arrayBuffer, totalPages, pageRotations]);
 
+  // Pre-generate crisp high-resolution thumbnails for fullscreen page organizer
+  useEffect(() => {
+    if (!showPageOrganizerModal || !arrayBuffer || totalPages <= 0) return;
+    let isCancelled = false;
+
+    const prefetchHighRes = async () => {
+      try {
+        const proxy = pdfProxyRef.current || (await getDocumentProxy(new Uint8Array(arrayBuffer.slice(0))));
+        if (isCancelled) return;
+
+        for (let p = 1; p <= totalPages; p++) {
+          if (isCancelled) break;
+          if (highResPageThumbnails[p]) continue;
+          try {
+            const rot = pageRotations[p - 1] || 0;
+            const { canvas } = await PdfStudioEngine.renderPageToCanvas(proxy, p, 1.0, rot);
+            if (isCancelled) break;
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+            setHighResPageThumbnails((prev) => (prev[p] === dataUrl ? prev : { ...prev, [p]: dataUrl }));
+          } catch (_) {}
+        }
+      } catch (err) {
+        console.warn('Could not prefetch high-res page thumbnails:', err);
+      }
+    };
+
+    prefetchHighRes();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [showPageOrganizerModal, arrayBuffer, totalPages, pageRotations]);
+
   // Load PDF buffer on file selection and detect digital signatures
   useEffect(() => {
     if (!file) return;
@@ -2878,19 +2935,22 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
               console.warn('Annotation/link extraction note:', linkErr);
             }
 
-            // Extract existing embedded PDF photos and images for this page so they are selectable and editable
-            try {
-              const currentCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
-              const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage, currentCanvas, basePageDims);
-              if (isMounted && extractedImgs.length > 0) {
-                setImageOverlays((prev) => {
-                  const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
-                  const newImgs = extractedImgs.filter((i) => !existingKeys.has(`${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
-                  return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
-                });
+            // Extract existing embedded PDF photos and images ONLY in Edit mode ('edit-text')
+            // Do NOT extract in Read/View mode ('view')
+            if (activeTool === 'edit-text') {
+              try {
+                const currentCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
+                const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage, currentCanvas, basePageDims);
+                if (isMounted && extractedImgs.length > 0) {
+                  setImageOverlays((prev) => {
+                    const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
+                    const newImgs = extractedImgs.filter((i) => !existingKeys.has(`${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
+                    return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
+                  });
+                }
+              } catch (imgErr) {
+                console.warn('Page image extraction note:', imgErr);
               }
-            } catch (imgErr) {
-              console.warn('Page image extraction note:', imgErr);
             }
 
             // Extract existing embedded vector shapes (boxes, rects, banners) so they are selectable, resizable and movable across pages
@@ -2936,6 +2996,32 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       }
     };
   }, [currentPage, zoomScale, arrayBuffer, totalPages, pageRotations]);
+
+  // When switching into 'edit-text' mode, extract embedded images for current page so they become movable/editable
+  useEffect(() => {
+    if (activeTool !== 'edit-text') return;
+    let isMounted = true;
+    const extractForEditMode = async () => {
+      try {
+        const proxyOrBuf = pdfProxyRef.current || (arrayBuffer ? new Uint8Array(arrayBuffer.slice(0)) : null);
+        if (!proxyOrBuf) return;
+        const currentCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
+        const dims = basePageDims;
+        const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage, currentCanvas, dims);
+        if (isMounted && extractedImgs.length > 0) {
+          setImageOverlays((prev) => {
+            const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
+            const newImgs = extractedImgs.filter((i) => !existingKeys.has(`${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
+            return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
+          });
+        }
+      } catch (err) {
+        console.warn('Edit mode image extraction error:', err);
+      }
+    };
+    extractForEditMode();
+    return () => { isMounted = false; };
+  }, [activeTool, currentPage]);
 
   // Save PDF Document
   // Save PDF Document (supports direct in-place overwrite without prompt, or Save As)
@@ -5305,11 +5391,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       thickness = pencilThickness;
       color = drawingColor;
       opacity = 0.85;
+    } else if (activeTool === 'glow-pen') {
+      thickness = glowPenThickness;
+      color = '#ff2d55';
+      opacity = 1;
     } else if (activeTool === 'highlighter') {
       thickness = highlighterThickness;
       color = highlighterColor;
       opacity = 0.45;
       blendMode = 'multiply';
+    }
+
+    if (['pen', 'pencil', 'glow-pen'].includes(activeTool)) {
+      setDrawCursorPos({ x: clientX, y: clientY });
     }
 
     const pressureVal = (e.pointerType === 'pen' && e.pressure > 0) ? e.pressure : (e.pressure || 0.5);
@@ -5335,6 +5429,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     const x = clientX / zoomScale;
     const y = clientY / zoomScale;
 
+    if (['pen', 'pencil', 'glow-pen'].includes(activeTool)) {
+      setDrawCursorPos({ x: clientX, y: clientY });
+    }
+
     if (activeTool === 'eraser') {
       setEraserCursorPos({ x: clientX, y: clientY });
       if (isDrawingMouseDown) {
@@ -5350,6 +5448,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (activeTool === 'highlighter' && highlighterMode === 'line-snap' && currentStroke.points.length > 0) {
       targetY = currentStroke.points[0].y;
     }
+
+    // Draw and Hold gesture: pausing the stylus for 420ms snaps the active ink into a crisp vector shape
+    if (drawAndHoldTimerRef.current) {
+      clearTimeout(drawAndHoldTimerRef.current);
+    }
+    drawAndHoldTimerRef.current = setTimeout(() => {
+      setCurrentStroke((prev) => {
+        if (!prev || prev.points.length < 5) return prev;
+        const snapped = snapStrokeWithDollarP(prev.points);
+        return {
+          ...prev,
+          points: snapped,
+        };
+      });
+    }, 420);
 
     setCurrentStroke((prev) => {
       if (!prev) return null;
@@ -5367,6 +5480,11 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       } catch (_) {}
     }
 
+    if (drawAndHoldTimerRef.current) {
+      clearTimeout(drawAndHoldTimerRef.current);
+      drawAndHoldTimerRef.current = null;
+    }
+
     setIsDrawingMouseDown(false);
 
     if (activeTool === 'eraser') {
@@ -5381,6 +5499,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     let finalPoints = currentStroke.points;
     if (snapToShape) {
       finalPoints = snapStrokeWithDollarP(currentStroke.points);
+    }
+
+    // Temporary neon red glow pen: stays for ~3s and vanishes smoothly without polluting the saved PDF
+    if (activeTool === 'glow-pen') {
+      const glowStroke = {
+        ...currentStroke,
+        points: finalPoints,
+        expiresAt: Date.now() + 3000,
+        opacity: 1,
+      };
+      setTemporaryGlowStrokes((prev) => [...prev, glowStroke]);
+      setCurrentStroke(null);
+      return;
     }
 
     const completedStroke: DrawingStroke = {
@@ -6499,16 +6630,22 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         }
       }
 
-      // Escape: clear selection / cancel edit / close popups
+      // Escape: immediately exit fullscreen mode, Page Organizer, previews, and all open dialogs/modals
       if (e.key === 'Escape') {
-        if (isFullscreenMode) {
-          setIsFullscreenMode(false);
-          return;
-        }
-        if (showPageOrganizerModal) {
-          setShowPageOrganizerModal(false);
-          return;
-        }
+        if (isFullscreenMode) setIsFullscreenMode(false);
+        if (showPageOrganizerModal) setShowPageOrganizerModal(false);
+        setShowInsertPageModal(false);
+        setShowPageNumberModal(false);
+        setShowWatermarkModal(false);
+        setShowBorderModal(false);
+        setShowDrawDropdown(false);
+        setShowWatermarkDropdown(false);
+        setShowInsertPageDropdown(false);
+        setShowPageNumberDropdown(false);
+        setShowPenColorWheel(false);
+        setShowPencilColorWheel(false);
+        setShowPageSizeDropdown(false);
+        setShowShapesDropdown(false);
         setActiveEditingId(null);
         setSelectedTextItemId(null);
         setSelectedOverlayId(null);
@@ -6519,25 +6656,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         setSelectedStrokeId(null);
         setSelectedTableRange(null);
         setCropImageId(null);
-        setShowWatermarkModal(false);
-        setShowBorderModal(false);
-        setShowInsertPageModal(false);
-        setShowPageNumberModal(false);
-        setShowDrawDropdown(false);
-        setShowWatermarkDropdown(false);
-        setShowInsertPageDropdown(false);
-        setShowPageNumberDropdown(false);
-        setShowPenColorWheel(false);
-        setShowPencilColorWheel(false);
-        if (['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool)) {
+        if (['pen', 'pencil', 'glow-pen', 'highlighter', 'eraser'].includes(activeTool)) {
           setActiveTool('view');
         }
+        return;
       }
     };
 
-    window.addEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
     return () => {
-      window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
     };
   }, [
     isOpen,
@@ -6635,15 +6763,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   }, [detectedTextItems, zoomScale, viewportDims.height]);
 
   const isCellInRange = (tableId: string, r: number, c: number): boolean => {
-    if (selectedTableCell && selectedTableCell.tableId === tableId && selectedTableCell.row === r && selectedTableCell.col === c) {
-      return true;
-    }
     if (selectedTableRange && selectedTableRange.tableId === tableId) {
       const minR = Math.min(selectedTableRange.startRow, selectedTableRange.endRow);
       const maxR = Math.max(selectedTableRange.startRow, selectedTableRange.endRow);
       const minC = Math.min(selectedTableRange.startCol, selectedTableRange.endCol);
       const maxC = Math.max(selectedTableRange.startCol, selectedTableRange.endCol);
-      return r >= minR && r <= maxR && c >= minC && c <= maxC;
+      if (minR !== maxR || minC !== maxC || isTableSelecting) {
+        return r >= minR && r <= maxR && c >= minC && c <= maxC;
+      }
     }
     return false;
   };
@@ -7618,14 +7745,16 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 setShowDrawDropdown(!showDrawDropdown);
               }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-semibold whitespace-nowrap transition-all ${
-                ['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) || showDrawDropdown
+                ['pen', 'pencil', 'glow-pen', 'highlighter', 'eraser'].includes(activeTool) || showDrawDropdown
                   ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
               }`}
-              title="Drawing Tools (Pen, Pencil, Highlighter, Eraser)"
+              title="Drawing Tools (Pen, Pencil, Glow Pen, Highlighter, Eraser)"
             >
               {activeTool === 'pencil' ? (
                 <PenTool className="w-3.5 h-3.5 text-amber-400" />
+              ) : activeTool === 'glow-pen' ? (
+                <Sparkles className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
               ) : activeTool === 'highlighter' ? (
                 <Highlighter className="w-3.5 h-3.5 text-orange-400" />
               ) : activeTool === 'eraser' ? (
@@ -7634,7 +7763,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 <Pen className="w-3.5 h-3.5 text-indigo-400" />
               )}
               <span className="capitalize">
-                {['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) ? activeTool : 'Draw'}
+                {activeTool === 'glow-pen' ? 'Glow Pen' : ['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) ? activeTool : 'Draw'}
               </span>
               <ChevronDown className="w-2.5 h-2.5 opacity-60" />
             </button>
@@ -7689,6 +7818,24 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           <span>Pencil</span>
                         </div>
                         <span className="text-[10px] opacity-70">Shift+P</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveTool('glow-pen');
+                          setShowDrawDropdown(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          activeTool === 'glow-pen'
+                            ? 'bg-rose-600 text-white'
+                            : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
+                          <span>Glow Pen (Temp)</span>
+                        </div>
+                        <span className="text-[10px] text-rose-400 font-bold">3s Fade</span>
                       </button>
                       <button
                         type="button"
@@ -9679,6 +9826,69 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             </div>
           )}
 
+          {/* Contextual Properties: Glow Pen */}
+          {activeTool === 'glow-pen' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#ff2d55] animate-ping" />
+                <span className="text-[11px] font-bold text-rose-500">Neon Red Glow</span>
+                <span className="text-[10px] text-zinc-500 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 px-1.5 py-0.5 rounded">
+                  Fades in 3s (Not saved to PDF)
+                </span>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600 dark:text-zinc-400">Size:</span>
+                <input
+                  type="range"
+                  min="2"
+                  max="16"
+                  step="1"
+                  value={glowPenThickness}
+                  onChange={(e) => setGlowPenThickness(parseFloat(e.target.value) || 4)}
+                  className="w-16 accent-rose-600"
+                />
+                <span className="font-mono text-[11px] font-bold text-rose-600 dark:text-rose-400 w-8">
+                  {glowPenThickness}px
+                </span>
+                <div className="flex items-center gap-1">
+                  {[2, 4, 6, 8, 12].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setGlowPenThickness(t)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                        glowPenThickness === t
+                          ? 'bg-rose-50 dark:bg-rose-950/50 border-rose-400 text-rose-600 dark:text-rose-300'
+                          : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-zinc-700 mx-0.5" />
+
+              <button
+                type="button"
+                onClick={() => setSnapToShape(!snapToShape)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold text-xs border transition-all ${
+                  snapToShape
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white dark:bg-zinc-800 border-slate-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700'
+                }`}
+                title="Snap to Shape (S)"
+              >
+                <Shapes className="w-3.5 h-3.5" />
+                <span>Snap to Shape: {snapToShape ? 'ON' : 'OFF'}</span>
+              </button>
+            </div>
+          )}
+
           {/* Contextual Properties: Highlighter */}
           {activeTool === 'highlighter' && (
             <div className="flex items-center gap-2 flex-wrap">
@@ -9942,7 +10152,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       <div className="absolute top-1 left-1 text-[9px] font-bold text-zinc-600 bg-white/90 backdrop-blur-xs px-1 rounded shadow-2xs z-10">{pageNum}</div>
                       {pageThumbnails[pageNum] ? (
                         <img
-                          src={pageThumbnails[pageNum]}
+                          src={highResPageThumbnails[pageNum] || pageThumbnails[pageNum]}
                           alt={`Page ${pageNum}`}
                           className="w-full h-full object-contain pointer-events-none"
                         />
@@ -10428,6 +10638,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
                     const pos = pageNumberConfig.position;
                     const isTop = pos.startsWith('top');
+                    const isMiddle = pos.startsWith('middle');
                     const isCenter = pos.endsWith('center');
                     const isRight = pos.endsWith('right');
                     const offsetY = (pageNumberConfig.offsetY || 24) * zoomScale;
@@ -10437,11 +10648,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       <div
                         className="absolute pointer-events-none select-none z-15 flex items-center"
                         style={{
-                          top: isTop ? `${offsetY}px` : undefined,
-                          bottom: !isTop ? `${offsetY}px` : undefined,
+                          top: isMiddle ? '50%' : (isTop ? `${offsetY}px` : undefined),
+                          bottom: (!isTop && !isMiddle) ? `${offsetY}px` : undefined,
                           left: isCenter ? '50%' : (!isRight ? `${36 * scale}px` : undefined),
                           right: isRight ? `${36 * scale}px` : undefined,
-                          transform: isCenter ? 'translateX(-50%)' : undefined,
+                          transform: isMiddle
+                            ? (isCenter ? 'translate(-50%, -50%)' : 'translateY(-50%)')
+                            : (isCenter ? 'translateX(-50%)' : undefined),
                           fontFamily: pageNumberConfig.fontFamily || 'Helvetica, sans-serif',
                           fontSize: `${(pageNumberConfig.fontSize || 10) * scale}px`,
                           fontWeight:
@@ -11744,20 +11957,23 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                       if (target.getAttribute('data-resizer') === 'true') return;
                                       e.stopPropagation();
                                       setSelectedTableId(tbl.id);
-                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
-                                      setSelectedTableRange({ tableId: tbl.id, startRow: rIdx, startCol: cIdx, endRow: rIdx, endCol: cIdx });
+                                      setMultiSelectedIds([tbl.id]);
                                       setTableSelectionStart({ tableId: tbl.id, row: rIdx, col: cIdx });
-                                      setIsTableSelecting(true);
+                                      setIsTableSelecting(false);
                                     }}
                                     onMouseEnter={() => {
-                                      if (isTableSelecting && tableSelectionStart && tableSelectionStart.tableId === tbl.id) {
-                                        setSelectedTableRange({
-                                          tableId: tbl.id,
-                                          startRow: tableSelectionStart.row,
-                                          startCol: tableSelectionStart.col,
-                                          endRow: rIdx,
-                                          endCol: cIdx,
-                                        });
+                                      if (tableSelectionStart && tableSelectionStart.tableId === tbl.id) {
+                                        if (tableSelectionStart.row !== rIdx || tableSelectionStart.col !== cIdx) {
+                                          setIsTableSelecting(true);
+                                          setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
+                                          setSelectedTableRange({
+                                            tableId: tbl.id,
+                                            startRow: tableSelectionStart.row,
+                                            startCol: tableSelectionStart.col,
+                                            endRow: rIdx,
+                                            endCol: cIdx,
+                                          });
+                                        }
                                       }
                                     }}
                                     onTouchStart={(e) => {
@@ -11765,10 +11981,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                       const target = e.target as HTMLElement;
                                       if (target.getAttribute('data-resizer') === 'true') return;
                                       setSelectedTableId(tbl.id);
-                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
-                                      setSelectedTableRange({ tableId: tbl.id, startRow: rIdx, startCol: cIdx, endRow: rIdx, endCol: cIdx });
+                                      setMultiSelectedIds([tbl.id]);
                                       setTableSelectionStart({ tableId: tbl.id, row: rIdx, col: cIdx });
-                                      setIsTableSelecting(true);
+                                      setIsTableSelecting(false);
                                     }}
                                     style={{
                                       backgroundColor: effectiveCellBg,
@@ -11790,11 +12005,14 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setSelectedTableId(tbl.id);
-                                      setSelectedTableCell({ tableId: tbl.id, row: rIdx, col: cIdx });
                                       setSelectedShapeId(null);
                                       setSelectedOverlayId(null);
                                       setSelectedTextItemId(null);
                                       setMultiSelectedIds([tbl.id]);
+                                      if (!isTableSelecting) {
+                                        setSelectedTableCell(null);
+                                        setSelectedTableRange(null);
+                                      }
                                       if (hasCellImg) {
                                         setActiveTableImgCell(`${tbl.id}_${rIdx}_${cIdx}`);
                                       } else {
@@ -12295,7 +12513,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                     )}
 
                                     {/* Column Resizer Handle on right border (All columns including end) */}
-                                    {isSelected && !selectedTableCell && (
+                                    {isSelected && (
                                       <div
                                         data-resizer="true"
                                         onMouseDown={(e) => {
@@ -12327,7 +12545,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                                     )}
 
                                     {/* Row Resizer Handle on bottom border (All rows including end) */}
-                                    {isSelected && !selectedTableCell && (
+                                    {isSelected && (
                                       <div
                                         data-resizer="true"
                                         onMouseDown={(e) => {
@@ -12370,7 +12588,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       </tbody>
                     </table>
 
-                    {isSelected && !selectedTableCell && renderResizeHandles(tbl.id, 'table', tbl.x, tbl.y, totalW, totalH, colWidths, rowHeights)}
+                    {isSelected && renderResizeHandles(tbl.id, 'table', tbl.x, tbl.y, totalW, totalH, colWidths, rowHeights)}
                   </div>
                 );
               })}
@@ -12691,6 +12909,58 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                   />
                 );
               })()}
+
+              {/* Temporary Neon Red Glow Strokes */}
+              {temporaryGlowStrokes
+                .filter((s) => s.pageIndex === pageIdx)
+                .map((stroke) => {
+                  const pts = stroke.points;
+                  if (!pts || pts.length < 2) return null;
+                  let d = `M ${pts[0].x} ${pts[0].y}`;
+                  for (let i = 1; i < pts.length; i++) {
+                    const prev = pts[i - 1];
+                    const curr = pts[i];
+                    const midX = (prev.x + curr.x) / 2;
+                    const midY = (prev.y + curr.y) / 2;
+                    d += ` Q ${prev.x} ${prev.y}, ${midX} ${midY}`;
+                  }
+                  d += ` T ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
+                  return (
+                    <g key={stroke.id} style={{ opacity: stroke.opacity }}>
+                      {/* Outer neon red aura glow */}
+                      <path
+                        d={d}
+                        fill="none"
+                        stroke="#ff0055"
+                        strokeWidth={stroke.thickness * 2.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        opacity={0.35}
+                        style={{ filter: 'drop-shadow(0 0 8px #ff2d55)' }}
+                      />
+                      {/* Mid neon red glow */}
+                      <path
+                        d={d}
+                        fill="none"
+                        stroke="#ff2d55"
+                        strokeWidth={stroke.thickness * 1.6}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        opacity={0.7}
+                      />
+                      {/* Crisp core stroke */}
+                      <path
+                        d={d}
+                        fill="none"
+                        stroke="#ffffff"
+                        strokeWidth={Math.max(1.5, stroke.thickness * 0.5)}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        opacity={0.9}
+                      />
+                    </g>
+                  );
+                })}
             </svg>
 
             {/* Floating Quick Action Toolbar for Selected Drawing Stroke */}
@@ -12798,17 +13068,34 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             })()}
 
             {/* Interactive Drawing Pointer Capture Layer */}
-            {['pen', 'pencil', 'highlighter', 'eraser'].includes(activeTool) && (
+            {['pen', 'pencil', 'glow-pen', 'highlighter', 'eraser'].includes(activeTool) && (
               <div
                 className="absolute inset-0 z-35 touch-none"
                 style={{
-                  cursor: activeTool === 'eraser' ? 'none' : 'crosshair',
+                  cursor: ['eraser', 'pen', 'pencil', 'glow-pen'].includes(activeTool) ? 'none' : 'crosshair',
                 }}
                 onPointerDown={(e) => handleDrawingStart(e, pageIdx)}
                 onPointerMove={(e) => handleDrawingMove(e, pageIdx)}
                 onPointerUp={handleDrawingEnd}
                 onPointerLeave={() => {
                   if (activeTool === 'eraser') setEraserCursorPos(null);
+                  setDrawCursorPos(null);
+                }}
+              />
+            )}
+
+            {/* Dynamic Brush Cursor Dot Indicator for Pen, Pencil, and Glow-Pen */}
+            {['pen', 'pencil', 'glow-pen'].includes(activeTool) && isCurrentPage && drawCursorPos && (
+              <div
+                className="absolute pointer-events-none rounded-full z-40"
+                style={{
+                  left: `${drawCursorPos.x}px`,
+                  top: `${drawCursorPos.y}px`,
+                  width: `${Math.max(4, (activeTool === 'pen' ? penThickness : activeTool === 'pencil' ? pencilThickness : glowPenThickness) * zoomScale)}px`,
+                  height: `${Math.max(4, (activeTool === 'pen' ? penThickness : activeTool === 'pencil' ? pencilThickness : glowPenThickness) * zoomScale)}px`,
+                  backgroundColor: activeTool === 'glow-pen' ? '#ff2d55' : drawingColor,
+                  boxShadow: activeTool === 'glow-pen' ? '0 0 10px #ff2d55, 0 0 20px #ff2d55' : '0 0 0 1px rgba(255,255,255,0.8), 0 0 2px rgba(0,0,0,0.5)',
+                  transform: 'translate(-50%, -50%)',
                 }}
               />
             )}

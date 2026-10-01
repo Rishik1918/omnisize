@@ -138,6 +138,8 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
             let posY = target.height - offsetY * scale;
             if (position.startsWith('top')) {
               posY = offsetY * scale + calcFontSize / 2;
+            } else if (position.startsWith('middle')) {
+              posY = target.height / 2;
             }
 
             ctx.fillText(text, posX, posY);
@@ -196,6 +198,9 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
     { id: 'top-left', label: 'Top Left' },
     { id: 'top-center', label: 'Top Center' },
     { id: 'top-right', label: 'Top Right' },
+    { id: 'middle-left', label: 'Middle Left' },
+    { id: 'middle-center', label: 'Middle Center' },
+    { id: 'middle-right', label: 'Middle Right' },
     { id: 'bottom-left', label: 'Bottom Left' },
     { id: 'bottom-center', label: 'Bottom Center' },
     { id: 'bottom-right', label: 'Bottom Right' },
@@ -337,25 +342,30 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
 
               {positionOpen && (
                 <div className="space-y-3 pt-1">
-                  <div className="flex items-center gap-4">
-                    {/* Grid Position Buttons */}
-                    <div className="grid grid-cols-3 gap-1 p-1 bg-[#14171d] border border-zinc-700 rounded-md w-24 h-16">
-                      {['top-left', 'top-center', 'top-right', 'bottom-left', 'bottom-center', 'bottom-right'].map((posId) => (
+                  <div className="flex items-start gap-4">
+                    {/* 3x3 Grid Position Buttons */}
+                    <div className="grid grid-cols-3 gap-1.5 p-1.5 bg-[#14171d] border border-zinc-700 rounded-lg w-28 h-28 shrink-0">
+                      {gridPositions.map((pos) => (
                         <button
-                          key={posId}
+                          key={pos.id}
                           type="button"
-                          onClick={() => setPosition(posId as PageNumberPosition)}
-                          className={`rounded-xs transition-colors ${
-                            position === posId
-                              ? 'bg-blue-500 shadow-sm'
+                          onClick={() => setPosition(pos.id)}
+                          className={`rounded-xs flex items-center justify-center transition-all ${
+                            position === pos.id
+                              ? 'bg-blue-500 shadow-sm ring-1 ring-blue-300'
                               : 'bg-zinc-800 hover:bg-zinc-700'
                           }`}
-                          title={posId}
-                        />
+                          title={pos.label}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full ${position === pos.id ? 'bg-white' : 'bg-zinc-500'}`} />
+                        </button>
                       ))}
                     </div>
 
-                    <div className="flex-1 space-y-1.5">
+                    <div className="flex-1 space-y-2">
+                      <div className="text-[11px] text-zinc-300 font-semibold">
+                        Selected: <span className="text-blue-400 capitalize">{position.replace('-', ' ')}</span>
+                      </div>
                       <div className="flex items-center justify-between gap-1">
                         <span className="text-zinc-400">Offset Y</span>
                         <div className="flex items-center gap-1">

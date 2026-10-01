@@ -181,7 +181,19 @@ export default function App() {
 
     (window as any).handleExternalAndroidFile = handleAndroidData;
 
-    // Check if Android queued a pending file during cold start
+    // Check if Android queued a pending file in AndroidBridge interface or window scope during cold start
+    try {
+      if ((window as any).AndroidBridge && typeof (window as any).AndroidBridge.getPendingFile === 'function') {
+        const rawJson = (window as any).AndroidBridge.getPendingFile();
+        if (rawJson) {
+          const parsed = JSON.parse(rawJson);
+          handleAndroidData(parsed);
+        }
+      }
+    } catch (bridgeErr) {
+      console.warn('AndroidBridge getPendingFile check note:', bridgeErr);
+    }
+
     if ((window as any).__omnisize_pending_file) {
       handleAndroidData((window as any).__omnisize_pending_file);
       (window as any).__omnisize_pending_file = null;

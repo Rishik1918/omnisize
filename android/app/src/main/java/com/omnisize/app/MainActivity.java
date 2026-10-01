@@ -8,6 +8,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.Base64;
+import android.webkit.JavascriptInterface;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -22,6 +23,23 @@ public class MainActivity extends BridgeActivity {
     private ParcelFileDescriptor activeFileDescriptor = null;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
+    public class AndroidBridgeInterface {
+        @JavascriptInterface
+        public String getPendingFile() {
+            if (pendingFile != null) {
+                String str = pendingFile.toString();
+                pendingFile = null;
+                return str;
+            }
+            return null;
+        }
+
+        @JavascriptInterface
+        public void acknowledgePendingFile() {
+            pendingFile = null;
+        }
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -31,6 +49,13 @@ public class MainActivity extends BridgeActivity {
             Insets insets = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars());
             view.setPadding(0, insets.top, 0, 0);
             return windowInsets;
+        });
+
+        // Register JavaScript interface for immediate reliable cold-start file retrieval
+        mainHandler.post(() -> {
+            if (bridge != null && bridge.getWebView() != null) {
+                bridge.getWebView().addJavascriptInterface(new AndroidBridgeInterface(), "AndroidBridge");
+            }
         });
 
         handleIntent(getIntent());
@@ -142,23 +167,40 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void dispatchPendingFile() {
-        if (pendingFile == null || bridge == null || bridge.getWebView() == null) return;
-        String js = "(function() {" +
-                "  window.__omnisize_pending_file = " + pendingFile.toString() + ";" +
-                "  if (typeof window.handleExternalAndroidFile === 'function') {" +
-                "    window.handleExternalAndroidFile(" + pendingFile.toString() + ");" +
-                "  }" +
-                "})();";
-        bridge.getWebView().evaluateJavascript(js, null);
+        if (pendingFile == null) return;
+        final String fileJsonStr = pendingFile.toString();
 
-        // Also schedule a retry in case webview is still booting
-        mainHandler.postDelayed(() -> {
-            if (pendingFile != null && bridge != null && bridge.getWebView() != null) {
-                bridge.getWebView().evaluateJavascript(
-                    "if (typeof window.handleExternalAndroidFile === 'function' && window.__omnisize_pending_file) {" +
-                    "  window.handleExternalAndroidFile(window.__omnisize_pending_file);" +
-                    "}", null);
+        final Runnable attemptDeliver = new Runnable() {
+            private int attempts = 0;
+
+            @Override
+            public void run() {
+                attempts++;
+                if (pendingFile == null) return;
+
+                if (bridge != null && bridge.getWebView() != null) {
+                    String script = "(function() {" +
+                        "  var data = " + fileJsonStr + ";" +
+                        "  window.__omnisize_pending_file = data;" +
+                        "  if (typeof window.handleExternalAndroidFile === 'function') {" +
+                        "    window.handleExternalAndroidFile(data);" +
+                        "    return 'handled';" +
+                        "  }" +
+                        "  return 'queued';" +
+                        "})();";
+                    bridge.getWebView().evaluateJavascript(script, (result) -> {
+                        if (result != null && result.contains("handled")) {
+                            pendingFile = null;
+                        } else if (attempts < 25) {
+                            mainHandler.postDelayed(this, 350);
+                        }
+                    });
+                } else if (attempts < 25) {
+                    mainHandler.postDelayed(this, 350);
+                }
             }
-        }, 1200);
+        };
+
+        mainHandler.post(attemptDeliver);
     }
 }
