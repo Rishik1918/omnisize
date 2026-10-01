@@ -111,13 +111,34 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
           }
 
           if (applies) {
-            const scale = target.width / basePageDims.width;
-            const calcFontSize = fontSize * scale;
+            const safeBaseW = (basePageDims && basePageDims.width > 0) ? basePageDims.width : (cssWidth || target.width || 595.28);
+            const scale = target.width / safeBaseW;
+            const calcFontSize = Math.max(8, fontSize * scale);
             const displayVal = startFrom + previewPage - 1;
+
+            const toRoman = (num: number, upper = true) => {
+              if (num <= 0) return String(num);
+              const romanMap: [number, string][] = [
+                [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+                [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+                [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+              ];
+              let res = '';
+              for (const [v, s] of romanMap) {
+                while (num >= v) {
+                  res += s;
+                  num -= v;
+                }
+              }
+              return upper ? res : res.toLowerCase();
+            };
+
             let text = `${displayVal}`;
             if (format === 'page-x') text = `Page ${displayVal}`;
             else if (format === 'page-x-of-y') text = `Page ${displayVal} of ${totalPages || 1}`;
             else if (format === 'dash') text = `- ${displayVal} -`;
+            else if (format === 'roman-upper') text = toRoman(displayVal, true);
+            else if (format === 'roman-lower') text = toRoman(displayVal, false);
 
             ctx.save();
             ctx.font = `${fontWeight === 'bold' ? 'bold ' : fontWeight === 'medium' ? '500 ' : ''}${calcFontSize}px "${fontFamily}", sans-serif`;
@@ -205,6 +226,48 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
     { id: 'bottom-center', label: 'Bottom Center' },
     { id: 'bottom-right', label: 'Bottom Right' },
   ];
+
+  let isPageApplies = false;
+  if (enabled) {
+    if (filterMode === 'all') isPageApplies = true;
+    else if (filterMode === 'odd') isPageApplies = previewPage % 2 !== 0;
+    else if (filterMode === 'even') isPageApplies = previewPage % 2 === 0;
+    else if (filterMode === 'specific' && specificPages) {
+      const parts = specificPages.split(',').map((p) => p.trim());
+      isPageApplies = parts.some((p) => {
+        if (p.includes('-')) {
+          const [a, b] = p.split('-').map(Number);
+          return previewPage >= a && previewPage <= b;
+        }
+        return Number(p) === previewPage;
+      });
+    }
+  }
+
+  const toRoman = (num: number, upper = true) => {
+    if (num <= 0) return String(num);
+    const romanMap: [number, string][] = [
+      [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+      [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+      [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+    ];
+    let res = '';
+    for (const [v, s] of romanMap) {
+      while (num >= v) {
+        res += s;
+        num -= v;
+      }
+    }
+    return upper ? res : res.toLowerCase();
+  };
+
+  const displayVal = startFrom + previewPage - 1;
+  let previewBadgeText = `${displayVal}`;
+  if (format === 'page-x') previewBadgeText = `Page ${displayVal}`;
+  else if (format === 'page-x-of-y') previewBadgeText = `Page ${displayVal} of ${totalPages || 1}`;
+  else if (format === 'dash') previewBadgeText = `- ${displayVal} -`;
+  else if (format === 'roman-upper') previewBadgeText = toRoman(displayVal, true);
+  else if (format === 'roman-lower') previewBadgeText = toRoman(displayVal, false);
 
   return (
     <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-3 sm:p-5 bg-black/75 backdrop-blur-xs select-none">
@@ -468,7 +531,7 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
           >
             <div className="flex-1 flex items-center justify-center w-full min-h-0 overflow-auto p-4 select-none">
               <div
-                className="bg-white shadow-2xl rounded-xs overflow-hidden border border-zinc-300/40 dark:border-zinc-800 transition-all origin-center"
+                className="relative bg-white shadow-2xl rounded-xs overflow-hidden border border-zinc-300/40 dark:border-zinc-800 transition-all origin-center"
                 style={{
                   width: baseCanvasDims ? `${Math.round(baseCanvasDims.width * previewZoom)}px` : 'auto',
                   height: baseCanvasDims ? `${Math.round(baseCanvasDims.height * previewZoom)}px` : 'auto',
@@ -476,6 +539,42 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
                 }}
               >
                 <canvas ref={previewCanvasRef} className="block w-full h-full" />
+                {enabled && isPageApplies && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: position.startsWith('top')
+                        ? `${Math.max(6, offsetY * previewZoom)}px`
+                        : position.startsWith('middle')
+                        ? '50%'
+                        : undefined,
+                      bottom: position.startsWith('bottom')
+                        ? `${Math.max(6, offsetY * previewZoom)}px`
+                        : undefined,
+                      left: position.endsWith('left')
+                        ? `${Math.max(10, 36 * previewZoom)}px`
+                        : position.endsWith('center')
+                        ? '50%'
+                        : undefined,
+                      right: position.endsWith('right')
+                        ? `${Math.max(10, 36 * previewZoom)}px`
+                        : undefined,
+                      transform: position.startsWith('middle')
+                        ? (position.endsWith('center') ? 'translate(-50%, -50%)' : 'translateY(-50%)')
+                        : (position.endsWith('center') ? 'translateX(-50%)' : undefined),
+                      fontFamily: `"${fontFamily}", sans-serif`,
+                      fontSize: `${Math.max(9, Math.round(fontSize * previewZoom))}px`,
+                      fontWeight: fontWeight === 'bold' ? 700 : fontWeight === 'medium' ? 500 : 400,
+                      color: color,
+                      pointerEvents: 'none',
+                      whiteSpace: 'nowrap',
+                      zIndex: 20,
+                      lineHeight: 1,
+                    }}
+                  >
+                    {previewBadgeText}
+                  </div>
+                )}
               </div>
             </div>
 

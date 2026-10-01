@@ -1653,7 +1653,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   const [showSidebar, setShowSidebar] = useState<boolean>(false);
   const [pageThumbnails, setPageThumbnails] = useState<Record<number, string>>({});
   const [showPageOrganizerModal, setShowPageOrganizerModal] = useState<boolean>(false);
-  const [organizerZoom, setOrganizerZoom] = useState<number>(100);
+  const [organizerZoom, setOrganizerZoom] = useState<number>(0.5);
   const [isFullscreenMode, setIsFullscreenMode] = useState<boolean>(false);
   const [viewportDims, setViewportDims] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const [basePageDims, setBasePageDims] = useState<{ width: number; height: number }>({ width: 595.28, height: 841.89 });
@@ -1793,6 +1793,30 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     };
   }, [file, arrayBuffer, currentPage, pageRotations, deletedPages, insertedBlankPages, textOverlays, imageOverlays, shapes, tables, modifiedTexts, hyperlinks, hasUnsavedEdits]);
 
+  // Helper to compile text replacements and preserve detected text over deleted background watermarks/images
+  const getCompiledTextReplacements = useCallback((): ExistingTextItem[] => {
+    const list = [...Object.values(modifiedTexts)];
+    const affectedPageIndices = new Set(
+      imageOverlays
+        .filter((i) => i.isExtracted && (i.isDeleted || i.isModified))
+        .map((i) => (i.origPageIndex !== undefined ? i.origPageIndex : i.pageIndex))
+    );
+    if (affectedPageIndices.size > 0) {
+      const existingIds = new Set(list.map((t) => t.id));
+      for (const item of detectedTextItems) {
+        if (existingIds.has(item.id)) continue;
+        if (affectedPageIndices.has(item.pageIndex)) {
+          list.push({
+            ...item,
+            currentText: item.originalText,
+            isModified: true,
+          });
+        }
+      }
+    }
+    return list;
+  }, [modifiedTexts, imageOverlays, detectedTextItems]);
+
   // Active Debounced Auto-Save (2s) when autoSaveEnabled is true
   useEffect(() => {
     if (!autoSaveEnabled || !file || !arrayBuffer || !hasUnsavedEdits) return;
@@ -1859,7 +1883,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             imageOverlays,
             shapes,
             tables,
-            textReplacements: Object.values(modifiedTexts),
+            textReplacements: getCompiledTextReplacements(),
             hyperlinks,
             pageBorders,
             pageNumberConfig,
@@ -2615,10 +2639,17 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
           if (isCancelled) break;
           if (highResPageThumbnails[p]) continue;
           try {
+            // First check if already rendered in reader mode
+            const cachedCanvas = pageCanvasesRef.current.get(p);
+            if (cachedCanvas && cachedCanvas.width > 200) {
+              const dataUrl = cachedCanvas.toDataURL('image/jpeg', 0.92);
+              setHighResPageThumbnails((prev) => (prev[p] === dataUrl ? prev : { ...prev, [p]: dataUrl }));
+              continue;
+            }
             const rot = pageRotations[p - 1] || 0;
-            const { canvas } = await PdfStudioEngine.renderPageToCanvas(proxy, p, 1.0, rot);
+            const { canvas } = await PdfStudioEngine.renderPageToCanvas(proxy, p, 1.5, rot);
             if (isCancelled) break;
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
             setHighResPageThumbnails((prev) => (prev[p] === dataUrl ? prev : { ...prev, [p]: dataUrl }));
           } catch (_) {}
         }
@@ -3039,7 +3070,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         imageOverlays,
         shapes,
         tables,
-        textReplacements: Object.values(modifiedTexts),
+        textReplacements: getCompiledTextReplacements(),
         hyperlinks,
         pageBorders,
         pageNumberConfig,
@@ -5713,7 +5744,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         imageOverlays,
         shapes,
         tables,
-        textReplacements: Object.values(modifiedTexts),
+        textReplacements: getCompiledTextReplacements(),
         hyperlinks,
         pageBorders,
         pageNumberConfig,
@@ -6909,7 +6940,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       });
       setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t)));
       setHasUnsavedEdits(true);
-    } else if (effectiveType === 'image' || effectiveType === 'overlay' || (!effectiveType && imageOverlays.some((i) => i.id === effectiveId))) {
+    } else if (textOverlays.some((t) => t.id === effectiveId)) {
+      setTextOverlays((prev) => {
+        const next = prev.map((t) => {
+          if (t.id !== effectiveId) return t;
+          const curZ = t.zIndex ?? 16;
+          let nextZ = curZ;
+          let behind = t.behindText ?? false;
+          if (action === 'front') { nextZ = 50; behind = false; }
+          else if (action === 'back') { nextZ = 3; behind = true; }
+          else if (action === 'forward') { nextZ = curZ + 2; if (nextZ >= 15) behind = false; }
+          else if (action === 'backward') { nextZ = Math.max(3, curZ - 2); if (nextZ < 15) behind = true; }
+          else if (action === 'behindText') { behind = true; nextZ = 5; }
+          else if (action === 'inFrontOfText') { behind = false; nextZ = 35; }
+          return { ...t, zIndex: nextZ, behindText: behind };
+        });
+        pushSnapshot({ textOverlays: next });
+        return next;
+      });
+      setTabs((prev) => prev.map((t) => (t.id === activeTabId ? { ...t, hasUnsavedEdits: true } : t)));
+      setHasUnsavedEdits(true);
+    } else if (effectiveType === 'image' || (!effectiveType && imageOverlays.some((i) => i.id === effectiveId))) {
       setImageOverlays((prev) => {
         const next = prev.map((img) => {
           if (img.id !== effectiveId) return img;
@@ -10684,18 +10735,21 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     </div>
                   )}
 
-                  {/* White-out background cover for moved or deleted original text items so no ghost/duplicate text remains visible on canvas */}
+                  {/* White-out background cover for moved, modified, or editing original text items so no ghost/duplicate text remains visible on canvas */}
                   {isCurrentPage &&
                     detectedTextItems
                       .filter((item) => {
                         const cur = modifiedTexts[item.id];
                         const isDraggingThis = draggingItem && draggingItem.type === 'text-item' && (draggingItem.id === item.id || (draggingItem.multiSnapshot && item.id in draggingItem.multiSnapshot));
                         if (isDraggingThis) return true;
+                        const isEditingThis = activeEditingId === item.id;
+                        const isSelectedThis = selectedTextItemId === item.id || multiSelectedIds.includes(item.id);
+                        if (isEditingThis || isSelectedThis) return true;
                         if (!cur) return false;
                         const isMoved = (cur.x !== undefined && Math.abs(cur.x - item.x) > 0.5) ||
                                         (cur.y !== undefined && Math.abs(cur.y - item.y) > 0.5) ||
                                         (cur.pageIndex !== undefined && cur.pageIndex !== item.pageIndex);
-                        return cur.isDeleted || isMoved;
+                        return cur.isDeleted || isMoved || Boolean(cur.isModified);
                       })
                       .map((item) => {
                         const scale = zoomScale;
@@ -10732,13 +10786,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         );
                       })}
 
-                  {/* In-Place Interactive Existing Text Bounding Boxes (Always render modified items across all tabs/tools; render all items in edit-text mode) */}
-                  {isCurrentPage &&
-                    detectedTextItems
+                  {/* In-Place Interactive Existing Text Bounding Boxes (Always render modified items across all tabs/tools; render all items in edit-text mode or if background image changed) */}
+                  {isCurrentPage && (() => {
+                    const hasExtractedImageChanged = imageOverlays.some(
+                      (img) => (img.origPageIndex ?? img.pageIndex) === pageNum - 1 && img.isExtracted && (img.isDeleted || img.isModified)
+                    );
+                    return detectedTextItems
                       .filter((item) => {
                         const cur = modifiedTexts[item.id];
                         if (cur?.isDeleted) return false;
-                        return activeTool === 'edit-text' || Boolean(cur?.isModified);
+                        if (activeTool === 'edit-text' || Boolean(cur?.isModified)) return true;
+                        // Keep text visible if an extracted background watermark/image on this page was deleted or moved
+                        return hasExtractedImageChanged;
                       })
                       .map((item) => {
                         const currentItem = modifiedTexts[item.id] || item;
@@ -10774,7 +10833,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 const targetPageCanvas = pageCanvasesRef.current.get(pageNum) || canvasRef.current;
                 const sampledBg = sampleCanvasBgColor(targetPageCanvas, boxX, boxY, boxW, boxH, currentItem.bgColorHex || item.bgColorHex);
                 const sampledFg = sampleCanvasTextColor(targetPageCanvas, boxX, boxY, boxW, boxH, sampledBg.rgb);
-                const effectiveBgHex = currentItem.bgColorHex || item.bgColorHex || sampledBg.hex;
+                const effectiveBgHex = currentItem.bgColorHex || item.bgColorHex || sampledBg.hex || '#ffffff';
                 const textColor = currentItem.color || item.color || sampledFg;
 
                 return (
@@ -10807,7 +10866,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       top: `${boxY}px`,
                       width: `${boxW}px`,
                       height: `${boxH}px`,
-                      backgroundColor: currentItem.bgColorHex || 'transparent',
+                      backgroundColor: (isEditing || isSelected || isItemModified) ? effectiveBgHex : (currentItem.bgColorHex || 'transparent'),
                     }}
                     className={`absolute transition-all cursor-text rounded-none ${
                       isEditing
@@ -10816,7 +10875,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         ? 'border-[1.5px] border-blue-500 ring-1 ring-blue-500/10 z-30'
                         : isItemModified
                         ? 'border-0 outline-none z-20'
-                        : 'border border-transparent hover:border-blue-400/40 z-10'
+                        : 'border border-transparent hover:border-blue-400/40 z-15'
                     }`}
                   >
                     {/* Active 8-Handle Resizing, Rotation, and 4-Direction Move Handle */}
@@ -10893,7 +10952,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           color: textColor,
                           textAlign: itemAlign,
                           caretColor: '#2563eb',
-                          backgroundColor: currentItem.bgColorHex || 'transparent',
+                          backgroundColor: effectiveBgHex,
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: `${boxH}px`,
                           height: '100%',
@@ -10903,7 +10962,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         }}
                         className="w-full h-full p-0 m-0 border-0 outline-none select-text"
                       />
-                    ) : isItemModified ? (
+                    ) : isItemModified || hasExtractedImageChanged ? (
                       <div
                         style={{
                           fontFamily: cssFontFamily,
@@ -10917,7 +10976,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                           fontSize: `${itemFontSize * scale}px`,
                           color: textColor,
                           textAlign: itemAlign,
-                          backgroundColor: currentItem.bgColorHex || 'transparent',
+                          backgroundColor: isItemModified ? effectiveBgHex : 'transparent',
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: `${boxH}px`,
                           height: '100%',
@@ -10933,7 +10992,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     ) : null}
                   </div>
                 );
-              })}
+              });
+            })()}
 
             {/* Transparent Selectable Text Layer in Read Mode (I-Beam Cursor & Selection) */}
             {isCurrentPage && activeTool === 'view' && (
@@ -11143,6 +11203,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       transform: t.rotation ? `rotate(${t.rotation}deg)` : undefined,
                       wordBreak: 'break-word',
                       overflowWrap: 'break-word',
+                      zIndex: t.zIndex ?? (isSelected ? 30 : 16),
                     }}
                     className={`absolute cursor-move px-1 py-0.5 transition-all bg-transparent ${
                       isSelected ? 'ring-2 ring-indigo-500 rounded bg-indigo-50/20' : ''
@@ -11379,8 +11440,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       width: `${origCssW}px`,
                       height: `${origCssH}px`,
                       backgroundColor: '#ffffff',
+                      zIndex: 1,
                     }}
-                    className="absolute z-10 pointer-events-none"
+                    className="absolute pointer-events-none"
                   />
                 );
               })}
@@ -11410,8 +11472,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                       width: `${origCssW}px`,
                       height: `${origCssH}px`,
                       backgroundColor: '#ffffff',
+                      zIndex: 1,
                     }}
-                    className="absolute z-10 pointer-events-none"
+                    className="absolute pointer-events-none"
                   />
                 );
               })}
@@ -17248,8 +17311,8 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
               <input
                 type="range"
-                min="0.35"
-                max="2.5"
+                min="0.25"
+                max="1.5"
                 step="0.05"
                 value={organizerZoom}
                 onChange={(e) => setOrganizerZoom(parseFloat(e.target.value))}
@@ -17262,7 +17325,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
               <button
                 type="button"
-                onClick={() => setOrganizerZoom((z) => Math.min(2.5, Number((z + 0.15).toFixed(2))))}
+                onClick={() => setOrganizerZoom((z) => Math.min(1.5, Number((z + 0.1).toFixed(2))))}
                 className="p-1 hover:bg-zinc-700 rounded transition-colors text-zinc-300 hover:text-white cursor-pointer"
                 title="Zoom In (Ctrl + +)"
               >
@@ -17271,9 +17334,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
               <button
                 type="button"
-                onClick={() => setOrganizerZoom(1.0)}
+                onClick={() => setOrganizerZoom(0.5)}
                 className="px-2 py-0.5 rounded bg-zinc-700/70 hover:bg-zinc-700 text-[10px] font-semibold text-zinc-300 transition-colors cursor-pointer"
-                title="Reset Zoom to 100%"
+                title="Reset Zoom to 50%"
               >
                 Reset
               </button>
@@ -17343,15 +17406,19 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             <div
               className="grid gap-6 justify-center items-start mx-auto"
               style={{
-                gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(90, Math.round(140 * organizerZoom))}px, 1fr))`,
+                gridTemplateColumns: `repeat(auto-fill, minmax(${Math.max(100, Math.round(260 * organizerZoom))}px, 1fr))`,
                 maxWidth: '1600px',
               }}
             >
               {Array.from({ length: totalPages }, (_, idx) => {
                 const pageNum = idx + 1;
                 const isSelected = pageNum === currentPage;
-                const cardW = Math.max(90, Math.round(140 * organizerZoom));
-                const cardH = Math.max(120, Math.round(195 * organizerZoom));
+                const cardW = Math.max(100, Math.round(260 * organizerZoom));
+                const cardH = Math.max(130, Math.round(360 * organizerZoom));
+                const thumbSrc =
+                  highResPageThumbnails[pageNum] ||
+                  (pageCanvasesRef.current.get(pageNum) ? pageCanvasesRef.current.get(pageNum)!.toDataURL('image/jpeg', 0.92) : null) ||
+                  pageThumbnails[pageNum];
 
                 return (
                   <div
@@ -17392,9 +17459,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         {pageNum}
                       </div>
 
-                      {pageThumbnails[pageNum] ? (
+                      {thumbSrc ? (
                         <img
-                          src={pageThumbnails[pageNum]}
+                          src={thumbSrc}
                           alt={`Page ${pageNum}`}
                           className="w-full h-full object-contain pointer-events-none"
                         />

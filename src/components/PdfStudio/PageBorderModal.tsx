@@ -97,7 +97,8 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
           else if (scope === 'even') applies = previewPage % 2 === 0;
 
           if (applies) {
-            const scale = target.width / basePageDims.width;
+            const safeBaseW = (basePageDims && basePageDims.width > 0) ? basePageDims.width : (cssWidth || target.width || 595.28);
+            const scale = target.width / safeBaseW;
             const scaledTop = top * scale;
             const scaledBottom = bottom * scale;
             const scaledLeft = left * scale;

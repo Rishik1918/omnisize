@@ -560,6 +560,82 @@ export class PdfStudioEngine {
 
     onProgress?.(25);
 
+    // Erase original bounding boxes of deleted or moved extracted background images, shapes, and tables first
+    if (payload.imageOverlays && payload.imageOverlays.length > 0) {
+      for (const imgOverlay of payload.imageOverlays) {
+        if (
+          imgOverlay.isExtracted &&
+          (imgOverlay.isModified || imgOverlay.isDeleted) &&
+          imgOverlay.origX !== undefined &&
+          imgOverlay.origY !== undefined
+        ) {
+          try {
+            const origPageIdx = imgOverlay.origPageIndex !== undefined ? imgOverlay.origPageIndex : imgOverlay.pageIndex;
+            if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+              const origPage = doc.getPage(origPageIdx);
+              origPage.drawRectangle({
+                x: imgOverlay.origX,
+                y: imgOverlay.origY,
+                width: imgOverlay.origWidth || imgOverlay.width,
+                height: imgOverlay.origHeight || imgOverlay.height,
+                color: rgb(1, 1, 1),
+              });
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (payload.shapes && payload.shapes.length > 0) {
+      for (const shape of payload.shapes) {
+        if (
+          shape.isExtracted &&
+          (shape.isModified || shape.isDeleted) &&
+          shape.origX !== undefined &&
+          shape.origY !== undefined
+        ) {
+          try {
+            const origPageIdx = shape.origPageIndex !== undefined ? shape.origPageIndex : shape.pageIndex;
+            if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+              const origPage = doc.getPage(origPageIdx);
+              origPage.drawRectangle({
+                x: shape.origX,
+                y: shape.origY,
+                width: shape.origWidth || shape.width,
+                height: shape.origHeight || shape.height,
+                color: rgb(1, 1, 1),
+              });
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (payload.tables && payload.tables.length > 0) {
+      for (const table of payload.tables) {
+        if (
+          table.isExtracted &&
+          (table.isModified || table.isDeleted) &&
+          table.origX !== undefined &&
+          table.origY !== undefined
+        ) {
+          try {
+            const origPageIdx = table.origPageIndex !== undefined ? table.origPageIndex : table.pageIndex;
+            if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
+              const origPage = doc.getPage(origPageIdx);
+              origPage.drawRectangle({
+                x: table.origX,
+                y: table.origY,
+                width: table.origWidth || table.width,
+                height: table.origHeight || table.height,
+                color: rgb(1, 1, 1),
+              });
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
     // 0. Apply Existing Text Replacements (erases original bounding box with sampled cover, redraws matching font, weight, style & alignment)
     if (payload.textReplacements && payload.textReplacements.length > 0) {
       for (const rep of payload.textReplacements) {
@@ -677,68 +753,271 @@ export class PdfStudioEngine {
       }
     }
 
-    // 3. Insert Images / Photos
-    if (payload.imageOverlays && payload.imageOverlays.length > 0) {
-      for (const imgOverlay of payload.imageOverlays) {
-        if (imgOverlay.pageIndex >= 0 && imgOverlay.pageIndex < doc.getPageCount()) {
-          // If the image was pre-existing from the original PDF and wasn't modified or moved or deleted, keep it as is
-          if (imgOverlay.isExtracted && !imgOverlay.isModified && !imgOverlay.isDeleted) {
-            continue;
-          }
+    // Helper to draw an image overlay
+    const drawSingleImage = async (imgOverlay: ImageOverlay) => {
+      if (imgOverlay.isDeleted) return;
+      if (imgOverlay.isExtracted && !imgOverlay.isModified) return;
+      if (imgOverlay.pageIndex < 0 || imgOverlay.pageIndex >= doc.getPageCount()) return;
 
-          // If extracted image was moved, modified or deleted, blank out original bounding box on its original page with white
-          if (
-            imgOverlay.isExtracted &&
-            (imgOverlay.isModified || imgOverlay.isDeleted) &&
-            imgOverlay.origX !== undefined &&
-            imgOverlay.origY !== undefined
-          ) {
-            try {
-              const origPageIdx = imgOverlay.origPageIndex !== undefined ? imgOverlay.origPageIndex : imgOverlay.pageIndex;
-              if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
-                const origPage = doc.getPage(origPageIdx);
-                origPage.drawRectangle({
-                  x: imgOverlay.origX,
-                  y: imgOverlay.origY,
-                  width: imgOverlay.origWidth || imgOverlay.width,
-                  height: imgOverlay.origHeight || imgOverlay.height,
-                  color: rgb(1, 1, 1),
-                });
-              }
-            } catch (_) {}
-          }
+      const page = doc.getPage(imgOverlay.pageIndex);
+      const embeddedImage = imgOverlay.imageType === 'png'
+        ? await doc.embedPng(imgOverlay.imageData)
+        : await doc.embedJpg(imgOverlay.imageData);
 
-          if (imgOverlay.isDeleted) {
-            continue;
-          }
+      page.drawImage(embeddedImage, {
+        x: imgOverlay.x,
+        y: imgOverlay.y,
+        width: imgOverlay.width,
+        height: imgOverlay.height,
+        rotate: imgOverlay.rotation ? degrees(imgOverlay.rotation) : undefined,
+      });
 
-          const page = doc.getPage(imgOverlay.pageIndex);
-
-          const embeddedImage = imgOverlay.imageType === 'png'
-            ? await doc.embedPng(imgOverlay.imageData)
-            : await doc.embedJpg(imgOverlay.imageData);
-
-          page.drawImage(embeddedImage, {
+      if (imgOverlay.borderWidth && imgOverlay.borderWidth > 0 && imgOverlay.borderColor) {
+        try {
+          page.drawRectangle({
             x: imgOverlay.x,
             y: imgOverlay.y,
             width: imgOverlay.width,
             height: imgOverlay.height,
+            borderWidth: imgOverlay.borderWidth,
+            borderColor: this.parseHexColor(imgOverlay.borderColor),
             rotate: imgOverlay.rotation ? degrees(imgOverlay.rotation) : undefined,
           });
+        } catch (_) {}
+      }
+    };
 
-          if (imgOverlay.borderWidth && imgOverlay.borderWidth > 0 && imgOverlay.borderColor) {
+    // Helper to draw a shape overlay
+    const drawSingleShape = (shape: ShapeOverlay) => {
+      if (shape.isDeleted) return;
+      if (shape.isExtracted && !shape.isModified) return;
+      if (shape.pageIndex < 0 || shape.pageIndex >= doc.getPageCount()) return;
+
+      const page = doc.getPage(shape.pageIndex);
+      const stroke = this.parseHexColor(shape.strokeColor || '#000000');
+      const hasFill = shape.fillColor && shape.fillColor !== 'transparent' && shape.fillColor !== 'none';
+      const fill = hasFill ? this.parseHexColor(shape.fillColor) : undefined;
+      const borderWidth = shape.strokeWidth || 1;
+      const rot = shape.rotation ? degrees(shape.rotation) : undefined;
+      const op = shape.opacity ?? 1;
+
+      this.drawVectorShape(
+        page,
+        shape.type,
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+        stroke,
+        fill,
+        borderWidth,
+        rot,
+        op
+      );
+    };
+
+    // Helper to draw a table overlay
+    const drawSingleTable = async (table: TableOverlay) => {
+      if (table.isDeleted) return;
+      if (table.isExtracted && !table.isModified) return;
+      if (table.pageIndex < 0 || table.pageIndex >= doc.getPageCount()) return;
+
+      const page = doc.getPage(table.pageIndex);
+      const cols = Math.max(1, table.cols);
+      const rows = Math.max(1, table.rows);
+
+      const colWidths =
+        table.colWidths && table.colWidths.length === cols
+          ? table.colWidths
+          : Array(cols).fill(table.width / cols);
+      const rowHeights =
+        table.rowHeights && table.rowHeights.length === rows
+          ? table.rowHeights
+          : Array(rows).fill(table.height / rows);
+
+      const borderClr = this.parseHexColor(table.borderColor || '#000000');
+      const borderW = table.borderWidth || 1;
+      const headerBg = table.headerRow
+        ? table.headerBgColor
+          ? this.parseHexColor(table.headerBgColor)
+          : rgb(0.93, 0.95, 0.98)
+        : undefined;
+      const defaultCellBg = table.cellBgColor ? this.parseHexColor(table.cellBgColor) : undefined;
+      const txtColor = this.parseHexColor(table.textColor || '#000000');
+      const cellFontSize = table.fontSize || 10;
+
+      const totalH = rowHeights.reduce((a, b) => a + b, 0);
+
+      let currentTop = table.y + totalH;
+      for (let r = 0; r < rows; r++) {
+        const rowH = rowHeights[r];
+        const cellY = currentTop - rowH;
+        currentTop -= rowH;
+        const isHeader = r === 0 && table.headerRow;
+        const bg = isHeader ? headerBg : defaultCellBg;
+
+        let cellX = table.x;
+        for (let c = 0; c < cols; c++) {
+          const cellW = colWidths[c];
+          const cellCustomHex = table.cellBgColors?.[`${r}_${c}`];
+          const customBg = cellCustomHex ? this.parseHexColor(cellCustomHex) : undefined;
+          const cellEffectiveBg = customBg || bg;
+
+          const mergeBlock = (table.mergedCells || []).find(
+            (m) => r >= m.startRow && r <= m.endRow && c >= m.startCol && c <= m.endCol
+          );
+
+          if (mergeBlock && (r !== mergeBlock.startRow || c !== mergeBlock.startCol)) {
+            cellX += cellW;
+            continue;
+          }
+
+          let drawW = cellW;
+          let drawH = rowH;
+          let drawY = cellY;
+
+          if (mergeBlock && r === mergeBlock.startRow && c === mergeBlock.startCol) {
+            drawW = 0;
+            for (let mc = mergeBlock.startCol; mc <= mergeBlock.endCol; mc++) {
+              drawW += colWidths[mc] || 0;
+            }
+            drawH = 0;
+            for (let mr = mergeBlock.startRow; mr <= mergeBlock.endRow; mr++) {
+              drawH += rowHeights[mr] || 0;
+            }
+            drawY = currentTop - (drawH - rowH);
+          }
+
+          page.drawRectangle({
+            x: cellX,
+            y: drawY,
+            width: drawW,
+            height: drawH,
+            borderColor: borderClr,
+            borderWidth: borderW,
+            color: cellEffectiveBg,
+          });
+
+          const cellImgKey = `${r}_${c}`;
+          if (table.cellImages && table.cellImages[cellImgKey]) {
             try {
-              page.drawRectangle({
-                x: imgOverlay.x,
-                y: imgOverlay.y,
-                width: imgOverlay.width,
-                height: imgOverlay.height,
-                borderWidth: imgOverlay.borderWidth,
-                borderColor: this.parseHexColor(imgOverlay.borderColor),
-                rotate: imgOverlay.rotation ? degrees(imgOverlay.rotation) : undefined,
+              const raw = table.cellImages[cellImgKey];
+              const parts = raw.split(',');
+              if (parts.length === 2) {
+                const mime = parts[0].includes('image/png') ? 'png' : 'jpeg';
+                const binary = atob(parts[1]);
+                const bytes = new Uint8Array(binary.length);
+                for (let bi = 0; bi < binary.length; bi++) {
+                  bytes[bi] = binary.charCodeAt(bi);
+                }
+                const emb = mime === 'png' ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+                const pad = 2;
+                page.drawImage(emb, {
+                  x: cellX + pad,
+                  y: cellY + pad,
+                  width: Math.max(1, cellW - pad * 2),
+                  height: Math.max(1, rowH - pad * 2),
+                });
+              }
+            } catch (imgErr) {
+              console.error('Failed to embed cell image in PDF:', imgErr);
+            }
+          }
+
+          if (table.cellShapes && table.cellShapes[cellImgKey]) {
+            try {
+              const sData = table.cellShapes[cellImgKey];
+              const sPad = 2;
+              const sW = Math.max(2, cellW - sPad * 2);
+              const sH = Math.max(2, rowH - sPad * 2);
+              const strokeClr = this.parseHexColor(sData.strokeColor || '#2563eb');
+              const fillClr = sData.fillColor && sData.fillColor !== 'transparent' ? this.parseHexColor(sData.fillColor) : undefined;
+              this.drawVectorShape(
+                page,
+                sData.type as ShapeType,
+                cellX + sPad,
+                cellY + sPad,
+                sW,
+                sH,
+                strokeClr,
+                fillClr,
+                sData.strokeWidth || 1.5
+              );
+            } catch (_) {}
+          }
+
+          if (table.cellSubtables && table.cellSubtables[cellImgKey]) {
+            try {
+              const sub = table.cellSubtables[cellImgKey];
+              const subColW = cellW / sub.cols;
+              const subRowH = rowH / sub.rows;
+              for (let sr = 0; sr < sub.rows; sr++) {
+                for (let sc = 0; sc < sub.cols; sc++) {
+                  const sx = cellX + sc * subColW;
+                  const sy = cellY + (sub.rows - 1 - sr) * subRowH;
+                  page.drawRectangle({
+                    x: sx,
+                    y: sy,
+                    width: subColW,
+                    height: subRowH,
+                    borderColor: rgb(0.65, 0.65, 0.65),
+                    borderWidth: 0.5,
+                  });
+                  const stxt = sub.cells?.[sr]?.[sc] || '';
+                  if (stxt.trim()) {
+                    page.drawText(stxt.trim(), {
+                      x: sx + 2,
+                      y: sy + (subRowH - 7) / 2 + 1,
+                      size: 7,
+                      font: fontHelvetica,
+                      color: txtColor,
+                      maxWidth: Math.max(5, subColW - 4),
+                    });
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+
+          const cellText = table.cells?.[r]?.[c] || '';
+          if (cellText && cellText.trim()) {
+            const textY = cellY + (rowH - cellFontSize) / 2 + 1;
+            const textX = cellX + 4;
+            try {
+              page.drawText(cellText.trim(), {
+                x: textX,
+                y: textY,
+                size: cellFontSize,
+                font: isHeader ? fontHelveticaBold : fontHelvetica,
+                color: txtColor,
+                maxWidth: Math.max(10, cellW - 8),
               });
             } catch (_) {}
           }
+          cellX += cellW;
+        }
+      }
+    };
+
+    // 3. Draw Elements Set Behind Text (behindText: true or zIndex < 16)
+    if (payload.imageOverlays && payload.imageOverlays.length > 0) {
+      for (const imgOverlay of payload.imageOverlays) {
+        if (imgOverlay.behindText || (imgOverlay.zIndex !== undefined && imgOverlay.zIndex < 16)) {
+          await drawSingleImage(imgOverlay);
+        }
+      }
+    }
+    if (payload.shapes && payload.shapes.length > 0) {
+      for (const shape of payload.shapes) {
+        if (shape.behindText || (shape.zIndex !== undefined && shape.zIndex < 16)) {
+          drawSingleShape(shape);
+        }
+      }
+    }
+    if (payload.tables && payload.tables.length > 0) {
+      for (const table of payload.tables) {
+        if (table.behindText || (table.zIndex !== undefined && table.zIndex < 16)) {
+          await drawSingleTable(table);
         }
       }
     }
@@ -782,270 +1061,25 @@ export class PdfStudioEngine {
       }
     }
 
-    // 4.5. Insert Basic & Word Shapes
-    if (payload.shapes && payload.shapes.length > 0) {
-      for (const shape of payload.shapes) {
-        if (shape.pageIndex >= 0 && shape.pageIndex < doc.getPageCount()) {
-          // If shape is pre-existing from the PDF and wasn't moved or changed or deleted, keep it
-          if (shape.isExtracted && !shape.isModified && !shape.isDeleted) {
-            continue;
-          }
-
-          // If extracted shape was moved, modified or deleted, blank out original bounding box on its original page
-          if (shape.isExtracted && (shape.isModified || shape.isDeleted) && shape.origX !== undefined && shape.origY !== undefined) {
-            try {
-              const origPageIdx = shape.origPageIndex !== undefined ? shape.origPageIndex : shape.pageIndex;
-              if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
-                const origPage = doc.getPage(origPageIdx);
-                origPage.drawRectangle({
-                  x: shape.origX,
-                  y: shape.origY,
-                  width: shape.origWidth || shape.width,
-                  height: shape.origHeight || shape.height,
-                  color: rgb(1, 1, 1),
-                });
-              }
-            } catch (_) {}
-          }
-
-          if (shape.isDeleted) {
-            continue;
-          }
-
-          const page = doc.getPage(shape.pageIndex);
-          const stroke = this.parseHexColor(shape.strokeColor || '#000000');
-          const hasFill = shape.fillColor && shape.fillColor !== 'transparent' && shape.fillColor !== 'none';
-          const fill = hasFill ? this.parseHexColor(shape.fillColor) : undefined;
-          const borderWidth = shape.strokeWidth || 1;
-          const rot = shape.rotation ? degrees(shape.rotation) : undefined;
-          const op = shape.opacity ?? 1;
-
-          this.drawVectorShape(
-            page,
-            shape.type,
-            shape.x,
-            shape.y,
-            shape.width,
-            shape.height,
-            stroke,
-            fill,
-            borderWidth,
-            rot,
-            op
-          );
+    // 4.5. Draw Elements in Front of Text (!behindText && zIndex >= 16)
+    if (payload.imageOverlays && payload.imageOverlays.length > 0) {
+      for (const imgOverlay of payload.imageOverlays) {
+        if (!imgOverlay.behindText && (imgOverlay.zIndex === undefined || imgOverlay.zIndex >= 16)) {
+          await drawSingleImage(imgOverlay);
         }
       }
     }
-
-    // 4.6. Insert Vector Tables
+    if (payload.shapes && payload.shapes.length > 0) {
+      for (const shape of payload.shapes) {
+        if (!shape.behindText && (shape.zIndex === undefined || shape.zIndex >= 16)) {
+          drawSingleShape(shape);
+        }
+      }
+    }
     if (payload.tables && payload.tables.length > 0) {
       for (const table of payload.tables) {
-        if (table.pageIndex >= 0 && table.pageIndex < doc.getPageCount()) {
-          // If table was pre-existing and unmodified and not deleted, keep it
-          if (table.isExtracted && !table.isModified && !table.isDeleted) {
-            continue;
-          }
-
-          // If extracted table was moved, modified or deleted, blank out original bounding box on its original page
-          if (table.isExtracted && (table.isModified || table.isDeleted) && table.origX !== undefined && table.origY !== undefined) {
-            try {
-              const origPageIdx = table.origPageIndex !== undefined ? table.origPageIndex : table.pageIndex;
-              if (origPageIdx >= 0 && origPageIdx < doc.getPageCount()) {
-                const origPage = doc.getPage(origPageIdx);
-                origPage.drawRectangle({
-                  x: table.origX,
-                  y: table.origY,
-                  width: table.origWidth || table.width,
-                  height: table.origHeight || table.height,
-                  color: rgb(1, 1, 1),
-                });
-              }
-            } catch (_) {}
-          }
-
-          if (table.isDeleted) {
-            continue;
-          }
-
-          const page = doc.getPage(table.pageIndex);
-          const cols = Math.max(1, table.cols);
-          const rows = Math.max(1, table.rows);
-
-          const colWidths =
-            table.colWidths && table.colWidths.length === cols
-              ? table.colWidths
-              : Array(cols).fill(table.width / cols);
-          const rowHeights =
-            table.rowHeights && table.rowHeights.length === rows
-              ? table.rowHeights
-              : Array(rows).fill(table.height / rows);
-
-          const borderClr = this.parseHexColor(table.borderColor || '#000000');
-          const borderW = table.borderWidth || 1;
-          const headerBg = table.headerRow
-            ? table.headerBgColor
-              ? this.parseHexColor(table.headerBgColor)
-              : rgb(0.93, 0.95, 0.98)
-            : undefined;
-          const defaultCellBg = table.cellBgColor ? this.parseHexColor(table.cellBgColor) : undefined;
-          const txtColor = this.parseHexColor(table.textColor || '#000000');
-          const cellFontSize = table.fontSize || 10;
-
-          const totalH = rowHeights.reduce((a, b) => a + b, 0);
-
-          let currentTop = table.y + totalH;
-          for (let r = 0; r < rows; r++) {
-            const rowH = rowHeights[r];
-            const cellY = currentTop - rowH;
-            currentTop -= rowH;
-            const isHeader = r === 0 && table.headerRow;
-            const bg = isHeader ? headerBg : defaultCellBg;
-
-            let cellX = table.x;
-            for (let c = 0; c < cols; c++) {
-              const cellW = colWidths[c];
-              const cellCustomHex = table.cellBgColors?.[`${r}_${c}`];
-              const customBg = cellCustomHex ? this.parseHexColor(cellCustomHex) : undefined;
-              const cellEffectiveBg = customBg || bg;
-
-              // Check if cell is covered by a merge block
-              const mergeBlock = (table.mergedCells || []).find(
-                (m) => r >= m.startRow && r <= m.endRow && c >= m.startCol && c <= m.endCol
-              );
-
-              // If covered by merge and not the top-left cell, skip drawing
-              if (mergeBlock && (r !== mergeBlock.startRow || c !== mergeBlock.startCol)) {
-                cellX += cellW;
-                continue;
-              }
-
-              let drawW = cellW;
-              let drawH = rowH;
-              let drawY = cellY;
-
-              if (mergeBlock && r === mergeBlock.startRow && c === mergeBlock.startCol) {
-                drawW = 0;
-                for (let mc = mergeBlock.startCol; mc <= mergeBlock.endCol; mc++) {
-                  drawW += colWidths[mc] || 0;
-                }
-                drawH = 0;
-                for (let mr = mergeBlock.startRow; mr <= mergeBlock.endRow; mr++) {
-                  drawH += rowHeights[mr] || 0;
-                }
-                drawY = currentTop - (drawH - rowH);
-              }
-
-              page.drawRectangle({
-                x: cellX,
-                y: drawY,
-                width: drawW,
-                height: drawH,
-                borderColor: borderClr,
-                borderWidth: borderW,
-                color: cellEffectiveBg,
-              });
-
-              const cellImgKey = `${r}_${c}`;
-              if (table.cellImages && table.cellImages[cellImgKey]) {
-                try {
-                  const raw = table.cellImages[cellImgKey];
-                  const parts = raw.split(',');
-                  if (parts.length === 2) {
-                    const mime = parts[0].includes('image/png') ? 'png' : 'jpeg';
-                    const binary = atob(parts[1]);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let bi = 0; bi < binary.length; bi++) {
-                      bytes[bi] = binary.charCodeAt(bi);
-                    }
-                    const emb = mime === 'png' ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
-                    const pad = 2;
-                    page.drawImage(emb, {
-                      x: cellX + pad,
-                      y: cellY + pad,
-                      width: Math.max(1, cellW - pad * 2),
-                      height: Math.max(1, rowH - pad * 2),
-                    });
-                  }
-                } catch (imgErr) {
-                  console.error('Failed to embed cell image in PDF:', imgErr);
-                }
-              }
-
-              // Cell Shape
-              if (table.cellShapes && table.cellShapes[cellImgKey]) {
-                try {
-                  const sData = table.cellShapes[cellImgKey];
-                  const sPad = 2;
-                  const sW = Math.max(2, cellW - sPad * 2);
-                  const sH = Math.max(2, rowH - sPad * 2);
-                  const strokeClr = this.parseHexColor(sData.strokeColor || '#2563eb');
-                  const fillClr = sData.fillColor && sData.fillColor !== 'transparent' ? this.parseHexColor(sData.fillColor) : undefined;
-                  this.drawVectorShape(
-                    page,
-                    sData.type as ShapeType,
-                    cellX + sPad,
-                    cellY + sPad,
-                    sW,
-                    sH,
-                    strokeClr,
-                    fillClr,
-                    sData.strokeWidth || 1.5
-                  );
-                } catch (_) {}
-              }
-
-              // Cell Subtable
-              if (table.cellSubtables && table.cellSubtables[cellImgKey]) {
-                try {
-                  const sub = table.cellSubtables[cellImgKey];
-                  const subColW = cellW / sub.cols;
-                  const subRowH = rowH / sub.rows;
-                  for (let sr = 0; sr < sub.rows; sr++) {
-                    for (let sc = 0; sc < sub.cols; sc++) {
-                      const sx = cellX + sc * subColW;
-                      const sy = cellY + (sub.rows - 1 - sr) * subRowH;
-                      page.drawRectangle({
-                        x: sx,
-                        y: sy,
-                        width: subColW,
-                        height: subRowH,
-                        borderColor: rgb(0.65, 0.65, 0.65),
-                        borderWidth: 0.5,
-                      });
-                      const stxt = sub.cells?.[sr]?.[sc] || '';
-                      if (stxt.trim()) {
-                        page.drawText(stxt.trim(), {
-                          x: sx + 2,
-                          y: sy + (subRowH - 7) / 2 + 1,
-                          size: 7,
-                          font: fontHelvetica,
-                          color: txtColor,
-                          maxWidth: Math.max(5, subColW - 4),
-                        });
-                      }
-                    }
-                  }
-                } catch (_) {}
-              }
-
-              const cellText = table.cells?.[r]?.[c] || '';
-              if (cellText && cellText.trim()) {
-                const textY = cellY + (rowH - cellFontSize) / 2 + 1;
-                const textX = cellX + 4;
-                try {
-                  page.drawText(cellText.trim(), {
-                    x: textX,
-                    y: textY,
-                    size: cellFontSize,
-                    font: isHeader ? fontHelveticaBold : fontHelvetica,
-                    color: txtColor,
-                    maxWidth: Math.max(10, cellW - 8),
-                  });
-                } catch (_) {}
-              }
-              cellX += cellW;
-            }
-          }
+        if (!table.behindText && (table.zIndex === undefined || table.zIndex >= 16)) {
+          await drawSingleTable(table);
         }
       }
     }

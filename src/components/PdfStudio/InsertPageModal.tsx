@@ -88,6 +88,11 @@ export const InsertPageModal: React.FC<InsertPageModalProps> = ({
     });
   }, [selectedPdfFile]);
 
+  // Dynamically jump preview to inserted page slot whenever insertion settings change
+  useEffect(() => {
+    setPreviewPage(insertedPageSlot);
+  }, [insertedPageSlot, blankSizeId, activeTab]);
+
   // Render live preview on canvas
   useEffect(() => {
     if (!isOpen || !previewCanvasRef.current) return;

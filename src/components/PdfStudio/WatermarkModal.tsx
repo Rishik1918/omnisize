@@ -73,6 +73,7 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
   const [previewZoom, setPreviewZoom] = useState<number>(1.0);
   const [baseCanvasDims, setBaseCanvasDims] = useState<{ width: number; height: number } | null>(null);
   const [addToTemplate, setAddToTemplate] = useState<boolean>(false);
+  const [imageWatermarkUrl, setImageWatermarkUrl] = useState<string | null>(null);
 
   // Collapsible sections
   const [contentOpen, setContentOpen] = useState<boolean>(true);
@@ -131,77 +132,112 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
         if (scopeDropdown === 'odd' && previewPage % 2 === 0) applies = false;
         if (scopeDropdown === 'even' && previewPage % 2 !== 0) applies = false;
 
-        if (applies && text.trim()) {
-          ctx.save();
-          const scale = target.width / basePageDims.width;
+        if (applies) {
+          const safeBaseW = (basePageDims && basePageDims.width > 0) ? basePageDims.width : (cssWidth || target.width || 595.28);
+          const scale = target.width / safeBaseW;
           const ptPerCm = 28.3465 * scale;
           const xOffset = xOffsetCm * ptPerCm;
           const yOffset = yOffsetCm * ptPerCm;
-
-          let calcSize = fontSize * scale;
-          if (proportionOfPages) {
-            calcSize = Math.max(12, Math.round((target.width * (proportionPercent / 100)) / Math.max(1, text.length * 0.6)));
-          }
-
-          const fontStyle = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${calcSize}px "${fontFamily}", sans-serif`;
-          ctx.font = fontStyle;
-          ctx.fillStyle = color;
-          ctx.globalAlpha = Math.max(0.05, Math.min(1, opacity / 100));
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-
           const rotRad = (rotation * Math.PI) / 180;
 
-          if (tile) {
-            const stepX = Math.max(100, tileSpacingXCm * ptPerCm * 2);
-            const stepY = Math.max(100, tileSpacingYCm * ptPerCm * 2);
-            for (let tx = 0; tx < target.width + 200; tx += stepX) {
-              for (let ty = 0; ty < target.height + 200; ty += stepY) {
-                ctx.save();
-                ctx.translate(tx + xOffset, ty - yOffset);
-                ctx.rotate(rotRad);
-                ctx.fillText(text, 0, 0);
-                if (isUnderline) {
-                  const m = ctx.measureText(text);
-                  ctx.lineWidth = Math.max(1, calcSize * 0.06);
-                  ctx.strokeStyle = color;
-                  ctx.beginPath();
-                  ctx.moveTo(-m.width / 2, calcSize * 0.55);
-                  ctx.lineTo(m.width / 2, calcSize * 0.55);
-                  ctx.stroke();
+          if (activeTab === 'text' && text.trim()) {
+            ctx.save();
+            let calcSize = fontSize * scale;
+            if (proportionOfPages) {
+              calcSize = Math.max(12, Math.round((target.width * (proportionPercent / 100)) / Math.max(1, text.length * 0.6)));
+            }
+
+            const fontStyle = `${isItalic ? 'italic ' : ''}${isBold ? 'bold ' : ''}${calcSize}px "${fontFamily}", sans-serif`;
+            ctx.font = fontStyle;
+            ctx.fillStyle = color;
+            ctx.globalAlpha = Math.max(0.05, Math.min(1, opacity / 100));
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (tile) {
+              const stepX = Math.max(100, tileSpacingXCm * ptPerCm * 2);
+              const stepY = Math.max(100, tileSpacingYCm * ptPerCm * 2);
+              for (let tx = 0; tx < target.width + 200; tx += stepX) {
+                for (let ty = 0; ty < target.height + 200; ty += stepY) {
+                  ctx.save();
+                  ctx.translate(tx + xOffset, ty - yOffset);
+                  ctx.rotate(rotRad);
+                  ctx.fillText(text, 0, 0);
+                  if (isUnderline) {
+                    const m = ctx.measureText(text);
+                    ctx.lineWidth = Math.max(1, calcSize * 0.06);
+                    ctx.strokeStyle = color;
+                    ctx.beginPath();
+                    ctx.moveTo(-m.width / 2, calcSize * 0.55);
+                    ctx.lineTo(m.width / 2, calcSize * 0.55);
+                    ctx.stroke();
+                  }
+                  ctx.restore();
                 }
-                ctx.restore();
+              }
+            } else {
+              let posX = target.width / 2;
+              let posY = target.height / 2;
+
+              if (position.includes('left')) posX = target.width * 0.2;
+              else if (position.includes('right')) posX = target.width * 0.8;
+              else posX = target.width / 2;
+
+              if (position.includes('top')) posY = target.height * 0.15;
+              else if (position.includes('bottom')) posY = target.height * 0.85;
+              else posY = target.height / 2;
+
+              posX += xOffset;
+              posY -= yOffset;
+
+              ctx.translate(posX, posY);
+              ctx.rotate(rotRad);
+              ctx.fillText(text, 0, 0);
+              if (isUnderline) {
+                const m = ctx.measureText(text);
+                ctx.lineWidth = Math.max(1, calcSize * 0.06);
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                ctx.moveTo(-m.width / 2, calcSize * 0.55);
+                ctx.lineTo(m.width / 2, calcSize * 0.55);
+                ctx.stroke();
               }
             }
-          } else {
-            let posX = target.width / 2;
-            let posY = target.height / 2;
+            ctx.restore();
+          } else if (activeTab === 'file' && imageWatermarkUrl) {
+            // Draw image watermark
+            const img = new Image();
+            img.src = imageWatermarkUrl;
+            await new Promise<void>((res) => {
+              if (img.complete) res();
+              else {
+                img.onload = () => res();
+                img.onerror = () => res();
+              }
+            });
+            if (img.width > 0 && img.height > 0) {
+              ctx.save();
+              ctx.globalAlpha = Math.max(0.05, Math.min(1, opacity / 100));
 
-            if (position.includes('left')) posX = target.width * 0.2;
-            else if (position.includes('right')) posX = target.width * 0.8;
-            else posX = target.width / 2;
+              let imgW = (target.width * (proportionPercent / 100));
+              let imgH = (img.height / img.width) * imgW;
 
-            if (position.includes('top')) posY = target.height * 0.15;
-            else if (position.includes('bottom')) posY = target.height * 0.85;
-            else posY = target.height / 2;
+              let posX = target.width / 2;
+              let posY = target.height / 2;
+              if (position.includes('left')) posX = target.width * 0.2;
+              else if (position.includes('right')) posX = target.width * 0.8;
+              if (position.includes('top')) posY = target.height * 0.15;
+              else if (position.includes('bottom')) posY = target.height * 0.85;
 
-            posX += xOffset;
-            posY -= yOffset;
+              posX += xOffset;
+              posY -= yOffset;
 
-            ctx.translate(posX, posY);
-            ctx.rotate(rotRad);
-            ctx.fillText(text, 0, 0);
-            if (isUnderline) {
-              const m = ctx.measureText(text);
-              ctx.lineWidth = Math.max(1, calcSize * 0.06);
-              ctx.strokeStyle = color;
-              ctx.beginPath();
-              ctx.moveTo(-m.width / 2, calcSize * 0.55);
-              ctx.lineTo(m.width / 2, calcSize * 0.55);
-              ctx.stroke();
+              ctx.translate(posX, posY);
+              ctx.rotate(rotRad);
+              ctx.drawImage(img, -imgW / 2, -imgH / 2, imgW, imgH);
+              ctx.restore();
             }
           }
-          ctx.restore();
         }
       } catch (err) {
         console.error('Failed to render watermark preview:', err);
@@ -216,7 +252,9 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
     isOpen,
     pdfBufferOrProxy,
     previewPage,
+    activeTab,
     text,
+    imageWatermarkUrl,
     fontFamily,
     fontSize,
     color,
@@ -464,7 +502,14 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
                           className="hidden"
                           onChange={(e) => {
                             const f = e.target.files?.[0];
-                            if (f) setText(f.name);
+                            if (f) {
+                              setText(f.name);
+                              const reader = new FileReader();
+                              reader.onload = () => {
+                                setImageWatermarkUrl(reader.result as string);
+                              };
+                              reader.readAsDataURL(f);
+                            }
                           }}
                         />
                       </label>
