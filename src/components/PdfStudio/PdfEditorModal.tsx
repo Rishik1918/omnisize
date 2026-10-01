@@ -1688,6 +1688,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
   textOverlaysRef.current = textOverlays;
   const modifiedTextsRef = useRef<Record<string, ExistingTextItem>>(modifiedTexts);
   modifiedTextsRef.current = modifiedTexts;
+  const extractedPagesRef = useRef<Set<number>>(new Set());
 
   // Text formatting options (for Add Text mode) - All MS Word fonts supported
   const [textValue, setTextValue] = useState<string>('Sample Text');
@@ -1973,8 +1974,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setSelectedTextItemId(null);
     }
 
+    setSelectedBorderPage(null);
     if (!/android/i.test(navigator.userAgent)) {
       setShowPropertiesPanel(true);
+      setIsPropertiesCollapsed(false);
     }
   };
 
@@ -2747,6 +2750,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
         }
 
         if (!isSwitchingTabsRef.current) {
+          extractedPagesRef.current.clear();
           setModifiedTexts({});
           setTextOverlays([]);
           setImageOverlays([]);
@@ -2974,7 +2978,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
             // Extract existing embedded PDF photos and images ONLY in Edit mode ('edit-text')
             // Do NOT extract in Read/View mode ('view')
-            if (activeTool === 'edit-text') {
+            if (activeTool === 'edit-text' && !extractedPagesRef.current.has(currentPage)) {
               try {
                 const currentCanvas = pageCanvasesRef.current.get(currentPage) || canvasRef.current;
                 const extractedImgs = await PdfStudioEngine.extractPageImages(proxyOrBuf, currentPage, currentCanvas, basePageDims);
@@ -2997,12 +3001,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                     zIndex: behind ? 2 : 25,
                   };
                 });
-                if (isMounted && processedImgs.length > 0) {
-                  setImageOverlays((prev) => {
-                    const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
-                    const newImgs = processedImgs.filter((i) => !existingKeys.has(`${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
-                    return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
-                  });
+                if (isMounted) {
+                  extractedPagesRef.current.add(currentPage);
+                  if (processedImgs.length > 0) {
+                    setImageOverlays((prev) => {
+                      const existingOrigKeys = new Set(
+                        prev.map((i) => {
+                          const p = i.origPageIndex ?? i.pageIndex;
+                          const ox = Math.round(i.origX ?? i.x);
+                          const oy = Math.round(i.origY ?? i.y);
+                          return `${p}_${ox}_${oy}`;
+                        })
+                      );
+                      const newImgs = processedImgs.filter((i) => {
+                        const p = i.origPageIndex ?? i.pageIndex;
+                        const ox = Math.round(i.origX ?? i.x);
+                        const oy = Math.round(i.origY ?? i.y);
+                        return !existingOrigKeys.has(`${p}_${ox}_${oy}`);
+                      });
+                      return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
+                    });
+                  }
                 }
               } catch (imgErr) {
                 console.warn('Page image extraction note:', imgErr);
@@ -3055,7 +3074,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
 
   // When switching into 'edit-text' mode, extract embedded images for current page so they become movable/editable
   useEffect(() => {
-    if (activeTool !== 'edit-text') return;
+    if (activeTool !== 'edit-text' || extractedPagesRef.current.has(currentPage)) return;
     let isMounted = true;
     const extractForEditMode = async () => {
       try {
@@ -3083,12 +3102,27 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             zIndex: behind ? 2 : 25,
           };
         });
-        if (isMounted && processedImgs.length > 0) {
-          setImageOverlays((prev) => {
-            const existingKeys = new Set(prev.map((i) => `${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
-            const newImgs = processedImgs.filter((i) => !existingKeys.has(`${i.pageIndex}_${Math.round(i.x)}_${Math.round(i.y)}`));
-            return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
-          });
+        if (isMounted) {
+          extractedPagesRef.current.add(currentPage);
+          if (processedImgs.length > 0) {
+            setImageOverlays((prev) => {
+              const existingOrigKeys = new Set(
+                prev.map((i) => {
+                  const p = i.origPageIndex ?? i.pageIndex;
+                  const ox = Math.round(i.origX ?? i.x);
+                  const oy = Math.round(i.origY ?? i.y);
+                  return `${p}_${ox}_${oy}`;
+                })
+              );
+              const newImgs = processedImgs.filter((i) => {
+                const p = i.origPageIndex ?? i.pageIndex;
+                const ox = Math.round(i.origX ?? i.x);
+                const oy = Math.round(i.origY ?? i.y);
+                return !existingOrigKeys.has(`${p}_${ox}_${oy}`);
+              });
+              return newImgs.length > 0 ? [...prev, ...newImgs] : prev;
+            });
+          }
         }
       } catch (err) {
         console.warn('Edit mode image extraction error:', err);
@@ -3342,6 +3376,7 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
       setActiveTabId(lastTab.id);
       activeTabIdRef.current = lastTab.id;
       setFile(lastTab.file);
+      extractedPagesRef.current.clear();
       setModifiedTexts({});
       setDetectedTextItems([]);
       pageOcrCache.current = {};
@@ -6037,6 +6072,40 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
     if (!isOpen) return;
 
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Escape: unconditionally dismiss sidebar, fullscreen mode, Page Organizer, previews, and all open dialogs/modals
+      if (e.key === 'Escape') {
+        setShowSidebar(false);
+        setIsFullscreenMode(false);
+        setShowPageOrganizerModal(false);
+        setShowEditTargetDropdown(false);
+        setShowInsertPageModal(false);
+        setShowPageNumberModal(false);
+        setShowWatermarkModal(false);
+        setShowBorderModal(false);
+        setShowDrawDropdown(false);
+        setShowWatermarkDropdown(false);
+        setShowInsertPageDropdown(false);
+        setShowPageNumberDropdown(false);
+        setShowPenColorWheel(false);
+        setShowPencilColorWheel(false);
+        setShowPageSizeDropdown(false);
+        setShowShapesDropdown(false);
+        setActiveEditingId(null);
+        setSelectedTextItemId(null);
+        setSelectedOverlayId(null);
+        setSelectedShapeId(null);
+        setSelectedTableId(null);
+        setSelectedTableCell(null);
+        setSelectedBorderPage(null);
+        setSelectedStrokeId(null);
+        setSelectedTableRange(null);
+        setCropImageId(null);
+        if (['pen', 'pencil', 'glow-pen', 'highlighter', 'eraser'].includes(activeTool)) {
+          setActiveTool('view');
+        }
+        return;
+      }
+
       const isCtrlOrMeta = e.ctrlKey || e.metaKey;
 
       // Undo: Ctrl+Z (without shift)
@@ -6806,40 +6875,6 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             });
           }
         }
-      }
-
-      // Escape: immediately exit fullscreen mode, Page Organizer, previews, sidebar, and all open dialogs/modals
-      if (e.key === 'Escape') {
-        if (showSidebar) setShowSidebar(false);
-        if (isFullscreenMode) setIsFullscreenMode(false);
-        if (showPageOrganizerModal) setShowPageOrganizerModal(false);
-        setShowEditTargetDropdown(false);
-        setShowInsertPageModal(false);
-        setShowPageNumberModal(false);
-        setShowWatermarkModal(false);
-        setShowBorderModal(false);
-        setShowDrawDropdown(false);
-        setShowWatermarkDropdown(false);
-        setShowInsertPageDropdown(false);
-        setShowPageNumberDropdown(false);
-        setShowPenColorWheel(false);
-        setShowPencilColorWheel(false);
-        setShowPageSizeDropdown(false);
-        setShowShapesDropdown(false);
-        setActiveEditingId(null);
-        setSelectedTextItemId(null);
-        setSelectedOverlayId(null);
-        setSelectedShapeId(null);
-        setSelectedTableId(null);
-        setSelectedTableCell(null);
-        setSelectedBorderPage(null);
-        setSelectedStrokeId(null);
-        setSelectedTableRange(null);
-        setCropImageId(null);
-        if (['pen', 'pencil', 'glow-pen', 'highlighter', 'eraser'].includes(activeTool)) {
-          setActiveTool('view');
-        }
-        return;
       }
     };
 
@@ -11064,18 +11099,13 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                         );
                       })}
 
-                  {/* In-Place Interactive Existing Text Bounding Boxes (Always render modified items across all tabs/tools; render all items in edit-text mode or if background image changed) */}
+                  {/* In-Place Interactive Existing Text Bounding Boxes (Always render modified items across all tabs/tools; render all items in edit-text mode) */}
                   {isCurrentPage && (() => {
-                    const hasExtractedImageChanged = imageOverlays.some(
-                      (img) => (img.origPageIndex ?? img.pageIndex) === pageNum - 1 && img.isExtracted && (img.isDeleted || img.isModified)
-                    );
                     return detectedTextItems
                       .filter((item) => {
                         const cur = modifiedTexts[item.id];
                         if (cur?.isDeleted) return false;
-                        if (activeTool === 'edit-text' || Boolean(cur?.isModified)) return true;
-                        // Keep text visible if an extracted background watermark/image on this page was deleted or moved
-                        return hasExtractedImageChanged;
+                        return activeTool === 'edit-text' || Boolean(cur?.isModified);
                       })
                       .map((item) => {
                         const currentItem = modifiedTexts[item.id] || item;
@@ -11256,9 +11286,9 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                             ? 'line-through'
                             : 'none',
                           fontSize: `${itemFontSize * scale}px`,
-                          color: (isItemModified || hasExtractedImageChanged) ? textColor : 'transparent',
+                          color: isItemModified ? textColor : 'transparent',
                           textAlign: itemAlign,
-                          backgroundColor: (isItemModified || hasExtractedImageChanged) ? effectiveBgHex : 'transparent',
+                          backgroundColor: isItemModified ? effectiveBgHex : 'transparent',
                           letterSpacing: `${(currentItem.characterSpacing ?? 0) * scale}px`,
                           lineHeight: `${boxH}px`,
                           height: '100%',
@@ -11709,13 +11739,18 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
                 (img) =>
                   (img.origPageIndex ?? img.pageIndex) === pageNum - 1 &&
                   img.isExtracted &&
-                  (img.isDeleted || (img.isModified && img.origX !== undefined && img.origY !== undefined &&
-                    (img.x !== img.origX || img.y !== img.origY || img.width !== img.origWidth || img.height !== img.origHeight || (img.origPageIndex !== undefined && img.origPageIndex !== img.pageIndex))))
+                  (img.isDeleted ||
+                    (img.origX !== undefined && img.origY !== undefined &&
+                      (Math.abs(img.x - img.origX) > 1 ||
+                       Math.abs(img.y - img.origY) > 1 ||
+                       Math.abs(img.width - (img.origWidth ?? img.width)) > 1 ||
+                       Math.abs(img.height - (img.origHeight ?? img.height)) > 1 ||
+                       ((img.origPageIndex ?? img.pageIndex) !== img.pageIndex))))
               )
               .map((img) => {
                 const scale = zoomScale;
-                const origCssX = img.origX! * scale;
-                const origCssY = viewportDims.height - img.origY! * scale - (img.origHeight || img.height) * scale;
+                const origCssX = (img.origX ?? img.x) * scale;
+                const origCssY = viewportDims.height - (img.origY ?? img.y) * scale - (img.origHeight || img.height) * scale;
                 const origCssW = (img.origWidth || img.width) * scale;
                 const origCssH = (img.origHeight || img.height) * scale;
                 return (
@@ -11770,8 +11805,10 @@ export const PdfEditorModal: React.FC<PdfEditorModalProps> = ({ isOpen, onClose,
             {imageOverlays
               .filter((i) => {
                 if (i.pageIndex !== pageNum - 1 || i.isDeleted) return false;
-                // In 'text' mode, do not overlay unmodified extracted background images over the native canvas
-                if (editTargetMode === 'text' && i.isExtracted && !i.isModified) return false;
+                // In 'text' mode, do not overlay unmodified and unmoved extracted background images over the native canvas
+                const isMoved = i.origX !== undefined && i.origY !== undefined &&
+                  (Math.abs(i.x - i.origX) > 1 || Math.abs(i.y - i.origY) > 1 || Math.abs(i.width - (i.origWidth ?? i.width)) > 1 || Math.abs(i.height - (i.origHeight ?? i.height)) > 1 || ((i.origPageIndex ?? i.pageIndex) !== i.pageIndex));
+                if (editTargetMode === 'text' && i.isExtracted && !i.isModified && !isMoved) return false;
                 return true;
               })
               .map((img) => {

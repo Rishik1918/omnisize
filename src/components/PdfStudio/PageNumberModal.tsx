@@ -74,6 +74,23 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (showRemoveModal) {
+          setShowRemoveModal(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, showRemoveModal, onClose]);
+
   // Render live preview on canvas
   useEffect(() => {
     if (!isOpen || !pdfBufferOrProxy || !previewCanvasRef.current) return;
@@ -610,42 +627,6 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
                 }}
               >
                 <canvas ref={previewCanvasRef} className="block w-full h-full" />
-                {isPageApplies && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: position.startsWith('top')
-                        ? `${Math.max(6, offsetY * previewZoom)}px`
-                        : position.startsWith('middle')
-                        ? '50%'
-                        : undefined,
-                      bottom: position.startsWith('bottom')
-                        ? `${Math.max(6, offsetY * previewZoom)}px`
-                        : undefined,
-                      left: position.endsWith('left')
-                        ? `${Math.max(10, 36 * previewZoom)}px`
-                        : position.endsWith('center')
-                        ? '50%'
-                        : undefined,
-                      right: position.endsWith('right')
-                        ? `${Math.max(10, 36 * previewZoom)}px`
-                        : undefined,
-                      transform: position.startsWith('middle')
-                        ? (position.endsWith('center') ? 'translate(-50%, -50%)' : 'translateY(-50%)')
-                        : (position.endsWith('center') ? 'translateX(-50%)' : undefined),
-                      fontFamily: `"${fontFamily}", sans-serif`,
-                      fontSize: `${Math.max(9, Math.round(fontSize * previewZoom))}px`,
-                      fontWeight: fontWeight === 'bold' ? 700 : fontWeight === 'medium' ? 500 : 400,
-                      color: color,
-                      pointerEvents: 'none',
-                      whiteSpace: 'nowrap',
-                      zIndex: 20,
-                      lineHeight: 1,
-                    }}
-                  >
-                    {previewBadgeText}
-                  </div>
-                )}
               </div>
             </div>
 

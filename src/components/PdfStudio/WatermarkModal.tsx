@@ -89,6 +89,23 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (showRemoveModal) {
+          setShowRemoveModal(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, showRemoveModal, onClose]);
+
   // Render live preview on canvas
   useEffect(() => {
     if (!isOpen || !pdfBufferOrProxy || !previewCanvasRef.current) return;

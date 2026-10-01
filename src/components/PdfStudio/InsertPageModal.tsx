@@ -115,6 +115,23 @@ export const InsertPageModal: React.FC<InsertPageModalProps> = ({
   const effectiveTotalPages = totalPages + (activeTab === 'blank' ? 1 : Math.max(1, donorTotalPages));
   const isViewingInsertedPage = previewPage === insertedPageSlot;
 
+  // Close on Escape key press
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        if (showDeleteModal) {
+          setShowDeleteModal(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, showDeleteModal, onClose]);
+
   // Load donor PDF metadata when chosen
   useEffect(() => {
     if (!selectedPdfFile) {
