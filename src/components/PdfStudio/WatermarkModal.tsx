@@ -15,7 +15,8 @@ import {
   Upload,
   Info,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  Trash2
 } from 'lucide-react';
 import { WatermarkConfig, PdfStudioEngine } from '../../services/pdfStudioEngine';
 import { MS_WORD_FONTS } from './PdfEditorModal';
@@ -74,6 +75,11 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
   const [baseCanvasDims, setBaseCanvasDims] = useState<{ width: number; height: number } | null>(null);
   const [addToTemplate, setAddToTemplate] = useState<boolean>(false);
   const [imageWatermarkUrl, setImageWatermarkUrl] = useState<string | null>(null);
+
+  // Removal state
+  const [showRemoveModal, setShowRemoveModal] = useState<boolean>(false);
+  const [removeScope, setRemoveScope] = useState<'all' | 'odd' | 'even' | 'current' | 'specific'>('all');
+  const [removeSpecificPages, setRemoveSpecificPages] = useState<string>('');
 
   // Collapsible sections
   const [contentOpen, setContentOpen] = useState<boolean>(true);
@@ -307,6 +313,77 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
       customRange,
     });
     onClose();
+  };
+
+  const handleRemove = (scope: 'all' | 'odd' | 'even' | 'current' | 'specific') => {
+    if (scope === 'all') {
+      onApply({
+        ...config,
+        enabled: false,
+        text: '',
+        opacity: 0,
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'odd') {
+      onApply({
+        ...config,
+        enabled: true,
+        pageScope: 'even',
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'even') {
+      onApply({
+        ...config,
+        enabled: true,
+        pageScope: 'odd',
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'current') {
+      const remaining = Array.from({ length: totalPages || 1 }, (_, i) => i + 1)
+        .filter((p) => p !== previewPage)
+        .join(', ');
+      onApply({
+        ...config,
+        enabled: true,
+        pageScope: 'custom',
+        customRange: remaining,
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'specific') {
+      const toRemoveSet = new Set(
+        removeSpecificPages
+          .split(',')
+          .map((p) => p.trim())
+          .flatMap((p) => {
+            if (p.includes('-')) {
+              const [a, b] = p.split('-').map(Number);
+              const list: number[] = [];
+              for (let n = a; n <= b; n++) list.push(n);
+              return list;
+            }
+            return [Number(p)];
+          })
+      );
+      const remaining = Array.from({ length: totalPages || 1 }, (_, i) => i + 1)
+        .filter((p) => !toRemoveSet.has(p))
+        .join(', ');
+      onApply({
+        ...config,
+        enabled: true,
+        pageScope: 'custom',
+        customRange: remaining,
+      });
+      onClose();
+      return;
+    }
   };
 
   const gridPositions: { id: WatermarkConfig['position']; label: string }[] = [
@@ -875,17 +952,28 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
           </div>
         </div>
 
-        {/* Bottom Bar: Add to template, Apply, Cancel */}
+        {/* Bottom Bar: Remove, Add to template, Apply, Cancel */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-zinc-800 bg-[#191c23]">
-          <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
-            <input
-              type="checkbox"
-              checked={addToTemplate}
-              onChange={(e) => setAddToTemplate(e.target.checked)}
-              className="rounded border-zinc-700 text-blue-600 focus:ring-0"
-            />
-            <span>Add to template</span>
-          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowRemoveModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 text-red-300 hover:text-white text-xs font-semibold shadow-xs transition-colors"
+              title="Remove or delete watermark"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Remove Watermark</span>
+            </button>
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={addToTemplate}
+                onChange={(e) => setAddToTemplate(e.target.checked)}
+                className="rounded border-zinc-700 text-blue-600 focus:ring-0"
+              />
+              <span>Add to template</span>
+            </label>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -903,6 +991,94 @@ export const WatermarkModal: React.FC<WatermarkModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Removal Options Modal */}
+        {showRemoveModal && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-fade-in">
+            <div className="bg-[#1f232b] text-zinc-100 border border-zinc-700 rounded-xl shadow-2xl p-5 max-w-md w-full">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-800">
+                <div className="flex items-center gap-2 text-red-400">
+                  <Trash2 className="w-4 h-4" />
+                  <h3 className="font-semibold text-sm">Remove Watermark</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRemoveModal(false)}
+                  className="p-1 rounded text-zinc-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-zinc-400 mb-4">
+                Choose which pages you want to remove or exclude the watermark from:
+              </p>
+
+              <div className="space-y-2 mb-5">
+                {[
+                  { id: 'all', label: 'All Pages (completely remove watermark)' },
+                  { id: 'odd', label: 'Odd Pages Only' },
+                  { id: 'even', label: 'Even Pages Only' },
+                  { id: 'current', label: `Current Page Only (Page ${previewPage})` },
+                  { id: 'specific', label: 'Specified Pages (custom range)' },
+                ].map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer border text-xs transition-colors ${
+                      removeScope === opt.id
+                        ? 'bg-red-950/30 border-red-700/60 text-red-200'
+                        : 'bg-zinc-800/40 border-zinc-700/50 hover:bg-zinc-800/80 text-zinc-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="removeWatermarkScope"
+                      checked={removeScope === opt.id}
+                      onChange={() => setRemoveScope(opt.id as any)}
+                      className="text-red-600 focus:ring-0"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+
+              {removeScope === 'specific' && (
+                <div className="mb-4">
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    Enter page numbers to remove watermark from (e.g. 1, 3, 5-8):
+                  </label>
+                  <input
+                    type="text"
+                    value={removeSpecificPages}
+                    onChange={(e) => setRemoveSpecificPages(e.target.value)}
+                    placeholder="e.g. 1, 3, 5-8"
+                    className="w-full bg-[#12151b] border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowRemoveModal(false)}
+                  className="px-3.5 py-1.5 bg-[#262a34] hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleRemove(removeScope);
+                    setShowRemoveModal(false);
+                  }}
+                  className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold shadow-xs"
+                >
+                  Confirm Removal
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

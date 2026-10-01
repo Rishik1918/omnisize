@@ -11,7 +11,8 @@ import {
   Check,
   Plus,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  Trash2
 } from 'lucide-react';
 import { PdfStudioEngine } from '../../services/pdfStudioEngine';
 import { MS_WORD_PAGE_SIZES } from './PdfEditorModal';
@@ -21,6 +22,8 @@ interface InsertPageModalProps {
   onClose: () => void;
   onInsertBlankPage: (position: 'before' | 'after' | 'end', sizeSpecId: string) => void;
   onInsertPdfPages: (file: File, position: 'before' | 'after' | 'start' | 'end', pageRange?: string) => void;
+  onDeletePage?: (pageNum: number) => void;
+  onDeletePagesRange?: (pages: number[]) => void;
   pdfBufferOrProxy: any;
   totalPages: number;
   currentPage: number;
@@ -34,6 +37,8 @@ export const InsertPageModal: React.FC<InsertPageModalProps> = ({
   onClose,
   onInsertBlankPage,
   onInsertPdfPages,
+  onDeletePage,
+  onDeletePagesRange,
   pdfBufferOrProxy,
   totalPages,
   currentPage: initialPage,
@@ -60,6 +65,47 @@ export const InsertPageModal: React.FC<InsertPageModalProps> = ({
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const donorFileInputRef = useRef<HTMLInputElement | null>(null);
   const [donorArrayBuffer, setDonorArrayBuffer] = useState<ArrayBuffer | null>(null);
+
+  // Deletion state
+  const [showDeleteModal, setShowDeleteModal] = useState<boolean>(false);
+  const [deleteScope, setDeleteScope] = useState<'current' | 'blank' | 'specific'>('current');
+  const [deleteSpecificPages, setDeleteSpecificPages] = useState<string>('');
+
+  const handleDeletePages = () => {
+    if (deleteScope === 'current') {
+      if (onDeletePage) onDeletePage(previewPage);
+      else if (onDeletePagesRange) onDeletePagesRange([previewPage]);
+      onClose();
+      return;
+    }
+    if (deleteScope === 'blank') {
+      if (onDeletePage) onDeletePage(previewPage);
+      onClose();
+      return;
+    }
+    if (deleteScope === 'specific') {
+      const toDelete = deleteSpecificPages
+        .split(',')
+        .map((p) => p.trim())
+        .flatMap((p) => {
+          if (p.includes('-')) {
+            const [a, b] = p.split('-').map(Number);
+            const list: number[] = [];
+            for (let n = a; n <= b; n++) list.push(n);
+            return list;
+          }
+          return [Number(p)];
+        })
+        .filter((p) => !isNaN(p) && p >= 1 && p <= totalPages);
+      if (onDeletePagesRange && toDelete.length > 0) {
+        onDeletePagesRange(toDelete);
+      } else if (onDeletePage && toDelete.length > 0) {
+        onDeletePage(toDelete[0]);
+      }
+      onClose();
+      return;
+    }
+  };
 
   // Compute the slot index where the new page(s) will be inserted (1-indexed)
   const insertedPageSlot = activeTab === 'blank'
@@ -679,23 +725,120 @@ export const InsertPageModal: React.FC<InsertPageModalProps> = ({
           </div>
         </div>
 
-        {/* Bottom Bar: Apply, Cancel */}
-        <div className="flex items-center justify-end px-5 py-3 border-t border-zinc-800 bg-[#191c23] gap-2">
+        {/* Bottom Bar: Delete, Apply, Cancel */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-zinc-800 bg-[#191c23]">
           <button
             type="button"
-            onClick={onClose}
-            className="px-4 py-1.5 bg-[#262a34] hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold transition-colors"
+            onClick={() => setShowDeleteModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 text-red-300 hover:text-white text-xs font-semibold shadow-xs transition-colors"
+            title="Delete current page or specific pages"
           >
-            Cancel
+            <Trash2 className="w-3.5 h-3.5 text-red-400" />
+            <span>Delete Page(s)</span>
           </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            className="px-5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
-          >
-            Insert
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-1.5 bg-[#262a34] hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleApply}
+              className="px-5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
+            >
+              Insert
+            </button>
+          </div>
         </div>
+
+        {/* Delete Page Modal */}
+        {showDeleteModal && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-fade-in">
+            <div className="bg-[#1f232b] text-zinc-100 border border-zinc-700 rounded-xl shadow-2xl p-5 max-w-md w-full">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-800">
+                <div className="flex items-center gap-2 text-red-400">
+                  <Trash2 className="w-4 h-4" />
+                  <h3 className="font-semibold text-sm">Delete Page(s)</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(false)}
+                  className="p-1 rounded text-zinc-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-zinc-400 mb-4">
+                Choose the page(s) you want to permanently delete from this document:
+              </p>
+
+              <div className="space-y-2 mb-5">
+                {[
+                  { id: 'current', label: `Delete Current Page Only (Page ${previewPage})` },
+                  { id: 'blank', label: 'Delete Current Page (if blank/empty)' },
+                  { id: 'specific', label: 'Delete Specified Pages (custom range)' },
+                ].map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer border text-xs transition-colors ${
+                      deleteScope === opt.id
+                        ? 'bg-red-950/30 border-red-700/60 text-red-200'
+                        : 'bg-zinc-800/40 border-zinc-700/50 hover:bg-zinc-800/80 text-zinc-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="deletePageScope"
+                      checked={deleteScope === opt.id}
+                      onChange={() => setDeleteScope(opt.id as any)}
+                      className="text-red-600 focus:ring-0"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+
+              {deleteScope === 'specific' && (
+                <div className="mb-4">
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    Enter page numbers to delete (e.g. 2, 4-6):
+                  </label>
+                  <input
+                    type="text"
+                    value={deleteSpecificPages}
+                    onChange={(e) => setDeleteSpecificPages(e.target.value)}
+                    placeholder="e.g. 2, 4-6"
+                    className="w-full bg-[#12151b] border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(false)}
+                  className="px-3.5 py-1.5 bg-[#262a34] hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleDeletePages();
+                    setShowDeleteModal(false);
+                  }}
+                  className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold shadow-xs"
+                >
+                  Confirm Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -10,7 +10,8 @@ import {
   Check,
   Info,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  Trash2
 } from 'lucide-react';
 import {
   PageNumberConfig,
@@ -61,6 +62,11 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
   const [baseCanvasDims, setBaseCanvasDims] = useState<{ width: number; height: number } | null>(null);
   const [addToTemplate, setAddToTemplate] = useState<boolean>(false);
 
+  // Removal state
+  const [showRemoveModal, setShowRemoveModal] = useState<boolean>(false);
+  const [removeScope, setRemoveScope] = useState<'all' | 'odd' | 'even' | 'current' | 'specific'>('all');
+  const [removeSpecificPages, setRemoveSpecificPages] = useState<string>('');
+
   // Collapsible sections
   const [contentOpen, setContentOpen] = useState<boolean>(true);
   const [positionOpen, setPositionOpen] = useState<boolean>(true);
@@ -94,78 +100,76 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
         if (!ctx) return;
         ctx.drawImage(canvas, 0, 0);
 
-        if (enabled) {
-          let applies = false;
-          if (filterMode === 'all') applies = true;
-          else if (filterMode === 'odd') applies = previewPage % 2 !== 0;
-          else if (filterMode === 'even') applies = previewPage % 2 === 0;
-          else if (filterMode === 'specific' && specificPages) {
-            const parts = specificPages.split(',').map((p) => p.trim());
-            applies = parts.some((p) => {
-              if (p.includes('-')) {
-                const [a, b] = p.split('-').map(Number);
-                return previewPage >= a && previewPage <= b;
+        let applies = false;
+        if (filterMode === 'all') applies = true;
+        else if (filterMode === 'odd') applies = previewPage % 2 !== 0;
+        else if (filterMode === 'even') applies = previewPage % 2 === 0;
+        else if (filterMode === 'specific' && specificPages) {
+          const parts = specificPages.split(',').map((p) => p.trim());
+          applies = parts.some((p) => {
+            if (p.includes('-')) {
+              const [a, b] = p.split('-').map(Number);
+              return previewPage >= a && previewPage <= b;
+            }
+            return Number(p) === previewPage;
+          });
+        }
+
+        if (applies) {
+          const safeBaseW = (basePageDims && basePageDims.width > 0) ? basePageDims.width : (cssWidth || target.width || 595.28);
+          const scale = target.width / safeBaseW;
+          const calcFontSize = Math.max(8, fontSize * scale);
+          const displayVal = startFrom + previewPage - 1;
+
+          const toRoman = (num: number, upper = true) => {
+            if (num <= 0) return String(num);
+            const romanMap: [number, string][] = [
+              [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+              [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+              [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+            ];
+            let res = '';
+            for (const [v, s] of romanMap) {
+              while (num >= v) {
+                res += s;
+                num -= v;
               }
-              return Number(p) === previewPage;
-            });
+            }
+            return upper ? res : res.toLowerCase();
+          };
+
+          let text = `${displayVal}`;
+          if (format === 'page-x') text = `Page ${displayVal}`;
+          else if (format === 'page-x-of-y') text = `Page ${displayVal} of ${totalPages || 1}`;
+          else if (format === 'dash') text = `- ${displayVal} -`;
+          else if (format === 'roman-upper') text = toRoman(displayVal, true);
+          else if (format === 'roman-lower') text = toRoman(displayVal, false);
+
+          ctx.save();
+          ctx.font = `${fontWeight === 'bold' ? 'bold ' : fontWeight === 'medium' ? '500 ' : ''}${calcFontSize}px "${fontFamily}", sans-serif`;
+          ctx.fillStyle = color;
+          ctx.textBaseline = 'middle';
+
+          let posX = 36 * scale;
+          if (position.endsWith('center')) {
+            posX = target.width / 2;
+            ctx.textAlign = 'center';
+          } else if (position.endsWith('right')) {
+            posX = target.width - 36 * scale;
+            ctx.textAlign = 'right';
+          } else {
+            ctx.textAlign = 'left';
           }
 
-          if (applies) {
-            const safeBaseW = (basePageDims && basePageDims.width > 0) ? basePageDims.width : (cssWidth || target.width || 595.28);
-            const scale = target.width / safeBaseW;
-            const calcFontSize = Math.max(8, fontSize * scale);
-            const displayVal = startFrom + previewPage - 1;
-
-            const toRoman = (num: number, upper = true) => {
-              if (num <= 0) return String(num);
-              const romanMap: [number, string][] = [
-                [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
-                [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
-                [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
-              ];
-              let res = '';
-              for (const [v, s] of romanMap) {
-                while (num >= v) {
-                  res += s;
-                  num -= v;
-                }
-              }
-              return upper ? res : res.toLowerCase();
-            };
-
-            let text = `${displayVal}`;
-            if (format === 'page-x') text = `Page ${displayVal}`;
-            else if (format === 'page-x-of-y') text = `Page ${displayVal} of ${totalPages || 1}`;
-            else if (format === 'dash') text = `- ${displayVal} -`;
-            else if (format === 'roman-upper') text = toRoman(displayVal, true);
-            else if (format === 'roman-lower') text = toRoman(displayVal, false);
-
-            ctx.save();
-            ctx.font = `${fontWeight === 'bold' ? 'bold ' : fontWeight === 'medium' ? '500 ' : ''}${calcFontSize}px "${fontFamily}", sans-serif`;
-            ctx.fillStyle = color;
-            ctx.textBaseline = 'middle';
-
-            let posX = 36 * scale;
-            if (position.endsWith('center')) {
-              posX = target.width / 2;
-              ctx.textAlign = 'center';
-            } else if (position.endsWith('right')) {
-              posX = target.width - 36 * scale;
-              ctx.textAlign = 'right';
-            } else {
-              ctx.textAlign = 'left';
-            }
-
-            let posY = target.height - offsetY * scale;
-            if (position.startsWith('top')) {
-              posY = offsetY * scale + calcFontSize / 2;
-            } else if (position.startsWith('middle')) {
-              posY = target.height / 2;
-            }
-
-            ctx.fillText(text, posX, posY);
-            ctx.restore();
+          let posY = target.height - offsetY * scale;
+          if (position.startsWith('top')) {
+            posY = offsetY * scale + calcFontSize / 2;
+          } else if (position.startsWith('middle')) {
+            posY = target.height / 2;
           }
+
+          ctx.fillText(text, posX, posY);
+          ctx.restore();
         }
       } catch (err) {
         console.error('Failed to render page number preview:', err);
@@ -215,6 +219,75 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
     onClose();
   };
 
+  const handleRemove = (scope: 'all' | 'odd' | 'even' | 'current' | 'specific') => {
+    if (scope === 'all') {
+      onApply({
+        ...config,
+        enabled: false,
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'odd') {
+      onApply({
+        ...config,
+        enabled: true,
+        filterMode: 'even',
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'even') {
+      onApply({
+        ...config,
+        enabled: true,
+        filterMode: 'odd',
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'current') {
+      const remaining = Array.from({ length: totalPages || 1 }, (_, i) => i + 1)
+        .filter((p) => p !== previewPage)
+        .join(', ');
+      onApply({
+        ...config,
+        enabled: true,
+        filterMode: 'specific',
+        specificPages: remaining,
+      });
+      onClose();
+      return;
+    }
+    if (scope === 'specific') {
+      const toRemoveSet = new Set(
+        removeSpecificPages
+          .split(',')
+          .map((p) => p.trim())
+          .flatMap((p) => {
+            if (p.includes('-')) {
+              const [a, b] = p.split('-').map(Number);
+              const list: number[] = [];
+              for (let n = a; n <= b; n++) list.push(n);
+              return list;
+            }
+            return [Number(p)];
+          })
+      );
+      const remaining = Array.from({ length: totalPages || 1 }, (_, i) => i + 1)
+        .filter((p) => !toRemoveSet.has(p))
+        .join(', ');
+      onApply({
+        ...config,
+        enabled: true,
+        filterMode: 'specific',
+        specificPages: remaining,
+      });
+      onClose();
+      return;
+    }
+  };
+
   const gridPositions: { id: PageNumberPosition; label: string }[] = [
     { id: 'top-left', label: 'Top Left' },
     { id: 'top-center', label: 'Top Center' },
@@ -228,20 +301,18 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
   ];
 
   let isPageApplies = false;
-  if (enabled) {
-    if (filterMode === 'all') isPageApplies = true;
-    else if (filterMode === 'odd') isPageApplies = previewPage % 2 !== 0;
-    else if (filterMode === 'even') isPageApplies = previewPage % 2 === 0;
-    else if (filterMode === 'specific' && specificPages) {
-      const parts = specificPages.split(',').map((p) => p.trim());
-      isPageApplies = parts.some((p) => {
-        if (p.includes('-')) {
-          const [a, b] = p.split('-').map(Number);
-          return previewPage >= a && previewPage <= b;
-        }
-        return Number(p) === previewPage;
-      });
-    }
+  if (filterMode === 'all') isPageApplies = true;
+  else if (filterMode === 'odd') isPageApplies = previewPage % 2 !== 0;
+  else if (filterMode === 'even') isPageApplies = previewPage % 2 === 0;
+  else if (filterMode === 'specific' && specificPages) {
+    const parts = specificPages.split(',').map((p) => p.trim());
+    isPageApplies = parts.some((p) => {
+      if (p.includes('-')) {
+        const [a, b] = p.split('-').map(Number);
+        return previewPage >= a && previewPage <= b;
+      }
+      return Number(p) === previewPage;
+    });
   }
 
   const toRoman = (num: number, upper = true) => {
@@ -539,7 +610,7 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
                 }}
               >
                 <canvas ref={previewCanvasRef} className="block w-full h-full" />
-                {enabled && isPageApplies && (
+                {isPageApplies && (
                   <div
                     style={{
                       position: 'absolute',
@@ -664,17 +735,28 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
           </div>
         </div>
 
-        {/* Bottom Bar: Add to template, Apply, Cancel */}
+        {/* Bottom Bar: Remove, Add to template, Apply, Cancel */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-zinc-800 bg-[#191c23]">
-          <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
-            <input
-              type="checkbox"
-              checked={addToTemplate}
-              onChange={(e) => setAddToTemplate(e.target.checked)}
-              className="rounded border-zinc-700 text-blue-600 focus:ring-0"
-            />
-            <span>Add to template</span>
-          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowRemoveModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 text-red-300 hover:text-white text-xs font-semibold shadow-xs transition-colors"
+              title="Remove or delete page numbers"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Remove Page Numbers</span>
+            </button>
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={addToTemplate}
+                onChange={(e) => setAddToTemplate(e.target.checked)}
+                className="rounded border-zinc-700 text-blue-600 focus:ring-0"
+              />
+              <span>Add to template</span>
+            </label>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -692,6 +774,94 @@ export const PageNumberModal: React.FC<PageNumberModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Removal Options Modal */}
+        {showRemoveModal && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-fade-in">
+            <div className="bg-[#1f232b] text-zinc-100 border border-zinc-700 rounded-xl shadow-2xl p-5 max-w-md w-full">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-800">
+                <div className="flex items-center gap-2 text-red-400">
+                  <Trash2 className="w-4 h-4" />
+                  <h3 className="font-semibold text-sm">Remove Page Numbers</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRemoveModal(false)}
+                  className="p-1 rounded text-zinc-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-zinc-400 mb-4">
+                Choose which pages you want to remove or exclude page numbers from:
+              </p>
+
+              <div className="space-y-2 mb-5">
+                {[
+                  { id: 'all', label: 'All Pages (completely disable)' },
+                  { id: 'odd', label: 'Odd Pages Only' },
+                  { id: 'even', label: 'Even Pages Only' },
+                  { id: 'current', label: `Current Page Only (Page ${previewPage})` },
+                  { id: 'specific', label: 'Specified Pages (custom list)' },
+                ].map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer border text-xs transition-colors ${
+                      removeScope === opt.id
+                        ? 'bg-red-950/30 border-red-700/60 text-red-200'
+                        : 'bg-zinc-800/40 border-zinc-700/50 hover:bg-zinc-800/80 text-zinc-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="removeScope"
+                      checked={removeScope === opt.id}
+                      onChange={() => setRemoveScope(opt.id as any)}
+                      className="text-red-600 focus:ring-0"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+
+              {removeScope === 'specific' && (
+                <div className="mb-4">
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    Enter page numbers to remove (e.g. 1, 3, 5-8):
+                  </label>
+                  <input
+                    type="text"
+                    value={removeSpecificPages}
+                    onChange={(e) => setRemoveSpecificPages(e.target.value)}
+                    placeholder="e.g. 1, 3, 5-8"
+                    className="w-full bg-[#12151b] border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowRemoveModal(false)}
+                  className="px-3.5 py-1.5 bg-[#262a34] hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleRemove(removeScope);
+                    setShowRemoveModal(false);
+                  }}
+                  className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold shadow-xs"
+                >
+                  Confirm Removal
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

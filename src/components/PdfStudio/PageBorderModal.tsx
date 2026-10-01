@@ -9,7 +9,8 @@ import {
   ChevronsRight,
   Check,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  Trash2
 } from 'lucide-react';
 import {
   PageBorderConfig,
@@ -21,7 +22,7 @@ interface PageBorderModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: PageBorderConfig;
-  onApply: (config: PageBorderConfig, scope: 'all' | 'current' | 'odd' | 'even') => void;
+  onApply: (config: PageBorderConfig, scope: 'all' | 'current' | 'odd' | 'even' | 'specific', specificPages?: string) => void;
   pdfBufferOrProxy: any;
   totalPages: number;
   currentPage: number;
@@ -54,6 +55,11 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
   const [previewZoom, setPreviewZoom] = useState<number>(1.0);
   const [baseCanvasDims, setBaseCanvasDims] = useState<{ width: number; height: number } | null>(null);
   const [addToTemplate, setAddToTemplate] = useState<boolean>(false);
+
+  // Removal state
+  const [showRemoveModal, setShowRemoveModal] = useState<boolean>(false);
+  const [removeScope, setRemoveScope] = useState<'all' | 'odd' | 'even' | 'current' | 'specific'>('all');
+  const [removeSpecificPages, setRemoveSpecificPages] = useState<string>('');
 
   // Collapsible sections
   const [typeOpen, setTypeOpen] = useState<boolean>(true);
@@ -89,12 +95,11 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
         if (!ctx) return;
         ctx.drawImage(canvas, 0, 0);
 
-        if (enabled) {
-          let applies = false;
-          if (scope === 'all') applies = true;
-          else if (scope === 'current') applies = previewPage === initialPage;
-          else if (scope === 'odd') applies = previewPage % 2 !== 0;
-          else if (scope === 'even') applies = previewPage % 2 === 0;
+        let applies = false;
+        if (scope === 'all') applies = true;
+        else if (scope === 'current') applies = previewPage === initialPage;
+        else if (scope === 'odd') applies = previewPage % 2 !== 0;
+        else if (scope === 'even') applies = previewPage % 2 === 0;
 
           if (applies) {
             const safeBaseW = (basePageDims && basePageDims.width > 0) ? basePageDims.width : (cssWidth || target.width || 595.28);
@@ -147,7 +152,6 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
             }
             ctx.restore();
           }
-        }
       } catch (err) {
         console.error('Failed to render border preview:', err);
       }
@@ -190,6 +194,24 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
         right,
       },
       scope
+    );
+    onClose();
+  };
+
+  const handleRemove = (removeScp: 'all' | 'odd' | 'even' | 'current' | 'specific') => {
+    onApply(
+      {
+        enabled: false,
+        type,
+        width,
+        color,
+        top,
+        bottom,
+        left,
+        right,
+      },
+      removeScp,
+      removeScp === 'current' ? String(previewPage) : removeSpecificPages
     );
     onClose();
   };
@@ -578,17 +600,28 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
           </div>
         </div>
 
-        {/* Bottom Bar: Add to template, Apply, Cancel */}
+        {/* Bottom Bar: Remove, Add to template, Apply, Cancel */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-zinc-800 bg-[#191c23]">
-          <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
-            <input
-              type="checkbox"
-              checked={addToTemplate}
-              onChange={(e) => setAddToTemplate(e.target.checked)}
-              className="rounded border-zinc-700 text-blue-600 focus:ring-0"
-            />
-            <span>Add to template</span>
-          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowRemoveModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 text-red-300 hover:text-white text-xs font-semibold shadow-xs transition-colors"
+              title="Remove or delete borders"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-400" />
+              <span>Remove Borders</span>
+            </button>
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={addToTemplate}
+                onChange={(e) => setAddToTemplate(e.target.checked)}
+                className="rounded border-zinc-700 text-blue-600 focus:ring-0"
+              />
+              <span>Add to template</span>
+            </label>
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -606,6 +639,94 @@ export const PageBorderModal: React.FC<PageBorderModalProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Removal Options Modal */}
+        {showRemoveModal && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs animate-fade-in">
+            <div className="bg-[#1f232b] text-zinc-100 border border-zinc-700 rounded-xl shadow-2xl p-5 max-w-md w-full">
+              <div className="flex items-center justify-between mb-4 pb-2 border-b border-zinc-800">
+                <div className="flex items-center gap-2 text-red-400">
+                  <Trash2 className="w-4 h-4" />
+                  <h3 className="font-semibold text-sm">Remove Page Borders</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowRemoveModal(false)}
+                  className="p-1 rounded text-zinc-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <p className="text-xs text-zinc-400 mb-4">
+                Choose which pages you want to remove borders from:
+              </p>
+
+              <div className="space-y-2 mb-5">
+                {[
+                  { id: 'all', label: 'All Pages (remove all borders)' },
+                  { id: 'odd', label: 'Odd Pages Only' },
+                  { id: 'even', label: 'Even Pages Only' },
+                  { id: 'current', label: `Current Page Only (Page ${previewPage})` },
+                  { id: 'specific', label: 'Specified Pages (custom list)' },
+                ].map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer border text-xs transition-colors ${
+                      removeScope === opt.id
+                        ? 'bg-red-950/30 border-red-700/60 text-red-200'
+                        : 'bg-zinc-800/40 border-zinc-700/50 hover:bg-zinc-800/80 text-zinc-300'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="removeBorderScope"
+                      checked={removeScope === opt.id}
+                      onChange={() => setRemoveScope(opt.id as any)}
+                      className="text-red-600 focus:ring-0"
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+
+              {removeScope === 'specific' && (
+                <div className="mb-4">
+                  <label className="block text-[11px] text-zinc-400 mb-1">
+                    Enter page numbers to remove borders from (e.g. 1, 3, 5-8):
+                  </label>
+                  <input
+                    type="text"
+                    value={removeSpecificPages}
+                    onChange={(e) => setRemoveSpecificPages(e.target.value)}
+                    placeholder="e.g. 1, 3, 5-8"
+                    className="w-full bg-[#12151b] border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-red-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setShowRemoveModal(false)}
+                  className="px-3.5 py-1.5 bg-[#262a34] hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleRemove(removeScope);
+                    setShowRemoveModal(false);
+                  }}
+                  className="px-4 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold shadow-xs"
+                >
+                  Confirm Removal
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
