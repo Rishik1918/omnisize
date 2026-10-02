@@ -35,6 +35,10 @@ export interface ActivePdfSession {
   tables: any[];
   modifiedTexts: any[];
   hyperlinks: any[];
+  pageBorders?: Record<number, any>;
+  pageNumberConfig?: any;
+  watermarkConfig?: any;
+  hasUnsavedEdits?: boolean;
   updatedAt: number;
 }
 

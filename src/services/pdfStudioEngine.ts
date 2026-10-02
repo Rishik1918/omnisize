@@ -1775,6 +1775,10 @@ export class PdfStudioEngine {
       const page = await proxy.getPage(pageNumber);
       const opList = await page.getOperatorList();
       const pageIndex = pageNumber - 1;
+      const pageViewport = page.getViewport({ scale: 1.0 });
+      const effectiveDims = (baseDims && baseDims.width > 0 && baseDims.height > 0)
+        ? baseDims
+        : { width: pageViewport.width, height: pageViewport.height };
       const images: ImageOverlay[] = [];
 
       let currentMatrix = [1, 0, 0, 1, 0, 0];
@@ -1805,89 +1809,21 @@ export class PdfStudioEngine {
           let rawW = 0;
           let rawH = 0;
 
-          // Attempt 1: Fetch object from PDF.js objs collection with safety timeout
-          const obj = await new Promise<any>((resolve) => {
-            const timer = setTimeout(() => resolve(null), 800);
-            try {
-              const targetCollection = (imgName.startsWith('g_') || imgName.startsWith('img_g')) ? page.commonObjs : page.objs;
-              if (targetCollection && typeof targetCollection.get === 'function') {
-                targetCollection.get(imgName, (res: any) => {
-                  clearTimeout(timer);
-                  resolve(res);
-                });
-              } else {
-                clearTimeout(timer);
-                resolve(null);
-              }
-            } catch (_) {
-              clearTimeout(timer);
-              resolve(null);
-            }
-          });
-
-          if (obj) {
-            rawW = obj.width || obj.bitmap?.width || (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap ? obj.width : 0);
-            rawH = obj.height || obj.bitmap?.height || (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap ? obj.height : 0);
-            if (rawW > 0 && rawH > 0 && typeof document !== 'undefined') {
-              try {
-                const canvas = document.createElement('canvas');
-                canvas.width = rawW;
-                canvas.height = rawH;
-                const ctx = canvas.getContext('2d');
-                if (ctx) {
-                  if (obj.data && obj.data.length >= rawW * rawH) {
-                    const imgData = ctx.createImageData(rawW, rawH);
-                    if (obj.data.length === rawW * rawH * 4) {
-                      imgData.data.set(obj.data);
-                    } else if (obj.data.length === rawW * rawH * 3) {
-                      for (let p = 0, q = 0; p < obj.data.length; p += 3, q += 4) {
-                        imgData.data[q] = obj.data[p];
-                        imgData.data[q + 1] = obj.data[p + 1];
-                        imgData.data[q + 2] = obj.data[p + 2];
-                        imgData.data[q + 3] = 255;
-                      }
-                    } else if (obj.data.length === rawW * rawH) {
-                      for (let p = 0, q = 0; p < obj.data.length; p++, q += 4) {
-                        const v = obj.data[p];
-                        imgData.data[q] = v;
-                        imgData.data[q + 1] = v;
-                        imgData.data[q + 2] = v;
-                        imgData.data[q + 3] = 255;
-                      }
-                    }
-                    ctx.putImageData(imgData, 0, 0);
-                  } else if (obj.bitmap) {
-                    ctx.drawImage(obj.bitmap, 0, 0);
-                  } else if (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap) {
-                    ctx.drawImage(obj, 0, 0);
-                  } else if (typeof HTMLImageElement !== 'undefined' && obj instanceof HTMLImageElement) {
-                    ctx.drawImage(obj, 0, 0);
-                  } else if (typeof HTMLCanvasElement !== 'undefined' && obj instanceof HTMLCanvasElement) {
-                    ctx.drawImage(obj, 0, 0);
-                  }
-                  const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
-                  if (blob) {
-                    buf = await blob.arrayBuffer();
-                  }
-                }
-              } catch (_) {}
-            }
-          }
-
-          const imgW = Math.max(16, Math.round(Math.hypot(currentMatrix[0], currentMatrix[1]) || rawW || 80));
-          const imgH = Math.max(16, Math.round(Math.hypot(currentMatrix[2], currentMatrix[3]) || rawH || 80));
+          const imgW = Math.max(16, Math.round(Math.hypot(currentMatrix[0], currentMatrix[1]) || 80));
+          const imgH = Math.max(16, Math.round(Math.hypot(currentMatrix[2], currentMatrix[3]) || 80));
           const imgX = Math.round(currentMatrix[4] || 0);
           const imgY = Math.round(currentMatrix[5] || 0);
 
-          // Attempt 2: If object decoding produced empty buffer, crop directly from the high-res rendered canvas
-          if (!buf && pageCanvas && baseDims && baseDims.width > 0 && baseDims.height > 0) {
+          // Priority 1: Clean high-res crop directly from rendered page canvas
+          // This captures the exact PDF-rendered graphics with soft-masks (smask), transparency, and clipping paths intact without black boxes
+          if (pageCanvas && pageCanvas.width > 0 && pageCanvas.height > 0 && effectiveDims.width > 0 && effectiveDims.height > 0) {
             try {
               const canvasW = pageCanvas.width;
               const canvasH = pageCanvas.height;
-              const scaleX = canvasW / baseDims.width;
-              const scaleY = canvasH / baseDims.height;
+              const scaleX = canvasW / effectiveDims.width;
+              const scaleY = canvasH / effectiveDims.height;
               const cropX = Math.max(0, Math.round(imgX * scaleX));
-              const cropY = Math.max(0, Math.round((baseDims.height - imgY - imgH) * scaleY));
+              const cropY = Math.max(0, Math.round((effectiveDims.height - imgY - imgH) * scaleY));
               const cropW = Math.min(canvasW - cropX, Math.round(imgW * scaleX));
               const cropH = Math.min(canvasH - cropY, Math.round(imgH * scaleY));
 
@@ -1905,6 +1841,77 @@ export class PdfStudioEngine {
                 }
               }
             } catch (_) {}
+          }
+
+          // Fallback: If canvas crop was not available or empty, fetch object from PDF.js objs collection
+          if (!buf) {
+            const obj = await new Promise<any>((resolve) => {
+              const timer = setTimeout(() => resolve(null), 800);
+              try {
+                const targetCollection = (imgName.startsWith('g_') || imgName.startsWith('img_g')) ? page.commonObjs : page.objs;
+                if (targetCollection && typeof targetCollection.get === 'function') {
+                  targetCollection.get(imgName, (res: any) => {
+                    clearTimeout(timer);
+                    resolve(res);
+                  });
+                } else {
+                  clearTimeout(timer);
+                  resolve(null);
+                }
+              } catch (_) {
+                clearTimeout(timer);
+                resolve(null);
+              }
+            });
+
+            if (obj) {
+              rawW = obj.width || obj.bitmap?.width || (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap ? obj.width : 0);
+              rawH = obj.height || obj.bitmap?.height || (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap ? obj.height : 0);
+              if (rawW > 0 && rawH > 0 && typeof document !== 'undefined') {
+                try {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = rawW;
+                  canvas.height = rawH;
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                    if (obj.data && obj.data.length >= rawW * rawH) {
+                      const imgData = ctx.createImageData(rawW, rawH);
+                      if (obj.data.length === rawW * rawH * 4) {
+                        imgData.data.set(obj.data);
+                      } else if (obj.data.length === rawW * rawH * 3) {
+                        for (let p = 0, q = 0; p < obj.data.length; p += 3, q += 4) {
+                          imgData.data[q] = obj.data[p];
+                          imgData.data[q + 1] = obj.data[p + 1];
+                          imgData.data[q + 2] = obj.data[p + 2];
+                          imgData.data[q + 3] = 255;
+                        }
+                      } else if (obj.data.length === rawW * rawH) {
+                        for (let p = 0, q = 0; p < obj.data.length; p++, q += 4) {
+                          const v = obj.data[p];
+                          imgData.data[q] = v;
+                          imgData.data[q + 1] = v;
+                          imgData.data[q + 2] = v;
+                          imgData.data[q + 3] = 255;
+                        }
+                      }
+                      ctx.putImageData(imgData, 0, 0);
+                    } else if (obj.bitmap) {
+                      ctx.drawImage(obj.bitmap, 0, 0);
+                    } else if (typeof ImageBitmap !== 'undefined' && obj instanceof ImageBitmap) {
+                      ctx.drawImage(obj, 0, 0);
+                    } else if (typeof HTMLImageElement !== 'undefined' && obj instanceof HTMLImageElement) {
+                      ctx.drawImage(obj, 0, 0);
+                    } else if (typeof HTMLCanvasElement !== 'undefined' && obj instanceof HTMLCanvasElement) {
+                      ctx.drawImage(obj, 0, 0);
+                    }
+                    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
+                    if (blob) {
+                      buf = await blob.arrayBuffer();
+                    }
+                  }
+                } catch (_) {}
+              }
+            }
           }
 
           if (buf) {
